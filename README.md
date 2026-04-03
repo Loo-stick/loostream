@@ -20,16 +20,27 @@ Ce projet peut cesser de fonctionner à tout moment sans préavis si les sources
 
 ---
 
+## Sources
+
+| Source | Type | Contenu |
+|--------|------|---------|
+| **Movix** | VF/VOSTFR | Films & Séries en français |
+| **NetMirror** | Original | Netflix, Prime Video, Disney+ |
+| **StreamFlix** | Original | Films & Séries |
+
 ## Installation
 
 ### Prérequis
 
-- Node.js 20+
-- Docker (optionnel)
+- Docker (recommandé)
+- Ou Node.js 20+
 
 ### Via Docker (recommandé)
 
 ```bash
+git clone https://github.com/Loo-stick/loostream.git
+cd loostream
+cp .env.example .env
 docker compose up -d
 ```
 
@@ -41,23 +52,35 @@ npm run build
 npm start
 ```
 
-### Dans Stremio
-
-Ajouter l'addon via l'URL : `http://localhost:7002/manifest.json`
-
 ## Configuration
 
-1. Copier le fichier d'exemple :
+### Option 1 : Via la page Configure (recommandé)
+
+Accédez à `http://localhost:7002/configure` pour configurer l'addon via une interface web :
+
+1. **Clé API TMDB** - Obtenez-la gratuitement sur [themoviedb.org](https://www.themoviedb.org/settings/api)
+2. **Mode Proxy** - Choisissez entre MediaFlow (recommandé) ou Proxy Local
+3. **Générer le lien** - Un lien d'installation personnalisé sera généré
+
+Chaque utilisateur peut avoir sa propre configuration encodée dans l'URL de l'addon.
+
+### Option 2 : Via fichier .env (pour configuration serveur par défaut)
+
 ```bash
 cp .env.example .env
 ```
 
-2. Éditer `.env` avec vos valeurs :
+Éditez `.env` :
+
 ```env
 PORT=7002
-USE_LOCAL_PROXY=true
+USE_LOCAL_PROXY=false
 TMDB_API_KEY=votre_cle_tmdb
+MEDIAFLOW_URL=https://votre-mediaflow.com
+MEDIAFLOW_PASSWORD=votre_mot_de_passe
 ```
+
+> **Note** : La configuration via `/configure` est prioritaire sur le `.env`
 
 ### Variables d'environnement
 
@@ -65,62 +88,61 @@ TMDB_API_KEY=votre_cle_tmdb
 |----------|-------------|--------|
 | `PORT` | Port du serveur | Non (défaut: 7002) |
 | `USE_LOCAL_PROXY` | `true` = proxy local, `false` = MediaFlow | Non (défaut: false) |
-| `TMDB_API_KEY` | Clé API TMDB | **Oui** |
+| `TMDB_API_KEY` | Clé API TMDB (fallback si non configuré via /configure) | Non |
 | `MEDIAFLOW_URL` | URL MediaFlow | Si USE_LOCAL_PROXY=false |
 | `MEDIAFLOW_PASSWORD` | Mot de passe MediaFlow | Si USE_LOCAL_PROXY=false |
 
 ### Mode Proxy
 
-| Mode | Variable | Bande passante | Usage recommandé |
-|------|----------|----------------|------------------|
-| **MediaFlow** (défaut) | `USE_LOCAL_PROXY=false` | Faible | Public / Multi-users |
-| **Proxy local** | `USE_LOCAL_PROXY=true` | Élevée | Perso / 1-3 users |
+| Mode | Description | Bande passante serveur | Usage recommandé |
+|------|-------------|------------------------|------------------|
+| **MediaFlow** | Flux via serveur MediaFlow externe | Faible | Public / Multi-users / Stremio Web |
+| **Proxy Local** | Flux via ce serveur | Élevée | Usage perso / 1-3 users / Apps natives |
 
-### Obtenir une clé TMDB
+> **Note** : Le proxy local peut avoir des problèmes de décodage sur Stremio Web. Utilisez MediaFlow pour le web.
 
-1. Créer un compte sur [themoviedb.org](https://www.themoviedb.org/)
-2. Aller dans Paramètres > API
-3. Demander une clé API (gratuit)
+## Installation dans Stremio
 
-## Fonctionnalités
+### Via la page Configure
 
-- Agrégation multi-sources
-- Proxy HLS intégré
-- Support films et séries
-- Priorité contenu français (VF/VOSTFR)
+1. Accédez à `http://votre-serveur:7002/configure`
+2. Remplissez les champs (TMDB, MediaFlow)
+3. Cliquez sur "Générer le lien d'installation"
+4. Copiez le lien et ouvrez-le dans Stremio
+
+### Manuellement
+
+Ajoutez l'addon via l'URL : `http://localhost:7002/manifest.json`
+
+## Obtenir une clé TMDB
+
+1. Créez un compte sur [themoviedb.org](https://www.themoviedb.org/)
+2. Allez dans Paramètres > API
+3. Demandez une clé API (gratuit)
+
+## Obtenir MediaFlow Proxy
+
+MediaFlow est un proxy HLS qui permet de streamer les vidéos sans surcharger votre serveur.
+
+1. Installez [MediaFlow Proxy](https://github.com/mhdzumair/mediaflow-proxy)
+2. Configurez l'URL et le mot de passe dans `/configure`
 
 ## Structure
 
 ```
 src/
-├── index.ts        # Point d'entrée
-├── proxy.ts        # Proxy HLS intégré
-└── scrapers/       # Scrapers de sources
+├── index.ts          # Point d'entrée et routes
+├── configure.html    # Page de configuration
+├── proxy.ts          # Proxy HLS intégré
+└── scrapers/         # Scrapers de sources
+    ├── movix.ts      # Source Movix (VF/VOSTFR)
+    ├── netmirror.ts  # Source NetMirror (Netflix, Prime, Disney+)
+    └── streamflix.ts # Source StreamFlix
 ```
 
 ## Licence
 
-MIT License
-
-Copyright (c) 2024
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
+MIT License - Voir le fichier LICENSE
 
 ---
 
