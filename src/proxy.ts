@@ -1,29 +1,57 @@
 import { Router, Request, Response } from 'express';
 import axios from 'axios';
+import * as fs from 'fs';
+import * as path from 'path';
 
 const router = Router();
 
 // ============================================
 // SECURITY: Domain whitelist to prevent SSRF
+// Loaded from config/allowed-domains.json
 // ============================================
-const ALLOWED_DOMAINS = [
-  // NetMirror CDNs
-  'net52.cc',
-  'nm-cdn',
-  'imgcdn.kim',
-  'freecdn4.top',
-  // Movix CDNs
-  'xalaflix.design',
-  'movix.blog',
-  // StreamFlix CDNs
-  'streamflix.app',
-  'chilflix',
-  'streamflix.one',
-  // Common video CDNs
-  'akamaized.net',
-  'cloudfront.net',
-  'googleapis.com',
+const CONFIG_PATH = process.env.DOMAINS_CONFIG || '/app/config/allowed-domains.json';
+const DEFAULT_DOMAINS = [
+  'net52.cc', 'nm-cdn', 'imgcdn.kim', 'freecdn4.top',
+  'xalaflix.design', 'movix.blog',
+  'streamflix.app', 'chilflix', 'streamflix.one',
+  'akamaized.net', 'cloudfront.net', 'googleapis.com',
 ];
+
+let ALLOWED_DOMAINS: string[] = [...DEFAULT_DOMAINS];
+
+function loadAllowedDomains(): void {
+  try {
+    if (fs.existsSync(CONFIG_PATH)) {
+      const data = fs.readFileSync(CONFIG_PATH, 'utf-8');
+      const config = JSON.parse(data);
+      if (Array.isArray(config.domains)) {
+        ALLOWED_DOMAINS = config.domains;
+        console.log(`[Proxy] Loaded ${ALLOWED_DOMAINS.length} domains from config`);
+      }
+    } else {
+      console.log(`[Proxy] Config not found at ${CONFIG_PATH}, using defaults`);
+    }
+  } catch (e: any) {
+    console.error(`[Proxy] Error loading config: ${e.message}, using defaults`);
+  }
+}
+
+// Load on startup
+loadAllowedDomains();
+
+// Watch for config changes (hot-reload)
+try {
+  if (fs.existsSync(CONFIG_PATH)) {
+    fs.watch(CONFIG_PATH, (eventType) => {
+      if (eventType === 'change') {
+        console.log('[Proxy] Config file changed, reloading...');
+        setTimeout(loadAllowedDomains, 100); // Small delay to ensure file is fully written
+      }
+    });
+  }
+} catch (e) {
+  // Watch not supported or file doesn't exist yet
+}
 
 // Private IP ranges to block (SSRF protection)
 const PRIVATE_IP_PATTERNS = [
@@ -288,6 +316,20 @@ router.get('/stream', async (req: Request, res: Response) => {
     console.error(`[Proxy] Stream error:`, e.message);
     res.status(502).send('Failed to fetch stream');
   }
+});
+
+// Admin endpoint to reload config and view domains
+router.get('/domains', (req: Request, res: Response) => {
+  const reload = req.query.reload === 'true';
+  if (reload) {
+    loadAllowedDomains();
+  }
+  res.json({
+    count: ALLOWED_DOMAINS.length,
+    domains: ALLOWED_DOMAINS,
+    configPath: CONFIG_PATH,
+    reloaded: reload
+  });
 });
 
 export default router;
