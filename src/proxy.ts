@@ -11,6 +11,7 @@ const ALLOWED_DOMAINS = [
   'net52.cc',
   'nm-cdn',
   'imgcdn.kim',
+  'freecdn4.top',
   // Movix CDNs
   'xalaflix.design',
   'movix.blog',
