@@ -1,12 +1,28 @@
 import express from 'express';
 import axios from 'axios';
 import path from 'path';
+import { rateLimit } from 'express-rate-limit';
 import { getStreams, getStreamUrl } from './scrapers/netmirror';
 import { getStreamFlixStreams } from './scrapers/streamflix';
 import { getMovixStreams } from './scrapers/movix';
 import proxyRouter from './proxy';
 
 const app = express();
+
+// ============================================
+// SECURITY: Rate limiting (100 requests per minute per IP)
+// ============================================
+const apiLimiter = rateLimit({
+  windowMs: 1 * 60 * 1000, // 1 minute
+  max: 100, // 100 requests per minute per IP
+  message: { error: 'Too many requests, please try again later' },
+  standardHeaders: true,
+  legacyHeaders: false,
+  skip: (req) => {
+    // Skip rate limiting for proxy segment requests (high volume during streaming)
+    return req.path.includes('/proxy/segment');
+  },
+});
 const PORT = process.env.PORT || 7002;
 
 // Default config from env
@@ -22,11 +38,54 @@ interface UserConfig {
   tmdbKey?: string;
 }
 
-// Parse config from base64 URL param
+// ============================================
+// SECURITY: Config validation
+// ============================================
+function isValidUrl(str: string): boolean {
+  try {
+    const url = new URL(str);
+    return ['http:', 'https:'].includes(url.protocol);
+  } catch {
+    return false;
+  }
+}
+
+function sanitizeString(str: string, maxLength: number = 200): string {
+  if (typeof str !== 'string') return '';
+  return str.slice(0, maxLength).replace(/[<>]/g, ''); // Remove potential XSS chars
+}
+
+// Parse and validate config from base64 URL param
 function parseConfig(configStr: string): UserConfig | null {
   try {
+    // Limit config string length to prevent DoS
+    if (configStr.length > 2000) {
+      console.warn('[Config] Config string too long');
+      return null;
+    }
+
     const decoded = Buffer.from(configStr, 'base64').toString('utf-8');
-    return JSON.parse(decoded);
+    const parsed = JSON.parse(decoded);
+
+    // Validate proxy type
+    if (!['local', 'mediaflow'].includes(parsed.proxy)) {
+      console.warn('[Config] Invalid proxy type');
+      return null;
+    }
+
+    // Validate MediaFlow URL if provided
+    if (parsed.mfUrl && !isValidUrl(parsed.mfUrl)) {
+      console.warn('[Config] Invalid MediaFlow URL');
+      return null;
+    }
+
+    // Sanitize strings
+    return {
+      proxy: parsed.proxy,
+      mfUrl: parsed.mfUrl ? sanitizeString(parsed.mfUrl, 500) : undefined,
+      mfPass: parsed.mfPass ? sanitizeString(parsed.mfPass, 100) : undefined,
+      tmdbKey: parsed.tmdbKey ? sanitizeString(parsed.tmdbKey, 64) : undefined,
+    };
   } catch {
     return null;
   }
@@ -133,7 +192,11 @@ app.use((_req, res, next) => {
   next();
 });
 
-// Local HLS proxy
+// Apply global rate limiting (100 req/min for API, applies to all routes)
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+app.use(apiLimiter as any);
+
+// Local HLS proxy (has its own higher limit via proxyLimiter applied internally if needed)
 app.use('/proxy', proxyRouter);
 
 // Manifest generator

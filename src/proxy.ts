@@ -3,6 +3,72 @@ import axios from 'axios';
 
 const router = Router();
 
+// ============================================
+// SECURITY: Domain whitelist to prevent SSRF
+// ============================================
+const ALLOWED_DOMAINS = [
+  // NetMirror CDNs
+  'net52.cc',
+  'nm-cdn',
+  'imgcdn.kim',
+  // Movix CDNs
+  'xalaflix.design',
+  'movix.blog',
+  // StreamFlix CDNs
+  'streamflix.app',
+  'chilflix',
+  'streamflix.one',
+  // Common video CDNs
+  'akamaized.net',
+  'cloudfront.net',
+  'googleapis.com',
+];
+
+// Private IP ranges to block (SSRF protection)
+const PRIVATE_IP_PATTERNS = [
+  /^localhost$/i,
+  /^127\./,
+  /^10\./,
+  /^172\.(1[6-9]|2[0-9]|3[0-1])\./,
+  /^192\.168\./,
+  /^169\.254\./, // Link-local / AWS metadata
+  /^0\.0\.0\.0$/,
+  /^\[::1\]$/,   // IPv6 localhost
+  /^fc00:/i,     // IPv6 private
+  /^fe80:/i,     // IPv6 link-local
+];
+
+function isAllowedUrl(url: string): { allowed: boolean; reason?: string } {
+  try {
+    const parsed = new URL(url);
+
+    // Only allow HTTP/HTTPS
+    if (!['http:', 'https:'].includes(parsed.protocol)) {
+      return { allowed: false, reason: 'Invalid protocol' };
+    }
+
+    // Block private IPs
+    for (const pattern of PRIVATE_IP_PATTERNS) {
+      if (pattern.test(parsed.hostname)) {
+        return { allowed: false, reason: 'Private IP not allowed' };
+      }
+    }
+
+    // Check domain whitelist
+    const isWhitelisted = ALLOWED_DOMAINS.some(domain =>
+      parsed.hostname.includes(domain) || parsed.hostname.endsWith(domain)
+    );
+
+    if (!isWhitelisted) {
+      return { allowed: false, reason: `Domain not whitelisted: ${parsed.hostname}` };
+    }
+
+    return { allowed: true };
+  } catch {
+    return { allowed: false, reason: 'Invalid URL format' };
+  }
+}
+
 // Parse headers from query params (h_referer, h_user-agent, etc.)
 function parseHeaders(query: Record<string, any>): Record<string, string> {
   const headers: Record<string, string> = {};
@@ -97,6 +163,13 @@ router.get('/manifest', async (req: Request, res: Response) => {
     return res.status(400).send('Missing url parameter');
   }
 
+  // SECURITY: Validate URL
+  const validation = isAllowedUrl(url);
+  if (!validation.allowed) {
+    console.warn(`[Proxy] Blocked request: ${validation.reason} - ${url}`);
+    return res.status(403).send(`Forbidden: ${validation.reason}`);
+  }
+
   const headers = parseHeaders(req.query as Record<string, any>);
 
   try {
@@ -129,6 +202,13 @@ router.get('/segment', async (req: Request, res: Response) => {
 
   if (!url) {
     return res.status(400).send('Missing url parameter');
+  }
+
+  // SECURITY: Validate URL
+  const validation = isAllowedUrl(url);
+  if (!validation.allowed) {
+    console.warn(`[Proxy] Blocked segment: ${validation.reason} - ${url}`);
+    return res.status(403).send(`Forbidden: ${validation.reason}`);
   }
 
   const headers = parseHeaders(req.query as Record<string, any>);
@@ -169,6 +249,13 @@ router.get('/stream', async (req: Request, res: Response) => {
 
   if (!url) {
     return res.status(400).send('Missing url parameter');
+  }
+
+  // SECURITY: Validate URL
+  const validation = isAllowedUrl(url);
+  if (!validation.allowed) {
+    console.warn(`[Proxy] Blocked stream: ${validation.reason} - ${url}`);
+    return res.status(403).send(`Forbidden: ${validation.reason}`);
   }
 
   const headers = parseHeaders(req.query as Record<string, any>);
