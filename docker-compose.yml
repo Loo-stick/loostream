@@ -1,0 +1,11 @@
+services:
+  loostream:
+    build: .
+    container_name: loostream
+    restart: unless-stopped
+    ports:
+      - "${PORT:-7002}:${PORT:-7002}"
+    env_file:
+      - .env
+    environment:
+      - NODE_ENV=production

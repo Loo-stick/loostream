@@ -1,0 +1,352 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LooStream - Configuration</title>
+    <style>
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+            min-height: 100vh;
+            color: #fff;
+            padding: 20px;
+        }
+        .container {
+            max-width: 600px;
+            margin: 0 auto;
+        }
+        .logo {
+            text-align: center;
+            margin-bottom: 30px;
+        }
+        .logo img {
+            width: 100px;
+            height: 100px;
+            border-radius: 20px;
+        }
+        .logo h1 {
+            margin-top: 15px;
+            font-size: 2em;
+        }
+        .card {
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 15px;
+            padding: 25px;
+            margin-bottom: 20px;
+            backdrop-filter: blur(10px);
+        }
+        .card h2 {
+            margin-bottom: 15px;
+            color: #7f5af0;
+        }
+        .option {
+            background: rgba(255, 255, 255, 0.05);
+            border: 2px solid transparent;
+            border-radius: 10px;
+            padding: 20px;
+            margin-bottom: 15px;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+        .option:hover {
+            background: rgba(255, 255, 255, 0.1);
+        }
+        .option.selected {
+            border-color: #7f5af0;
+            background: rgba(127, 90, 240, 0.2);
+        }
+        .option h3 {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin-bottom: 10px;
+        }
+        .option p {
+            color: #aaa;
+            font-size: 0.9em;
+            line-height: 1.5;
+        }
+        .badge {
+            font-size: 0.7em;
+            padding: 3px 8px;
+            border-radius: 5px;
+            background: #7f5af0;
+        }
+        .badge.warning {
+            background: #f59e0b;
+        }
+        .warning-box {
+            background: rgba(245, 158, 11, 0.2);
+            border: 1px solid #f59e0b;
+            border-radius: 10px;
+            padding: 15px;
+            margin-top: 15px;
+            display: none;
+        }
+        .warning-box.show {
+            display: block;
+        }
+        .warning-box p {
+            color: #fcd34d;
+            font-size: 0.85em;
+        }
+        .input-group {
+            margin-top: 15px;
+            display: none;
+        }
+        .input-group.show {
+            display: block;
+        }
+        .input-group label {
+            display: block;
+            margin-bottom: 5px;
+            color: #aaa;
+            font-size: 0.9em;
+        }
+        .input-group input {
+            width: 100%;
+            padding: 12px;
+            border: none;
+            border-radius: 8px;
+            background: rgba(255, 255, 255, 0.1);
+            color: #fff;
+            font-size: 1em;
+            margin-bottom: 10px;
+        }
+        .input-group input::placeholder {
+            color: #666;
+        }
+        .input-group a {
+            color: #7f5af0;
+            font-size: 0.85em;
+        }
+        .btn {
+            width: 100%;
+            padding: 15px;
+            border: none;
+            border-radius: 10px;
+            background: #7f5af0;
+            color: #fff;
+            font-size: 1.1em;
+            font-weight: bold;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+        .btn:hover {
+            background: #6b46e5;
+            transform: translateY(-2px);
+        }
+        .btn:disabled {
+            background: #444;
+            cursor: not-allowed;
+            transform: none;
+        }
+        .result {
+            margin-top: 20px;
+            display: none;
+        }
+        .result.show {
+            display: block;
+        }
+        .result input {
+            width: 100%;
+            padding: 12px;
+            border: none;
+            border-radius: 8px;
+            background: rgba(0, 0, 0, 0.3);
+            color: #7f5af0;
+            font-size: 0.9em;
+            margin-bottom: 10px;
+        }
+        .result .btn-copy {
+            background: #2cb67d;
+        }
+        .result .btn-copy:hover {
+            background: #24a06d;
+        }
+        .disclaimer {
+            margin-top: 30px;
+            padding: 15px;
+            background: rgba(255, 0, 0, 0.1);
+            border: 1px solid rgba(255, 0, 0, 0.3);
+            border-radius: 10px;
+            font-size: 0.8em;
+            color: #f87171;
+            line-height: 1.6;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="logo">
+            <img src="/logo.png" alt="LooStream">
+            <h1>LooStream</h1>
+            <p style="color: #aaa; margin-top: 5px;">Configuration de l'addon</p>
+        </div>
+
+        <div class="card">
+            <h2>Mode de proxy</h2>
+
+            <div class="option selected" data-mode="mediaflow" onclick="selectMode('mediaflow')">
+                <h3>
+                    <span>☁️</span> MediaFlow Proxy
+                    <span class="badge">Recommandé</span>
+                </h3>
+                <p>Les flux passent par un serveur MediaFlow externe. Économise la bande passante du serveur addon. Idéal pour un usage partagé ou public.</p>
+            </div>
+
+            <div class="input-group" id="mf-config">
+                <label>URL MediaFlow</label>
+                <input type="url" id="mf-url" placeholder="https://votre-mediaflow.com" value="">
+                <label>Mot de passe MediaFlow</label>
+                <input type="password" id="mf-password" placeholder="Mot de passe">
+                <p style="margin-top: 10px;">
+                    <a href="https://github.com/mhdzumair/mediaflow-proxy" target="_blank">📦 Installer MediaFlow Proxy</a>
+                </p>
+            </div>
+
+            <div class="option" data-mode="local" onclick="selectMode('local')">
+                <h3>
+                    <span>🏠</span> Proxy Local
+                    <span class="badge warning">Avancé</span>
+                </h3>
+                <p>Les flux passent directement par ce serveur. Aucune dépendance externe. Réservé à un usage personnel (1-3 utilisateurs max).</p>
+            </div>
+
+            <div class="warning-box" id="local-warning">
+                <p>⚠️ <strong>Attention :</strong> En mode local, TOUT le trafic vidéo passe par ce serveur. Un flux 4K consomme ~25 Mbps. Assurez-vous d'avoir une bande passante suffisante. Non recommandé pour un usage public.</p>
+            </div>
+        </div>
+
+        <div class="card">
+            <h2>🎬 Clé API TMDB</h2>
+            <p style="color: #aaa; font-size: 0.9em; margin-bottom: 15px;">Nécessaire pour rechercher les films et séries.</p>
+            <div class="input-group show">
+                <label>Clé API TMDB (v3)</label>
+                <input type="text" id="tmdb-key" placeholder="Votre clé API TMDB">
+                <p style="margin-top: 5px;">
+                    <a href="https://www.themoviedb.org/settings/api" target="_blank">🔑 Obtenir une clé gratuite sur TMDB</a>
+                </p>
+            </div>
+        </div>
+
+        <button class="btn" onclick="generateUrl()">Générer le lien d'installation</button>
+
+        <div class="result" id="result">
+            <div class="card">
+                <h2>Votre lien d'installation</h2>
+                <input type="text" id="install-url" readonly>
+                <button class="btn btn-copy" onclick="copyAndInstall()">📋 Copier et installer dans Stremio</button>
+            </div>
+        </div>
+
+        <div class="disclaimer">
+            <strong>⚠️ Avertissement :</strong> Cet addon est fourni à des fins éducatives uniquement. L'utilisateur est seul responsable de vérifier la légalité de son utilisation dans sa juridiction. Aucun contenu n'est hébergé par cet addon.
+        </div>
+    </div>
+
+    <script>
+        let currentMode = 'mediaflow';
+        const baseUrl = window.location.origin;
+
+        function selectMode(mode) {
+            currentMode = mode;
+
+            document.querySelectorAll('.option').forEach(opt => {
+                opt.classList.remove('selected');
+            });
+            document.querySelector(`[data-mode="${mode}"]`).classList.add('selected');
+
+            document.getElementById('mf-config').classList.toggle('show', mode === 'mediaflow');
+            document.getElementById('local-warning').classList.toggle('show', mode === 'local');
+            document.getElementById('result').classList.remove('show');
+        }
+
+        function generateUrl() {
+            const tmdbKey = document.getElementById('tmdb-key').value.trim();
+
+            if (!tmdbKey) {
+                alert('Veuillez entrer votre clé API TMDB');
+                return;
+            }
+
+            let config = {
+                tmdbKey: tmdbKey
+            };
+
+            if (currentMode === 'mediaflow') {
+                const url = document.getElementById('mf-url').value.trim();
+                const password = document.getElementById('mf-password').value;
+
+                if (!url) {
+                    alert('Veuillez entrer l\'URL de votre MediaFlow Proxy');
+                    return;
+                }
+
+                config.proxy = 'mediaflow';
+                config.mfUrl = url;
+                config.mfPass = password;
+            } else {
+                config.proxy = 'local';
+            }
+
+            const configStr = btoa(JSON.stringify(config));
+            const installUrl = `${baseUrl}/${configStr}/manifest.json`;
+
+            document.getElementById('install-url').value = installUrl;
+            document.getElementById('result').classList.add('show');
+        }
+
+        function copyAndInstall() {
+            const url = document.getElementById('install-url').value;
+            navigator.clipboard.writeText(url).then(() => {
+                window.location.href = url.replace('/manifest.json', '/manifest.json').replace('http', 'stremio');
+            });
+        }
+
+        // Parse existing config from URL path
+        function loadExistingConfig() {
+            const pathParts = window.location.pathname.split('/');
+            // URL format: /{config}/configure or /configure
+            if (pathParts.length >= 2 && pathParts[1] && pathParts[1] !== 'configure') {
+                try {
+                    const configStr = atob(pathParts[1]);
+                    const config = JSON.parse(configStr);
+
+                    // Pre-fill TMDB key
+                    if (config.tmdbKey) {
+                        document.getElementById('tmdb-key').value = config.tmdbKey;
+                    }
+
+                    // Pre-fill proxy mode
+                    if (config.proxy === 'local') {
+                        selectMode('local');
+                    } else {
+                        selectMode('mediaflow');
+                        if (config.mfUrl) {
+                            document.getElementById('mf-url').value = config.mfUrl;
+                        }
+                        if (config.mfPass) {
+                            document.getElementById('mf-password').value = config.mfPass;
+                        }
+                    }
+
+                    console.log('Config loaded from URL:', config);
+                } catch (e) {
+                    console.log('No valid config in URL');
+                }
+            }
+        }
+
+        // Init
+        selectMode('mediaflow');
+        loadExistingConfig();
+    </script>
+</body>
+</html>
