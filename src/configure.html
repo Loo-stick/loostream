@@ -180,6 +180,69 @@
             color: #f87171;
             line-height: 1.6;
         }
+        .input-group select {
+            width: 100%;
+            padding: 12px;
+            border: none;
+            border-radius: 8px;
+            background: rgba(255, 255, 255, 0.1);
+            color: #fff;
+            font-size: 1em;
+            margin-bottom: 10px;
+            cursor: pointer;
+        }
+        .input-group select option {
+            background: #1a1a2e;
+            color: #fff;
+        }
+        .lang-list {
+            list-style: none;
+            padding: 0;
+            margin: 10px 0;
+        }
+        .lang-item {
+            background: rgba(255, 255, 255, 0.1);
+            border: 2px solid transparent;
+            border-radius: 8px;
+            padding: 12px 15px;
+            margin-bottom: 8px;
+            cursor: grab;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            transition: all 0.2s;
+            user-select: none;
+        }
+        .lang-item:hover {
+            background: rgba(255, 255, 255, 0.15);
+        }
+        .lang-item.dragging {
+            opacity: 0.5;
+            border-color: #7f5af0;
+        }
+        .lang-item .drag-handle {
+            color: #666;
+            font-size: 1.2em;
+        }
+        .lang-item .lang-name {
+            flex: 1;
+        }
+        .lang-item .lang-desc {
+            color: #888;
+            font-size: 0.85em;
+        }
+        .lang-item .position {
+            background: #7f5af0;
+            color: #fff;
+            width: 24px;
+            height: 24px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 0.8em;
+            font-weight: bold;
+        }
     </style>
 </head>
 <body>
@@ -233,6 +296,51 @@
                 <p style="margin-top: 5px;">
                     <a href="https://www.themoviedb.org/settings/api" target="_blank">🔑 Obtenir une clé gratuite sur TMDB</a>
                 </p>
+            </div>
+        </div>
+
+        <div class="card">
+            <h2>⚙️ Préférences</h2>
+            <p style="color: #aaa; font-size: 0.9em; margin-bottom: 15px;">Filtrer et trier les streams selon vos préférences.</p>
+
+            <div class="input-group show">
+                <label>Qualité préférée</label>
+                <select id="pref-quality">
+                    <option value="1080p">1080p (Full HD)</option>
+                    <option value="4K">4K (Ultra HD)</option>
+                    <option value="720p">720p (HD)</option>
+                    <option value="480p">480p (SD)</option>
+                </select>
+            </div>
+
+            <div class="input-group show" style="margin-top: 20px;">
+                <label>Ordre de préférence des langues (glisser pour réordonner)</label>
+                <ul class="lang-list" id="lang-list">
+                    <li class="lang-item" draggable="true" data-lang="MULTI">
+                        <span class="position">1</span>
+                        <span class="drag-handle">☰</span>
+                        <span class="lang-name">MULTI</span>
+                        <span class="lang-desc">VF + VO</span>
+                    </li>
+                    <li class="lang-item" draggable="true" data-lang="VF">
+                        <span class="position">2</span>
+                        <span class="drag-handle">☰</span>
+                        <span class="lang-name">VF</span>
+                        <span class="lang-desc">Version Française</span>
+                    </li>
+                    <li class="lang-item" draggable="true" data-lang="VOSTFR">
+                        <span class="position">3</span>
+                        <span class="drag-handle">☰</span>
+                        <span class="lang-name">VOSTFR</span>
+                        <span class="lang-desc">VO sous-titrée FR</span>
+                    </li>
+                    <li class="lang-item" draggable="true" data-lang="VO">
+                        <span class="position">4</span>
+                        <span class="drag-handle">☰</span>
+                        <span class="lang-name">VO</span>
+                        <span class="lang-desc">Version Originale</span>
+                    </li>
+                </ul>
             </div>
         </div>
 
@@ -296,11 +404,75 @@
                 config.proxy = 'local';
             }
 
+            // Add preferences
+            config.prefQuality = document.getElementById('pref-quality').value;
+            config.langOrder = getLangOrder();
+
             const configStr = btoa(JSON.stringify(config));
             const installUrl = `${baseUrl}/${configStr}/manifest.json`;
 
             document.getElementById('install-url').value = installUrl;
             document.getElementById('result').classList.add('show');
+        }
+
+        // Get language order from drag & drop list
+        function getLangOrder() {
+            const items = document.querySelectorAll('#lang-list .lang-item');
+            return Array.from(items).map(item => item.dataset.lang);
+        }
+
+        // Update position numbers after reorder
+        function updatePositions() {
+            const items = document.querySelectorAll('#lang-list .lang-item');
+            items.forEach((item, index) => {
+                item.querySelector('.position').textContent = index + 1;
+            });
+        }
+
+        // Drag & drop for language list
+        function initDragAndDrop() {
+            const list = document.getElementById('lang-list');
+            let draggedItem = null;
+
+            list.addEventListener('dragstart', (e) => {
+                if (e.target.classList.contains('lang-item')) {
+                    draggedItem = e.target;
+                    e.target.classList.add('dragging');
+                }
+            });
+
+            list.addEventListener('dragend', (e) => {
+                if (e.target.classList.contains('lang-item')) {
+                    e.target.classList.remove('dragging');
+                    draggedItem = null;
+                    updatePositions();
+                }
+            });
+
+            list.addEventListener('dragover', (e) => {
+                e.preventDefault();
+                const afterElement = getDragAfterElement(list, e.clientY);
+                if (draggedItem) {
+                    if (afterElement == null) {
+                        list.appendChild(draggedItem);
+                    } else {
+                        list.insertBefore(draggedItem, afterElement);
+                    }
+                }
+            });
+        }
+
+        function getDragAfterElement(container, y) {
+            const draggableElements = [...container.querySelectorAll('.lang-item:not(.dragging)')];
+            return draggableElements.reduce((closest, child) => {
+                const box = child.getBoundingClientRect();
+                const offset = y - box.top - box.height / 2;
+                if (offset < 0 && offset > closest.offset) {
+                    return { offset: offset, element: child };
+                } else {
+                    return closest;
+                }
+            }, { offset: Number.NEGATIVE_INFINITY }).element;
         }
 
         function copyAndInstall() {
@@ -337,6 +509,14 @@
                         }
                     }
 
+                    // Pre-fill preferences
+                    if (config.prefQuality) {
+                        document.getElementById('pref-quality').value = config.prefQuality;
+                    }
+                    if (config.langOrder && Array.isArray(config.langOrder)) {
+                        setLangOrder(config.langOrder);
+                    }
+
                     console.log('Config loaded from URL:', config);
                 } catch (e) {
                     console.log('No valid config in URL');
@@ -344,8 +524,37 @@
             }
         }
 
+        // Set language order from config
+        function setLangOrder(order) {
+            const list = document.getElementById('lang-list');
+            const items = {};
+
+            // Store all items by language
+            list.querySelectorAll('.lang-item').forEach(item => {
+                items[item.dataset.lang] = item;
+            });
+
+            // Clear and re-add in order
+            list.innerHTML = '';
+            order.forEach(lang => {
+                if (items[lang]) {
+                    list.appendChild(items[lang]);
+                }
+            });
+
+            // Add any missing languages at the end
+            Object.keys(items).forEach(lang => {
+                if (!order.includes(lang)) {
+                    list.appendChild(items[lang]);
+                }
+            });
+
+            updatePositions();
+        }
+
         // Init
         selectMode('mediaflow');
+        initDragAndDrop();
         loadExistingConfig();
     </script>
 </body>

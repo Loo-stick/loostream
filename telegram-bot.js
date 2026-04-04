@@ -172,6 +172,140 @@ function reloadLoostream() {
   });
 }
 
+// Fetch from loostream API
+function fetchLoostreamApi(endpoint) {
+  return new Promise((resolve, reject) => {
+    const req = http.get(`http://loostream:7002${endpoint}`, (res) => {
+      let body = '';
+      res.on('data', chunk => body += chunk);
+      res.on('end', () => {
+        try {
+          resolve(JSON.parse(body));
+        } catch (e) {
+          reject(e);
+        }
+      });
+    });
+    req.on('error', reject);
+    req.setTimeout(10000, () => {
+      req.destroy();
+      reject(new Error('Timeout'));
+    });
+  });
+}
+
+// Format stats message
+async function sendStatsMessage() {
+  try {
+    const stats = await fetchLoostreamApi('/api/stats');
+
+    const message = `📊 <b>Statistiques LooStream</b>\n\n` +
+      `⏱ Uptime: ${stats.uptime}\n\n` +
+      `<b>Requêtes:</b>\n` +
+      `• Total: ${stats.requests.total}\n` +
+      `• Streams: ${stats.requests.streams}\n\n` +
+      `<b>Streams servis par source:</b>\n` +
+      `• Movix: ${stats.streamsServed.movix}\n` +
+      `• NetMirror: ${stats.streamsServed.netmirror}\n` +
+      `• StreamFlix: ${stats.streamsServed.streamflix}\n\n` +
+      `<b>Taux de succès:</b>\n` +
+      `• Movix: ${stats.sources.movix.requests > 0 ? Math.round(stats.sources.movix.success / stats.sources.movix.requests * 100) : 0}%\n` +
+      `• NetMirror: ${stats.sources.netmirror.requests > 0 ? Math.round(stats.sources.netmirror.success / stats.sources.netmirror.requests * 100) : 0}%\n` +
+      `• StreamFlix: ${stats.sources.streamflix.requests > 0 ? Math.round(stats.sources.streamflix.success / stats.sources.streamflix.requests * 100) : 0}%`;
+
+    await telegramRequest('sendMessage', {
+      chat_id: CHAT_ID,
+      text: message,
+      parse_mode: 'HTML'
+    });
+  } catch (e) {
+    await telegramRequest('sendMessage', {
+      chat_id: CHAT_ID,
+      text: `❌ Erreur lors de la récupération des stats: ${e.message}`,
+      parse_mode: 'HTML'
+    });
+  }
+}
+
+// Format health message
+async function sendHealthMessage() {
+  try {
+    const health = await fetchLoostreamApi('/api/health');
+
+    const statusEmoji = {
+      'up': '🟢',
+      'down': '🔴',
+      'degraded': '🟡'
+    };
+
+    const overallEmoji = health.overall === 'healthy' ? '✅' : (health.overall === 'down' ? '🔴' : '⚠️');
+
+    let message = `${overallEmoji} <b>État des sources</b>\n\n`;
+
+    for (const [source, data] of Object.entries(health.sources)) {
+      const emoji = statusEmoji[data.status] || '❓';
+      const latency = data.latency ? ` (${data.latency}ms)` : '';
+      const error = data.error ? ` - ${data.error}` : '';
+      message += `${emoji} <b>${source}</b>: ${data.status}${latency}${error}\n`;
+    }
+
+    await telegramRequest('sendMessage', {
+      chat_id: CHAT_ID,
+      text: message,
+      parse_mode: 'HTML'
+    });
+  } catch (e) {
+    await telegramRequest('sendMessage', {
+      chat_id: CHAT_ID,
+      text: `❌ Erreur lors du health check: ${e.message}`,
+      parse_mode: 'HTML'
+    });
+  }
+}
+
+// Track source status for alerts
+const lastSourceStatus = { movix: 'up', netmirror: 'up', streamflix: 'up' };
+
+// Periodic health check with alerts
+async function periodicHealthCheck() {
+  try {
+    const health = await fetchLoostreamApi('/api/health');
+
+    for (const [source, data] of Object.entries(health.sources)) {
+      const prevStatus = lastSourceStatus[source];
+      const currentStatus = data.status;
+
+      // Alert if status changed to down
+      if (prevStatus !== 'down' && currentStatus === 'down') {
+        await telegramRequest('sendMessage', {
+          chat_id: CHAT_ID,
+          text: `🔴 <b>ALERTE: ${source} est DOWN!</b>\n\nErreur: ${data.error || 'Inconnue'}`,
+          parse_mode: 'HTML'
+        });
+        console.log(`[Health] Alert: ${source} is DOWN`);
+      }
+      // Notify if status recovered
+      else if (prevStatus === 'down' && currentStatus === 'up') {
+        await telegramRequest('sendMessage', {
+          chat_id: CHAT_ID,
+          text: `🟢 <b>${source} est de retour!</b>\n\nLatence: ${data.latency}ms`,
+          parse_mode: 'HTML'
+        });
+        console.log(`[Health] ${source} recovered`);
+      }
+
+      lastSourceStatus[source] = currentStatus;
+    }
+  } catch (e) {
+    console.error('[Health] Periodic check error:', e.message);
+  }
+}
+
+// Start periodic health check (every 5 minutes)
+setInterval(periodicHealthCheck, 5 * 60 * 1000);
+// Run first check after 30 seconds
+setTimeout(periodicHealthCheck, 30000);
+
 // Add domain to whitelist
 async function addDomainToWhitelist(domain) {
   try {
@@ -276,6 +410,16 @@ async function pollUpdates() {
             parse_mode: 'HTML'
           });
         }
+
+        // Handle /stats command
+        if (update.message?.text === '/stats') {
+          await sendStatsMessage();
+        }
+
+        // Handle /health command
+        if (update.message?.text === '/health') {
+          await sendHealthMessage();
+        }
       }
     }
   } catch (e) {
@@ -333,7 +477,12 @@ console.log(`[Bot] Domains config: ${DOMAINS_CONFIG_PATH}`);
 // Send startup message
 telegramRequest('sendMessage', {
   chat_id: CHAT_ID,
-  text: '🟢 <b>LooStream Alert Bot démarré</b>\n\nCommandes:\n/status - Voir le status\n/domains - Liste des domaines',
+  text: '🟢 <b>LooStream Alert Bot démarré</b>\n\n' +
+    'Commandes:\n' +
+    '/status - Whitelist status\n' +
+    '/domains - Liste des domaines\n' +
+    '/stats - Statistiques détaillées\n' +
+    '/health - État des sources',
   parse_mode: 'HTML'
 }).then(() => {
   console.log('[Bot] Startup message sent');

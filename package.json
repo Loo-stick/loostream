@@ -4,7 +4,7 @@
   "description": "LooStream - Stremio addon for streaming (Netflix, Prime Video, Disney+ mirrors)",
   "main": "dist/index.js",
   "scripts": {
-    "build": "tsc",
+    "build": "tsc && node -e \"require('fs').copyFileSync('src/configure.html', 'dist/configure.html')\"",
     "start": "node dist/index.js",
     "dev": "ts-node src/index.ts"
   },

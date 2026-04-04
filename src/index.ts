@@ -13,6 +13,50 @@ const app = express();
 app.set('trust proxy', 1);
 
 // ============================================
+// STATS TRACKING
+// ============================================
+interface Stats {
+  startTime: number;
+  requests: {
+    total: number;
+    streams: number;
+    proxy: number;
+  };
+  sources: {
+    movix: { requests: number; success: number; errors: number; lastSuccess: number | null };
+    netmirror: { requests: number; success: number; errors: number; lastSuccess: number | null };
+    streamflix: { requests: number; success: number; errors: number; lastSuccess: number | null };
+  };
+  streamsServed: {
+    movix: number;
+    netmirror: number;
+    streamflix: number;
+  };
+}
+
+const stats: Stats = {
+  startTime: Date.now(),
+  requests: { total: 0, streams: 0, proxy: 0 },
+  sources: {
+    movix: { requests: 0, success: 0, errors: 0, lastSuccess: null },
+    netmirror: { requests: 0, success: 0, errors: 0, lastSuccess: null },
+    streamflix: { requests: 0, success: 0, errors: 0, lastSuccess: null },
+  },
+  streamsServed: { movix: 0, netmirror: 0, streamflix: 0 },
+};
+
+function trackSourceResult(source: 'movix' | 'netmirror' | 'streamflix', success: boolean, streamCount: number = 0) {
+  stats.sources[source].requests++;
+  if (success) {
+    stats.sources[source].success++;
+    stats.sources[source].lastSuccess = Date.now();
+    stats.streamsServed[source] += streamCount;
+  } else {
+    stats.sources[source].errors++;
+  }
+}
+
+// ============================================
 // SECURITY: Rate limiting (100 requests per minute per IP)
 // ============================================
 const apiLimiter = rateLimit({
@@ -39,6 +83,21 @@ interface UserConfig {
   mfUrl?: string;
   mfPass?: string;
   tmdbKey?: string;
+  prefQuality?: string;  // "1080p", "4K", "720p", "480p"
+  langOrder?: string[];  // ["MULTI", "VF", "VOSTFR", "VO"]
+}
+
+// Stream with metadata for filtering/sorting
+interface StreamWithMeta {
+  name: string;
+  title: string;
+  url: string;
+  behaviorHints: { notWebReady: boolean; bingeGroup: string };
+  _meta: {
+    quality: string;
+    language: string;
+    source: string;
+  };
 }
 
 // ============================================
@@ -82,16 +141,133 @@ function parseConfig(configStr: string): UserConfig | null {
       return null;
     }
 
+    // Validate preferences
+    const validQualities = ['4K', '1080p', '720p', '480p'];
+    const validLangs = ['MULTI', 'VF', 'VOSTFR', 'VO'];
+
+    let prefQuality = parsed.prefQuality;
+    if (prefQuality && !validQualities.includes(prefQuality)) {
+      prefQuality = '1080p'; // Default
+    }
+
+    let langOrder = parsed.langOrder;
+    if (langOrder && Array.isArray(langOrder)) {
+      // Filter to valid languages only
+      langOrder = langOrder.filter((l: string) => validLangs.includes(l));
+      if (langOrder.length === 0) langOrder = undefined;
+    } else {
+      langOrder = undefined;
+    }
+
     // Sanitize strings
     return {
       proxy: parsed.proxy,
       mfUrl: parsed.mfUrl ? sanitizeString(parsed.mfUrl, 500) : undefined,
       mfPass: parsed.mfPass ? sanitizeString(parsed.mfPass, 100) : undefined,
       tmdbKey: parsed.tmdbKey ? sanitizeString(parsed.tmdbKey, 64) : undefined,
+      prefQuality,
+      langOrder,
     };
   } catch {
     return null;
   }
+}
+
+// ============================================
+// STREAM FILTERING AND SORTING
+// ============================================
+const DEFAULT_LANG_ORDER = ['MULTI', 'VF', 'VOSTFR', 'VO'];
+const QUALITY_SCORES: Record<string, number> = {
+  '4K': 4,
+  '1080p': 3,
+  '720p': 2,
+  '480p': 1,
+  'HD': 2, // Treat HD as 720p equivalent
+};
+
+function normalizeLanguage(lang: string): string {
+  const upper = lang.toUpperCase();
+  if (upper.includes('MULTI')) return 'MULTI';
+  if (upper.includes('VOSTFR') || upper.includes('VOST')) return 'VOSTFR';
+  if (upper.includes('VF') || upper === 'FRENCH' || upper === 'FRANÇAIS') return 'VF';
+  if (upper.includes('VO') || upper === 'ORIGINAL' || upper === 'EN' || upper === 'ENGLISH') return 'VO';
+  return 'VO'; // Default to VO for unknown
+}
+
+function normalizeQuality(quality: string): string {
+  const upper = quality.toUpperCase();
+  if (upper.includes('4K') || upper.includes('2160')) return '4K';
+  if (upper.includes('1080')) return '1080p';
+  if (upper.includes('720')) return '720p';
+  if (upper.includes('480') || upper.includes('SD')) return '480p';
+  if (upper.includes('HD') || upper.includes('FULL')) return '1080p';
+  return '720p'; // Default
+}
+
+function filterAndSortStreams(streams: StreamWithMeta[], config: UserConfig | null): StreamWithMeta[] {
+  if (!config) return streams;
+
+  const prefQuality = config.prefQuality || '1080p';
+  const langOrder = config.langOrder || DEFAULT_LANG_ORDER;
+  const prefQualityScore = QUALITY_SCORES[prefQuality] || 3;
+
+  // Filter streams based on preferences
+  let filtered = streams.filter(stream => {
+    const meta = stream._meta;
+
+    // NetMirror (Original) always passes - it's multi-language content
+    if (meta.source === 'netmirror') return true;
+
+    // Check if language is in user's preference list
+    const normalizedLang = normalizeLanguage(meta.language);
+    if (!langOrder.includes(normalizedLang)) return false;
+
+    // Check quality (allow preferred or higher)
+    const streamQualityScore = QUALITY_SCORES[normalizeQuality(meta.quality)] || 2;
+    if (streamQualityScore < prefQualityScore - 1) return false; // Allow one step lower
+
+    return true;
+  });
+
+  // If filtering removed everything, return original streams sorted
+  if (filtered.length === 0) {
+    filtered = streams;
+  }
+
+  // Sort by preference score
+  filtered.sort((a, b) => {
+    const aLang = normalizeLanguage(a._meta.language);
+    const bLang = normalizeLanguage(b._meta.language);
+    const aQuality = normalizeQuality(a._meta.quality);
+    const bQuality = normalizeQuality(b._meta.quality);
+
+    // Language priority (lower index = higher priority)
+    const aLangScore = langOrder.indexOf(aLang);
+    const bLangScore = langOrder.indexOf(bLang);
+    const aLangPriority = aLangScore === -1 ? 100 : aLangScore;
+    const bLangPriority = bLangScore === -1 ? 100 : bLangScore;
+
+    if (aLangPriority !== bLangPriority) {
+      return aLangPriority - bLangPriority;
+    }
+
+    // Quality priority (higher score = better)
+    const aQualityScore = QUALITY_SCORES[aQuality] || 2;
+    const bQualityScore = QUALITY_SCORES[bQuality] || 2;
+
+    // Prefer streams closest to preferred quality
+    const aDiff = Math.abs(aQualityScore - prefQualityScore);
+    const bDiff = Math.abs(bQualityScore - prefQualityScore);
+
+    if (aDiff !== bDiff) {
+      return aDiff - bDiff;
+    }
+
+    // Tie-breaker: higher quality wins
+    return bQualityScore - aQualityScore;
+  });
+
+  return filtered;
 }
 
 // Check if HLS manifest needs transformer (has .jpg segments that are actually .ts)
@@ -331,23 +507,25 @@ async function handleStream(req: express.Request, res: express.Response, type: s
 
     console.log(`[Stream] Title: ${info.title} (${info.year})`);
 
-    // Fetch from all sources in parallel
+    // Fetch from all sources in parallel (with stats tracking)
+    stats.requests.total++;
+    stats.requests.streams++;
+
     const [netmirrorResults, streamflixResults, movixResults] = await Promise.all([
-      getStreams(info.title, info.year, parsed.season, parsed.episode),
+      getStreams(info.title, info.year, parsed.season, parsed.episode)
+        .then(r => { trackSourceResult('netmirror', true, r.length); return r; })
+        .catch(e => { console.log('[NetMirror] Error:', e); trackSourceResult('netmirror', false); return []; }),
       getStreamFlixStreams(info.tmdbId, type as 'movie' | 'series', parsed.season, parsed.episode)
-        .catch(e => { console.log('[StreamFlix] Error:', e); return []; }),
+        .then(r => { trackSourceResult('streamflix', true, r.length); return r; })
+        .catch(e => { console.log('[StreamFlix] Error:', e); trackSourceResult('streamflix', false); return []; }),
       getMovixStreams(info.tmdbId, type as 'movie' | 'series', parsed.season, parsed.episode)
-        .catch(e => { console.log('[Movix] Error:', e); return []; }),
+        .then(r => { trackSourceResult('movix', true, r.length); return r; })
+        .catch(e => { console.log('[Movix] Error:', e); trackSourceResult('movix', false); return []; }),
     ]);
 
-    const streams: Array<{
-      name: string;
-      title: string;
-      url: string;
-      behaviorHints: { notWebReady: boolean; bingeGroup: string };
-    }> = [];
+    const streams: StreamWithMeta[] = [];
 
-    // Process Movix results FIRST (VF/VOSTFR - priorité française)
+    // Process Movix results
     for (const mv of movixResults) {
       const proxiedUrl = buildProxyUrl(mv.url, {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
@@ -362,6 +540,11 @@ async function handleStream(req: express.Request, res: express.Response, type: s
         behaviorHints: {
           notWebReady: false,
           bingeGroup: 'movix',
+        },
+        _meta: {
+          quality: mv.quality,
+          language: mv.language,
+          source: 'movix',
         },
       });
     }
@@ -401,6 +584,11 @@ async function handleStream(req: express.Request, res: express.Response, type: s
           notWebReady: false,
           bingeGroup: `netmirror-${r.platform}`,
         },
+        _meta: {
+          quality: r.quality,
+          language: 'Original',
+          source: 'netmirror',
+        },
       });
     }
 
@@ -422,6 +610,11 @@ async function handleStream(req: express.Request, res: express.Response, type: s
           notWebReady: false,
           bingeGroup: 'streamflix',
         },
+        _meta: {
+          quality: sf.quality,
+          language: sf.language,
+          source: 'streamflix',
+        },
       });
     }
 
@@ -430,8 +623,14 @@ async function handleStream(req: express.Request, res: express.Response, type: s
       return res.json({ streams: [] });
     }
 
-    console.log(`[Stream] Returning ${streams.length} streams (Movix: ${movixResults.length}, NetMirror: ${netmirrorResults.length}, StreamFlix: ${streamflixResults.length})`);
-    res.json({ streams });
+    // Apply user preferences (filter + sort)
+    const sortedStreams = filterAndSortStreams(streams, config);
+
+    // Remove _meta before sending to Stremio (internal use only)
+    const cleanStreams = sortedStreams.map(({ _meta, ...rest }) => rest);
+
+    console.log(`[Stream] Returning ${cleanStreams.length} streams (Movix: ${movixResults.length}, NetMirror: ${netmirrorResults.length}, StreamFlix: ${streamflixResults.length})`);
+    res.json({ streams: cleanStreams });
   } catch (e) {
     console.error('[Stream] Error:', e);
     res.json({ streams: [] });
@@ -499,9 +698,78 @@ app.get('/logo.png', (_req, res) => {
   res.sendFile('loostream.png', { root: process.cwd() });
 });
 
-// Health check
+// Home redirect
 app.get('/', (_req, res) => {
   res.redirect('/manifest.json');
+});
+
+// ============================================
+// ADMIN API (for Telegram bot)
+// ============================================
+
+// Stats endpoint
+app.get('/api/stats', (_req, res) => {
+  const uptime = Date.now() - stats.startTime;
+  const uptimeHours = Math.floor(uptime / 3600000);
+  const uptimeMinutes = Math.floor((uptime % 3600000) / 60000);
+
+  res.json({
+    uptime: `${uptimeHours}h ${uptimeMinutes}m`,
+    uptimeMs: uptime,
+    requests: stats.requests,
+    sources: stats.sources,
+    streamsServed: stats.streamsServed,
+  });
+});
+
+// Health check endpoint - tests each source
+app.get('/api/health', async (_req, res) => {
+  const results: Record<string, { status: 'up' | 'down' | 'degraded'; latency?: number; error?: string }> = {};
+
+  // Test NetMirror
+  const netmirrorStart = Date.now();
+  try {
+    const resp = await axios.get('https://net52.cc/', { timeout: 10000 });
+    results.netmirror = {
+      status: resp.status === 200 ? 'up' : 'degraded',
+      latency: Date.now() - netmirrorStart,
+    };
+  } catch (e: any) {
+    results.netmirror = { status: 'down', error: e.message };
+  }
+
+  // Test Movix (via one of its APIs)
+  const movixStart = Date.now();
+  try {
+    const resp = await axios.get('https://purstream.store/', { timeout: 10000 });
+    results.movix = {
+      status: resp.status === 200 ? 'up' : 'degraded',
+      latency: Date.now() - movixStart,
+    };
+  } catch (e: any) {
+    results.movix = { status: 'down', error: e.message };
+  }
+
+  // Test StreamFlix
+  const streamflixStart = Date.now();
+  try {
+    const resp = await axios.get('https://api.streamflix.one/', { timeout: 10000 });
+    results.streamflix = {
+      status: resp.status === 200 ? 'up' : 'degraded',
+      latency: Date.now() - streamflixStart,
+    };
+  } catch (e: any) {
+    results.streamflix = { status: 'down', error: e.message };
+  }
+
+  const allUp = Object.values(results).every(r => r.status === 'up');
+  const allDown = Object.values(results).every(r => r.status === 'down');
+
+  res.json({
+    overall: allDown ? 'down' : (allUp ? 'healthy' : 'degraded'),
+    sources: results,
+    timestamp: new Date().toISOString(),
+  });
 });
 
 app.listen(PORT, () => {
