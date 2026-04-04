@@ -629,7 +629,12 @@ async function handleStream(req: express.Request, res: express.Response, type: s
     // Remove _meta before sending to Stremio (internal use only)
     const cleanStreams = sortedStreams.map(({ _meta, ...rest }) => rest);
 
-    console.log(`[Stream] Returning ${cleanStreams.length} streams (Movix: ${movixResults.length}, NetMirror: ${netmirrorResults.length}, StreamFlix: ${streamflixResults.length})`);
+    // Count actual streams by source (after filtering blocked URLs)
+    const movixCount = streams.filter(s => s._meta?.source === 'movix').length;
+    const netmirrorCount = streams.filter(s => s._meta?.source === 'netmirror').length;
+    const streamflixCount = streams.filter(s => s._meta?.source === 'streamflix').length;
+
+    console.log(`[Stream] Returning ${cleanStreams.length} streams (Movix: ${movixCount}, NetMirror: ${netmirrorCount}, StreamFlix: ${streamflixCount})`);
     res.json({ streams: cleanStreams });
   } catch (e) {
     console.error('[Stream] Error:', e);
