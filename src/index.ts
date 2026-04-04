@@ -546,9 +546,12 @@ async function handleStream(req: express.Request, res: express.Response, type: s
         finalUrl = mv.url;
       } else {
         // Need to proxy (Purstream direct URLs or local extraction results)
-        const proxiedUrl = buildProxyUrl(mv.url, {
+        // Merge default headers with extractor-provided headers
+        const proxyHeaders: Record<string, string> = {
           'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-        }, false, req, config);
+          ...mv.headers, // Headers from extractor (e.g., Referer)
+        };
+        const proxiedUrl = buildProxyUrl(mv.url, proxyHeaders, false, req, config);
 
         if (!proxiedUrl) continue; // Skip blocked URLs
         finalUrl = proxiedUrl;

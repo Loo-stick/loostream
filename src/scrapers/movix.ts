@@ -17,6 +17,7 @@ export interface MovixStream {
   quality: string;
   language: string;
   format: string;
+  headers?: Record<string, string>;
 }
 
 function extractQuality(name: string): string {
@@ -168,6 +169,7 @@ export async function getMovixStreams(
           quality: extracted.quality,
           language: link.language,
           format: extracted.format === 'hls' ? 'm3u8' : 'mp4',
+          headers: extracted.headers,
         });
         console.log(`[Movix] Extracted ${link.server} (${link.language}): ${extracted.format}`);
       }
