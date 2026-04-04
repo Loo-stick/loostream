@@ -3,7 +3,7 @@ import axios from 'axios';
 const SF_BASE = 'https://api.streamflix.app';
 const CONFIG_URL = `${SF_BASE}/config/config-streamflixapp.json`;
 const DATA_URL = `${SF_BASE}/data.json`;
-const TMDB_API_KEY = process.env.TMDB_API_KEY || '';
+const DEFAULT_TMDB_API_KEY = process.env.TMDB_API_KEY || '';
 
 const HEADERS = {
   'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
@@ -193,15 +193,23 @@ export async function getStreamFlixStreams(
   tmdbId: string,
   mediaType: 'movie' | 'series',
   season?: number,
-  episode?: number
+  episode?: number,
+  tmdbKey?: string
 ): Promise<StreamFlixStream[]> {
+  const apiKey = tmdbKey || DEFAULT_TMDB_API_KEY;
+
+  if (!apiKey) {
+    console.log('[StreamFlix] No TMDB API key available, skipping');
+    return [];
+  }
+
   console.log(`[StreamFlix] Searching for TMDB ${tmdbId}...`);
 
   try {
     // Get TMDB info
     const endpoint = mediaType === 'movie' ? 'movie' : 'tv';
     const { data: tmdbData } = await axios.get(
-      `https://api.themoviedb.org/3/${endpoint}/${tmdbId}?api_key=${TMDB_API_KEY}`,
+      `https://api.themoviedb.org/3/${endpoint}/${tmdbId}?api_key=${apiKey}`,
       { timeout: 10000 }
     );
 

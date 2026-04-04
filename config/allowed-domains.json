@@ -1,7 +1,6 @@
 {
   "_comment": "Liste des domaines autorisés pour le proxy. Modifiable sans rebuild.",
   "domains": [
-    "net52.cc",
     "nm-cdn",
     "imgcdn.kim",
     "freecdn4.top",
@@ -12,6 +11,7 @@
     "akamaized.net",
     "cloudfront.net",
     "googleapis.com",
-    "zebi.xalaflix.design"
+    "zebi.xalaflix.design",
+    "net52.cc"
   ]
 }

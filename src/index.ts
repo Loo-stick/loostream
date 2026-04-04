@@ -515,7 +515,7 @@ async function handleStream(req: express.Request, res: express.Response, type: s
       getStreams(info.title, info.year, parsed.season, parsed.episode)
         .then(r => { trackSourceResult('netmirror', true, r.length); return r; })
         .catch(e => { console.log('[NetMirror] Error:', e); trackSourceResult('netmirror', false); return []; }),
-      getStreamFlixStreams(info.tmdbId, type as 'movie' | 'series', parsed.season, parsed.episode)
+      getStreamFlixStreams(info.tmdbId, type as 'movie' | 'series', parsed.season, parsed.episode, config?.tmdbKey || DEFAULT_TMDB_KEY)
         .then(r => { trackSourceResult('streamflix', true, r.length); return r; })
         .catch(e => { console.log('[StreamFlix] Error:', e); trackSourceResult('streamflix', false); return []; }),
       getMovixStreams(info.tmdbId, type as 'movie' | 'series', parsed.season, parsed.episode)
