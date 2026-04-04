@@ -36,37 +36,47 @@ function loadTelegramConfig() {
 }
 
 let telegramConfig = loadTelegramConfig();
+let botStarted = false;
 
 if (!telegramConfig) {
   console.log('[Bot] No Telegram config found. Waiting for config...');
-  console.log('[Bot] Configure via /configure page or set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID');
+  console.log('[Bot] Create config/telegram.json with botToken and chatId');
 
-  // Watch for config file creation
+  // Watch for config file creation (with debounce)
   const configDir = require('path').dirname(TELEGRAM_CONFIG_PATH);
+  let debounceTimer = null;
+
   if (fs.existsSync(configDir)) {
     fs.watch(configDir, (eventType, filename) => {
-      if (filename === 'telegram.json') {
-        console.log('[Config] Config file changed, reloading...');
-        telegramConfig = loadTelegramConfig();
-        if (telegramConfig) {
-          console.log('[Bot] Config loaded! Starting bot...');
-          startBot();
-        }
+      if (filename === 'telegram.json' && !botStarted) {
+        // Debounce: wait 500ms before processing
+        if (debounceTimer) clearTimeout(debounceTimer);
+        debounceTimer = setTimeout(() => {
+          console.log('[Config] Config file changed, reloading...');
+          telegramConfig = loadTelegramConfig();
+          if (telegramConfig && !botStarted) {
+            console.log('[Bot] Config loaded! Starting bot...');
+            botStarted = true;
+            startBot();
+          }
+        }, 500);
       }
     });
   }
 
   // Keep process alive waiting for config
   setInterval(() => {
-    if (!telegramConfig) {
+    if (!telegramConfig && !botStarted) {
       telegramConfig = loadTelegramConfig();
       if (telegramConfig) {
         console.log('[Bot] Config found! Starting bot...');
+        botStarted = true;
         startBot();
       }
     }
   }, 10000);
 } else {
+  botStarted = true;
   startBot();
 }
 

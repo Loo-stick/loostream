@@ -111,8 +111,6 @@ Un bot Telegram **optionnel** permet de gérer la whitelist des domaines CDN en 
 
 ### Installation du bot
 
-**Si vous ne souhaitez pas utiliser le bot**, laissez simplement les variables `TELEGRAM_BOT_TOKEN` et `TELEGRAM_CHAT_ID` vides dans le `.env`. Le conteneur telegram-bot ne démarrera pas et l'addon fonctionnera normalement.
-
 1. **Créer le bot Telegram**
    - Ouvrez [@BotFather](https://t.me/BotFather) sur Telegram
    - Envoyez `/newbot` et suivez les instructions
@@ -123,22 +121,20 @@ Un bot Telegram **optionnel** permet de gérer la whitelist des domaines CDN en 
    - Visitez `https://api.telegram.org/bot<TOKEN>/getUpdates`
    - Trouvez votre `chat.id` dans la réponse
 
-3. **Configurer le .env**
-   ```env
-   TELEGRAM_BOT_TOKEN=votre_token_bot
-   TELEGRAM_CHAT_ID=votre_chat_id
+3. **Créer le fichier de config** `config/telegram.json` :
+   ```json
+   {
+     "botToken": "123456789:ABCdefGHIjklMNOpqrsTUVwxyz",
+     "chatId": "987654321"
+   }
    ```
 
 4. **Lancer avec Docker Compose**
    ```bash
-   # Avec le bot Telegram
    docker compose --profile telegram up -d
-
-   # Ou définir la variable d'environnement
-   COMPOSE_PROFILES=telegram docker compose up -d
    ```
 
-Le bot `loostream-telegram` démarrera avec l'addon.
+Le bot détecte automatiquement le fichier de config (hot-reload).
 
 > **Sans le bot** : `docker compose up -d` (sans `--profile telegram`)
 
@@ -204,7 +200,8 @@ L'addon inclut plusieurs protections :
 │   ├── proxy.ts          # Proxy HLS avec whitelist
 │   └── scrapers/         # Scrapers de sources
 ├── config/
-│   └── allowed-domains.json  # Whitelist des CDN
+│   ├── allowed-domains.json  # Whitelist des CDN
+│   └── telegram.json         # Config bot Telegram (à créer)
 ├── telegram-bot.js       # Bot Telegram pour alertes
 ├── Dockerfile
 ├── Dockerfile.telegram
