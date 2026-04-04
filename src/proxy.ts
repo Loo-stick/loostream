@@ -9,7 +9,11 @@ const router = Router();
 // SECURITY: Domain whitelist to prevent SSRF
 // Loaded from config/allowed-domains.json
 // ============================================
-const CONFIG_PATH = process.env.DOMAINS_CONFIG || '/app/config/allowed-domains.json';
+// Use relative path for local dev, /app/config for Docker
+const CONFIG_PATH = process.env.DOMAINS_CONFIG ||
+  (fs.existsSync('/app/config/allowed-domains.json')
+    ? '/app/config/allowed-domains.json'
+    : path.join(process.cwd(), 'config', 'allowed-domains.json'));
 const DEFAULT_DOMAINS = [
   'net52.cc', 'nm-cdn', 'imgcdn.kim', 'freecdn4.top',
   'xalaflix.design', 'movix.blog',
