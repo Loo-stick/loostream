@@ -67,7 +67,7 @@ const PRIVATE_IP_PATTERNS = [
   /^fe80:/i,     // IPv6 link-local
 ];
 
-function isAllowedUrl(url: string): { allowed: boolean; reason?: string } {
+export function isAllowedUrl(url: string): { allowed: boolean; reason?: string } {
   try {
     const parsed = new URL(url);
 

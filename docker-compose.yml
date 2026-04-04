@@ -10,4 +10,26 @@ services:
     environment:
       - NODE_ENV=production
     volumes:
-      - ./config:/app/config:ro
+      - ./config:/app/config
+
+  # Bot Telegram (optionnel)
+  # Lancer avec: docker compose --profile telegram up -d
+  # Ou: COMPOSE_PROFILES=telegram docker compose up -d
+  telegram-bot:
+    build:
+      context: .
+      dockerfile: Dockerfile.telegram
+    container_name: loostream-telegram
+    restart: unless-stopped
+    profiles:
+      - telegram
+    environment:
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
+      - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID}
+      - DOMAINS_CONFIG=/app/config/allowed-domains.json
+      - LOOSTREAM_CONTAINER=loostream
+    volumes:
+      - ./config:/app/config
+      - /var/run/docker.sock:/var/run/docker.sock
+    depends_on:
+      - loostream

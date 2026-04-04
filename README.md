@@ -20,14 +20,6 @@ Ce projet peut cesser de fonctionner à tout moment sans préavis si les sources
 
 ---
 
-## Sources
-
-| Source | Type | Contenu |
-|--------|------|---------|
-| **Movix** | VF/VOSTFR | Films & Séries en français |
-| **NetMirror** | Original | Netflix, Prime Video, Disney+ |
-| **StreamFlix** | Original | Films & Séries |
-
 ## Installation
 
 ### Prérequis
@@ -42,6 +34,9 @@ git clone https://github.com/Loo-stick/loostream.git
 cd loostream
 cp .env.example .env
 docker compose up -d
+
+# Avec le bot Telegram (optionnel)
+docker compose --profile telegram up -d
 ```
 
 ### Via Node.js
@@ -101,6 +96,70 @@ MEDIAFLOW_PASSWORD=votre_mot_de_passe
 
 > **Note** : Le proxy local peut avoir des problèmes de décodage sur Stremio Web. Utilisez MediaFlow pour le web.
 
+## Bot Telegram (Optionnel)
+
+Un bot Telegram **optionnel** permet de gérer la whitelist des domaines CDN en temps réel.
+
+> **Note** : L'addon fonctionne parfaitement sans le bot. Vous pouvez toujours gérer la whitelist manuellement via le fichier `config/allowed-domains.json`.
+
+### Fonctionnalités
+
+- Alerte instantanée quand un domaine est bloqué
+- Ajout en 1 clic à la whitelist via Telegram
+- Rechargement automatique de la config (sans restart)
+- Commandes : `/status`, `/domains`
+
+### Installation du bot
+
+**Si vous ne souhaitez pas utiliser le bot**, laissez simplement les variables `TELEGRAM_BOT_TOKEN` et `TELEGRAM_CHAT_ID` vides dans le `.env`. Le conteneur telegram-bot ne démarrera pas et l'addon fonctionnera normalement.
+
+1. **Créer le bot Telegram**
+   - Ouvrez [@BotFather](https://t.me/BotFather) sur Telegram
+   - Envoyez `/newbot` et suivez les instructions
+   - Notez le **token** fourni
+
+2. **Récupérer votre Chat ID**
+   - Envoyez `/start` à votre nouveau bot
+   - Visitez `https://api.telegram.org/bot<TOKEN>/getUpdates`
+   - Trouvez votre `chat.id` dans la réponse
+
+3. **Configurer le .env**
+   ```env
+   TELEGRAM_BOT_TOKEN=votre_token_bot
+   TELEGRAM_CHAT_ID=votre_chat_id
+   ```
+
+4. **Lancer avec Docker Compose**
+   ```bash
+   # Avec le bot Telegram
+   docker compose --profile telegram up -d
+
+   # Ou définir la variable d'environnement
+   COMPOSE_PROFILES=telegram docker compose up -d
+   ```
+
+Le bot `loostream-telegram` démarrera avec l'addon.
+
+> **Sans le bot** : `docker compose up -d` (sans `--profile telegram`)
+
+### Gestion de la whitelist
+
+Les domaines autorisés sont dans `config/allowed-domains.json` :
+
+```json
+{
+  "domains": [
+    "exemple-cdn.com",
+    "autre-cdn.net"
+  ]
+}
+```
+
+**Méthodes pour ajouter un domaine :**
+1. Via Telegram (cliquer sur "Ajouter" dans l'alerte)
+2. Éditer manuellement `config/allowed-domains.json`
+3. Appeler `GET /proxy/domains?reload=true` après modification
+
 ## Installation dans Stremio
 
 ### Via la page Configure
@@ -127,17 +186,29 @@ MediaFlow est un proxy HLS qui permet de streamer les vidéos sans surcharger vo
 1. Installez [MediaFlow Proxy](https://github.com/mhdzumair/mediaflow-proxy)
 2. Configurez l'URL et le mot de passe dans `/configure`
 
+## Sécurité
+
+L'addon inclut plusieurs protections :
+
+- **Whitelist de domaines** - Seuls les CDN autorisés peuvent être proxifiés
+- **Blocage IP privées** - Protection SSRF (localhost, 10.x, 192.168.x, etc.)
+- **Rate limiting** - 100 requêtes/minute par IP
+- **Validation des configs** - Entrées utilisateur nettoyées
+
 ## Structure
 
 ```
-src/
-├── index.ts          # Point d'entrée et routes
-├── configure.html    # Page de configuration
-├── proxy.ts          # Proxy HLS intégré
-└── scrapers/         # Scrapers de sources
-    ├── movix.ts      # Source Movix (VF/VOSTFR)
-    ├── netmirror.ts  # Source NetMirror (Netflix, Prime, Disney+)
-    └── streamflix.ts # Source StreamFlix
+├── src/
+│   ├── index.ts          # Point d'entrée et routes
+│   ├── configure.html    # Page de configuration
+│   ├── proxy.ts          # Proxy HLS avec whitelist
+│   └── scrapers/         # Scrapers de sources
+├── config/
+│   └── allowed-domains.json  # Whitelist des CDN
+├── telegram-bot.js       # Bot Telegram pour alertes
+├── Dockerfile
+├── Dockerfile.telegram
+└── docker-compose.yml
 ```
 
 ## Licence

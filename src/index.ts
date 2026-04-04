@@ -5,9 +5,12 @@ import { rateLimit } from 'express-rate-limit';
 import { getStreams, getStreamUrl } from './scrapers/netmirror';
 import { getStreamFlixStreams } from './scrapers/streamflix';
 import { getMovixStreams } from './scrapers/movix';
-import proxyRouter from './proxy';
+import proxyRouter, { isAllowedUrl } from './proxy';
 
 const app = express();
+
+// Trust proxy (for reverse proxies like Apache/Nginx)
+app.set('trust proxy', 1);
 
 // ============================================
 // SECURITY: Rate limiting (100 requests per minute per IP)
@@ -137,7 +140,14 @@ function buildProxyUrl(
   useTransformer: boolean = false,
   req?: express.Request,
   config?: UserConfig | null
-): string {
+): string | null {
+  // SECURITY: Validate stream URL before proxying (applies to both local and MediaFlow)
+  const validation = isAllowedUrl(streamUrl);
+  if (!validation.allowed) {
+    console.warn(`[BuildProxy] Blocked URL: ${validation.reason} - ${streamUrl}`);
+    return null; // Return null for blocked URLs
+  }
+
   const useLocal = config ? config.proxy === 'local' : DEFAULT_USE_LOCAL_PROXY;
   const mfUrl = config?.mfUrl || DEFAULT_MEDIAFLOW_URL;
   const mfPass = config?.mfPass || DEFAULT_MEDIAFLOW_PASSWORD;
@@ -343,6 +353,8 @@ async function handleStream(req: express.Request, res: express.Response, type: s
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
       }, false, req, config);
 
+      if (!proxiedUrl) continue; // Skip blocked URLs
+
       streams.push({
         name: `Movix\n${mv.language}`,
         title: `${mv.language} [${mv.quality}]`,
@@ -379,6 +391,8 @@ async function handleStream(req: express.Request, res: express.Response, type: s
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
       }, useTransformer, req, config);
 
+      if (!proxiedUrl) continue; // Skip blocked URLs
+
       streams.push({
         name: `NetMirror\n${r.quality}`,
         title: `${r.title} [${r.quality}]`,
@@ -397,6 +411,8 @@ async function handleStream(req: express.Request, res: express.Response, type: s
         'Origin': 'https://api.streamflix.app',
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
       }, false, req, config);
+
+      if (!proxiedUrl) continue; // Skip blocked URLs
 
       streams.push({
         name: `StreamFlix\n${sf.quality}`,
