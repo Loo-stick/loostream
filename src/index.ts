@@ -6,6 +6,7 @@ import { getStreams, getStreamUrl } from './scrapers/netmirror';
 import { getStreamFlixStreams } from './scrapers/streamflix';
 import { getMovixStreams } from './scrapers/movix';
 import proxyRouter, { isAllowedUrl } from './proxy';
+import { ExtractorConfig } from './extractors';
 
 const app = express();
 
@@ -511,6 +512,13 @@ async function handleStream(req: express.Request, res: express.Response, type: s
     stats.requests.total++;
     stats.requests.streams++;
 
+    // Build extractor config based on user settings
+    const extractorConfig: ExtractorConfig = {
+      useMediaFlow: config?.proxy !== 'local',
+      mediaFlowUrl: config?.mfUrl || DEFAULT_MEDIAFLOW_URL,
+      mediaFlowPassword: config?.mfPass || DEFAULT_MEDIAFLOW_PASSWORD,
+    };
+
     const [netmirrorResults, streamflixResults, movixResults] = await Promise.all([
       getStreams(info.title, info.year, parsed.season, parsed.episode)
         .then(r => { trackSourceResult('netmirror', true, r.length); return r; })
@@ -518,7 +526,7 @@ async function handleStream(req: express.Request, res: express.Response, type: s
       getStreamFlixStreams(info.tmdbId, type as 'movie' | 'series', parsed.season, parsed.episode, config?.tmdbKey || DEFAULT_TMDB_KEY)
         .then(r => { trackSourceResult('streamflix', true, r.length); return r; })
         .catch(e => { console.log('[StreamFlix] Error:', e); trackSourceResult('streamflix', false); return []; }),
-      getMovixStreams(info.tmdbId, type as 'movie' | 'series', parsed.season, parsed.episode)
+      getMovixStreams(info.tmdbId, type as 'movie' | 'series', parsed.season, parsed.episode, extractorConfig)
         .then(r => { trackSourceResult('movix', true, r.length); return r; })
         .catch(e => { console.log('[Movix] Error:', e); trackSourceResult('movix', false); return []; }),
     ]);
@@ -527,16 +535,29 @@ async function handleStream(req: express.Request, res: express.Response, type: s
 
     // Process Movix results
     for (const mv of movixResults) {
-      const proxiedUrl = buildProxyUrl(mv.url, {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-      }, false, req, config);
+      let finalUrl: string;
 
-      if (!proxiedUrl) continue; // Skip blocked URLs
+      // Check if URL is already a MediaFlow URL (from extractor)
+      const mfUrl = config?.mfUrl || DEFAULT_MEDIAFLOW_URL;
+      const isMediaFlowUrl = mfUrl && mv.url.includes(new URL(mfUrl).hostname);
+
+      if (isMediaFlowUrl) {
+        // Already a MediaFlow URL, use directly
+        finalUrl = mv.url;
+      } else {
+        // Need to proxy (Purstream direct URLs or local extraction results)
+        const proxiedUrl = buildProxyUrl(mv.url, {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        }, false, req, config);
+
+        if (!proxiedUrl) continue; // Skip blocked URLs
+        finalUrl = proxiedUrl;
+      }
 
       streams.push({
         name: `Movix\n${mv.language}`,
         title: `${mv.language} [${mv.quality}]`,
-        url: proxiedUrl,
+        url: finalUrl,
         behaviorHints: {
           notWebReady: false,
           bingeGroup: 'movix',

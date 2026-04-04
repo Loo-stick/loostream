@@ -1,4 +1,5 @@
 import axios from 'axios';
+import { extractStream, ExtractorConfig } from '../extractors';
 
 const MOVIX_API = 'https://api.movix.blog';
 const MOVIX_REFERER = 'https://movix.rodeo/';
@@ -69,13 +70,19 @@ async function fetchPurstream(
   }
 }
 
-// API 2: Cpasmal - VF/VOSTFR sources
+interface CpasmalLink {
+  server: string;
+  url: string;
+  language: string;
+}
+
+// API 2: Cpasmal - VF/VOSTFR sources (returns raw embed URLs)
 async function fetchCpasmal(
   tmdbId: string,
   mediaType: 'movie' | 'series',
   season?: number,
   episode?: number
-): Promise<MovixStream[]> {
+): Promise<CpasmalLink[]> {
   const url = mediaType === 'series'
     ? `${MOVIX_API}/api/cpasmal/tv/${tmdbId}/${season || 1}/${episode || 1}`
     : `${MOVIX_API}/api/cpasmal/movie/${tmdbId}`;
@@ -89,31 +96,24 @@ async function fetchCpasmal(
       return [];
     }
 
-    const streams: MovixStream[] = [];
+    const links: CpasmalLink[] = [];
     const langs = ['vf', 'vostfr'];
 
     for (const lang of langs) {
       if (data.links[lang] && Array.isArray(data.links[lang])) {
         for (const link of data.links[lang]) {
-          // Skip unsupported players that require JS/cookies
-          const unsupported = ['netu', 'voe', 'uqload', 'doodstream', 'vidoza'];
-          if (unsupported.some(p => link.url?.toLowerCase().includes(p))) {
-            continue;
+          if (link.url) {
+            links.push({
+              server: link.server || 'unknown',
+              url: link.url,
+              language: lang.toUpperCase(),
+            });
           }
-
-          streams.push({
-            name: 'Movix',
-            title: `${lang.toUpperCase()} - ${link.server}`,
-            url: link.url,
-            quality: 'HD',
-            language: lang.toUpperCase(),
-            format: 'embed',
-          });
         }
       }
     }
 
-    return streams;
+    return links;
   } catch (e) {
     console.log('[Movix] Cpasmal failed:', e);
     return [];
@@ -124,29 +124,58 @@ export async function getMovixStreams(
   tmdbId: string,
   mediaType: 'movie' | 'series',
   season?: number,
-  episode?: number
+  episode?: number,
+  extractorConfig?: ExtractorConfig
 ): Promise<MovixStream[]> {
   console.log(`[Movix] Searching for TMDB ${tmdbId}...`);
 
   // Try Purstream first (direct m3u8)
-  let streams = await fetchPurstream(tmdbId, mediaType, season, episode);
+  const purstreamResults = await fetchPurstream(tmdbId, mediaType, season, episode);
 
-  if (streams.length > 0) {
-    console.log(`[Movix] Purstream returned ${streams.length} stream(s)`);
-    return streams;
+  if (purstreamResults.length > 0) {
+    console.log(`[Movix] Purstream returned ${purstreamResults.length} stream(s)`);
+    return purstreamResults;
   }
 
-  // Fallback to Cpasmal
-  streams = await fetchCpasmal(tmdbId, mediaType, season, episode);
+  // Fallback to Cpasmal (embed URLs that need extraction)
+  const cpasmalLinks = await fetchCpasmal(tmdbId, mediaType, season, episode);
 
-  if (streams.length > 0) {
-    console.log(`[Movix] Cpasmal returned ${streams.length} stream(s)`);
-    // Filter to only direct streams (m3u8/mp4)
-    streams = streams.filter(s =>
-      s.url.includes('.m3u8') || s.url.includes('.mp4')
-    );
+  if (cpasmalLinks.length === 0) {
+    console.log(`[Movix] No Cpasmal links found`);
+    return [];
   }
 
-  console.log(`[Movix] Total: ${streams.length} stream(s)`);
+  console.log(`[Movix] Cpasmal returned ${cpasmalLinks.length} embed link(s)`);
+
+  // Extract video URLs from embeds (limit to 3 to avoid too many requests)
+  const streams: MovixStream[] = [];
+  const processedServers = new Set<string>();
+
+  for (const link of cpasmalLinks.slice(0, 6)) {
+    // Skip if we already have a stream from this server+language combo
+    const key = `${link.server}-${link.language}`;
+    if (processedServers.has(key)) continue;
+
+    try {
+      const extracted = await extractStream(link.url, extractorConfig);
+
+      if (extracted) {
+        processedServers.add(key);
+        streams.push({
+          name: 'Movix',
+          title: `${link.language} - ${link.server}`,
+          url: extracted.url,
+          quality: extracted.quality,
+          language: link.language,
+          format: extracted.format === 'hls' ? 'm3u8' : 'mp4',
+        });
+        console.log(`[Movix] Extracted ${link.server} (${link.language}): ${extracted.format}`);
+      }
+    } catch (e: any) {
+      console.log(`[Movix] Failed to extract ${link.server}:`, e.message);
+    }
+  }
+
+  console.log(`[Movix] Total: ${streams.length} stream(s) extracted`);
   return streams;
 }
