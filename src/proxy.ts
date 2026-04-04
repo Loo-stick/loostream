@@ -296,14 +296,25 @@ router.get('/stream', async (req: Request, res: Response) => {
   try {
     console.log(`[Proxy] Streaming: ${url}`);
 
+    // Forward Range header from client for seeking support
+    const requestHeaders: Record<string, string> = {
+      ...headers,
+      'Accept': '*/*',
+    };
+    if (req.headers.range) {
+      requestHeaders['Range'] = req.headers.range as string;
+    }
+
     const response = await axios.get(url, {
-      headers: {
-        ...headers,
-        'Accept': '*/*',
-      },
+      headers: requestHeaders,
       responseType: 'stream',
       timeout: 30000,
+      // Don't throw on 206 Partial Content
+      validateStatus: (status) => status >= 200 && status < 300 || status === 206,
     });
+
+    // Set status code (200 or 206 for partial content)
+    res.status(response.status);
 
     // Forward relevant headers
     const forwardHeaders = ['content-type', 'content-length', 'accept-ranges', 'content-range'];
