@@ -132,7 +132,8 @@ export async function extractUqload(embedUrl: string): Promise<ExtractedStream |
 
 /**
  * Extract using MediaFlow Proxy's /extractor/video endpoint
- * Uses redirect_stream=true so extraction happens at play time (not listing time)
+ * Calls the endpoint and follows the redirect to get the final proxy URL
+ * (Stremio doesn't follow 302 redirects for HLS streams)
  */
 async function extractViaMediaFlow(
   embedUrl: string,
@@ -159,21 +160,50 @@ async function extractViaMediaFlow(
     const mediaFlowBase = config.mediaFlowUrl.replace(/\/+$/, '');
 
     // Build extractor URL with redirect_stream=true
-    // This makes MediaFlow extract AND proxy at play time, avoiding expired tokens
     const extractorUrl = new URL('/extractor/video', mediaFlowBase);
     extractorUrl.searchParams.set('host', host);
     extractorUrl.searchParams.set('api_password', config.mediaFlowPassword);
     extractorUrl.searchParams.set('d', embedUrl);
     extractorUrl.searchParams.set('redirect_stream', 'true');
 
-    console.log(`[Extractor] Using MediaFlow redirect for ${extractor}: ${embedUrl}`);
+    console.log(`[Extractor] Calling MediaFlow for ${extractor}: ${embedUrl}`);
+
+    // Call the extractor and capture the redirect URL
+    // Stremio doesn't follow 302 redirects for HLS streams, so we need to resolve it
+    const response = await axios.get(extractorUrl.toString(), {
+      maxRedirects: 0,
+      validateStatus: (status) => status === 302 || status === 301 || status === 200,
+      timeout: 15000,
+      headers: HEADERS,
+    });
+
+    let finalUrl: string;
+
+    if (response.status === 301 || response.status === 302) {
+      // Got redirect - use the Location header
+      finalUrl = response.headers['location'];
+      if (!finalUrl) {
+        console.log(`[Extractor] MediaFlow returned ${response.status} but no Location header`);
+        return null;
+      }
+      console.log(`[Extractor] MediaFlow redirected to proxy URL`);
+    } else if (response.status === 200) {
+      // Direct response - might be the URL in the body
+      if (typeof response.data === 'string' && response.data.startsWith('http')) {
+        finalUrl = response.data.trim();
+      } else {
+        console.log(`[Extractor] MediaFlow returned 200 but unexpected body`);
+        return null;
+      }
+    } else {
+      return null;
+    }
 
     // Determine format based on extractor type
-    // Voe typically returns HLS, others return MP4
     const format = extractor === 'voe' ? 'hls' : 'mp4';
 
     return {
-      url: extractorUrl.toString(),
+      url: finalUrl,
       quality: 'HD',
       format: format as 'hls' | 'mp4',
     };
