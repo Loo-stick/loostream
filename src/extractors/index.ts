@@ -26,16 +26,37 @@ const VOE_DOMAINS = [
   'yodelswartlike', 'figeterpiazine', 'chromotypic', 'wolfdyslectic',
 ];
 
+// Doodstream rotates between many TLDs and clone domains
+const DOOD_DOMAINS = [
+  'dood', 'doodstream', 'dsvplay', 'd0o0d', 'dooood', 'd0000d', 'ds2play', 'dood.re',
+];
+
+const FILEMOON_DOMAINS = [
+  'filemoon', 'filmoon', 'moonlink', 'bysebuho', 'moonplayer',
+];
+
+const VIDOZA_DOMAINS = ['vidoza'];
+const VIDMOLY_DOMAINS = ['vidmoly', 'molystream', 'vidhide'];
+const STREAMTAPE_DOMAINS = ['streamtape', 'strcloud', 'shavetape', 'tapewithadblock'];
+const MIXDROP_DOMAINS = ['mixdrop', 'mdrop', 'mdy48tn97'];
+
+type ExtractorId = 'voe' | 'uqload' | 'doodstream' | 'filemoon' | 'vidoza' | 'vidmoly' | 'streamtape' | 'mixdrop';
 
 /**
- * Detect which extractor to use based on URL
- * Only Voe and Uqload are supported (others don't work reliably)
+ * Detect which extractor to use based on URL.
+ * Returns an ID accepted both by our local fallback and MediaFlow's /extractor/video host param.
  */
-export function detectExtractor(url: string): 'voe' | 'uqload' | null {
+export function detectExtractor(url: string): ExtractorId | null {
   const hostname = new URL(url).hostname.toLowerCase();
 
   if (VOE_DOMAINS.some(d => hostname.includes(d))) return 'voe';
   if (hostname.includes('uqload')) return 'uqload';
+  if (DOOD_DOMAINS.some(d => hostname.includes(d))) return 'doodstream';
+  if (FILEMOON_DOMAINS.some(d => hostname.includes(d))) return 'filemoon';
+  if (VIDOZA_DOMAINS.some(d => hostname.includes(d))) return 'vidoza';
+  if (VIDMOLY_DOMAINS.some(d => hostname.includes(d))) return 'vidmoly';
+  if (STREAMTAPE_DOMAINS.some(d => hostname.includes(d))) return 'streamtape';
+  if (MIXDROP_DOMAINS.some(d => hostname.includes(d))) return 'mixdrop';
 
   return null;
 }
@@ -144,11 +165,16 @@ async function extractViaMediaFlow(
     return null;
   }
 
-  // Map extractor names to MediaFlow host names
-  // Only Voe and Uqload work reliably
+  // Map extractor IDs to MediaFlow host names (case-insensitive on the server)
   const hostMap: Record<string, string> = {
     'voe': 'Voe',
     'uqload': 'Uqload',
+    'doodstream': 'Doodstream',
+    'filemoon': 'FileMoon',
+    'vidoza': 'Vidoza',
+    'vidmoly': 'Vidmoly',
+    'streamtape': 'Streamtape',
+    'mixdrop': 'Mixdrop',
   };
 
   const host = hostMap[extractor];
@@ -199,8 +225,9 @@ async function extractViaMediaFlow(
       return null;
     }
 
-    // Determine format based on extractor type
-    const format = extractor === 'voe' ? 'hls' : 'mp4';
+    // Determine format based on extractor type (informational — MediaFlow proxy handles actual delivery)
+    const hlsExtractors = new Set(['voe', 'filemoon', 'vidmoly']);
+    const format = hlsExtractors.has(extractor) ? 'hls' : 'mp4';
 
     return {
       url: finalUrl,
