@@ -1,6 +1,6 @@
 {
   "name": "stremio-addon-loostream",
-  "version": "1.2.0",
+  "version": "1.3.0",
   "description": "LooStream - Stremio addon for streaming (Netflix, Prime Video, Disney+ mirrors)",
   "main": "dist/index.js",
   "scripts": {
