@@ -4,7 +4,7 @@ import path from 'path';
 import { rateLimit } from 'express-rate-limit';
 import { getStreams, getStreamUrl } from './scrapers/netmirror';
 import { getStreamFlixStreams } from './scrapers/streamflix';
-import { getMovixStreams } from './scrapers/movix';
+import { getMovixStreams, reloadMovixEndpoints, getMovixEndpoints } from './scrapers/movix';
 import proxyRouter, { isAllowedUrl } from './proxy';
 import { ExtractorConfig } from './extractors';
 
@@ -557,9 +557,10 @@ async function handleStream(req: express.Request, res: express.Response, type: s
         finalUrl = proxiedUrl;
       }
 
+      const serverLabel = mv.server ? ` • ${mv.server}` : '';
       streams.push({
         name: `Movix\n${mv.language}`,
-        title: `${mv.language} [${mv.quality}]`,
+        title: `${mv.language} [${mv.quality}]${serverLabel}`,
         url: finalUrl,
         behaviorHints: {
           notWebReady: false,
@@ -736,6 +737,13 @@ app.get('/', (_req, res) => {
 // ADMIN API (for Telegram bot)
 // ============================================
 
+// Movix endpoints admin (read + reload)
+app.get('/api/movix/endpoints', (req, res) => {
+  const reload = req.query.reload === 'true';
+  const current = reload ? reloadMovixEndpoints() : getMovixEndpoints();
+  res.json({ ...current, reloaded: reload });
+});
+
 // Stats endpoint
 app.get('/api/stats', (_req, res) => {
   const uptime = Date.now() - stats.startTime;
@@ -755,22 +763,31 @@ app.get('/api/stats', (_req, res) => {
 app.get('/api/health', async (_req, res) => {
   const results: Record<string, { status: 'up' | 'down' | 'degraded'; latency?: number; error?: string }> = {};
 
-  // Test NetMirror
+  // Test NetMirror (tv/p.php returns JSON with "r":"n" when up)
   const netmirrorStart = Date.now();
   try {
-    const resp = await axios.get('https://net52.cc/', { timeout: 10000 });
+    const resp = await axios.post('https://net52.cc/tv/p.php', null, {
+      timeout: 10000,
+      validateStatus: (s) => s < 500,
+    });
+    const body = typeof resp.data === 'string' ? resp.data : JSON.stringify(resp.data);
     results.netmirror = {
-      status: resp.status === 200 ? 'up' : 'degraded',
+      status: body.includes('"r":"n"') ? 'up' : 'degraded',
       latency: Date.now() - netmirrorStart,
     };
   } catch (e: any) {
     results.netmirror = { status: 'down', error: e.message };
   }
 
-  // Test Movix (via one of its APIs)
+  // Test Movix (hit its current API from hot-reloaded config)
+  const movixEndpoints = getMovixEndpoints();
   const movixStart = Date.now();
   try {
-    const resp = await axios.get('https://purstream.store/', { timeout: 10000 });
+    const resp = await axios.get(`${movixEndpoints.api}/api/purstream/movie/550/stream`, {
+      timeout: 10000,
+      headers: { 'Referer': movixEndpoints.referer },
+      validateStatus: (s) => s < 500,
+    });
     results.movix = {
       status: resp.status === 200 ? 'up' : 'degraded',
       latency: Date.now() - movixStart,
@@ -782,7 +799,10 @@ app.get('/api/health', async (_req, res) => {
   // Test StreamFlix
   const streamflixStart = Date.now();
   try {
-    const resp = await axios.get('https://api.streamflix.one/', { timeout: 10000 });
+    const resp = await axios.get('https://api.streamflix.app/config/config-streamflixapp.json', {
+      timeout: 10000,
+      validateStatus: (s) => s < 500,
+    });
     results.streamflix = {
       status: resp.status === 200 ? 'up' : 'degraded',
       latency: Date.now() - streamflixStart,
