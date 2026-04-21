@@ -1,14 +1,75 @@
 import axios from 'axios';
-import { extractStream, ExtractorConfig } from '../extractors';
+import * as fs from 'fs';
+import * as path from 'path';
+import { extractStream, detectExtractor, ExtractorConfig } from '../extractors';
 
-const MOVIX_API = 'https://api.movix.blog';
-const MOVIX_REFERER = 'https://movix.rodeo/';
+interface MovixEndpoints {
+  api: string;
+  referer: string;
+  origin: string;
+}
 
-const HEADERS = {
-  'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-  'Referer': MOVIX_REFERER,
-  'Origin': 'https://movix.rodeo',
+const DEFAULT_ENDPOINTS: MovixEndpoints = {
+  api: 'https://api.movix.cash',
+  referer: 'https://movix.cash/',
+  origin: 'https://movix.cash',
 };
+
+const ENDPOINTS_PATH = process.env.MOVIX_ENDPOINTS_CONFIG ||
+  (fs.existsSync('/app/config/movix-endpoints.json')
+    ? '/app/config/movix-endpoints.json'
+    : path.join(process.cwd(), 'config', 'movix-endpoints.json'));
+
+let endpoints: MovixEndpoints = { ...DEFAULT_ENDPOINTS };
+
+function loadEndpoints(): void {
+  try {
+    if (fs.existsSync(ENDPOINTS_PATH)) {
+      const raw = JSON.parse(fs.readFileSync(ENDPOINTS_PATH, 'utf-8'));
+      if (raw.api && raw.referer && raw.origin) {
+        endpoints = { api: raw.api, referer: raw.referer, origin: raw.origin };
+        console.log(`[Movix] Endpoints loaded: api=${endpoints.api}`);
+        return;
+      }
+    }
+  } catch (e: any) {
+    console.error(`[Movix] Error loading endpoints: ${e.message}`);
+  }
+  endpoints = { ...DEFAULT_ENDPOINTS };
+  console.log(`[Movix] Using default endpoints: api=${endpoints.api}`);
+}
+
+export function reloadMovixEndpoints(): MovixEndpoints {
+  loadEndpoints();
+  return { ...endpoints };
+}
+
+export function getMovixEndpoints(): MovixEndpoints {
+  return { ...endpoints };
+}
+
+loadEndpoints();
+
+try {
+  if (fs.existsSync(ENDPOINTS_PATH)) {
+    fs.watch(ENDPOINTS_PATH, (eventType) => {
+      if (eventType === 'change') {
+        console.log('[Movix] Endpoints file changed, reloading...');
+        setTimeout(loadEndpoints, 100);
+      }
+    });
+  }
+} catch {
+  // watch not supported
+}
+
+function buildHeaders() {
+  return {
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+    'Referer': endpoints.referer,
+    'Origin': endpoints.origin,
+  };
+}
 
 export interface MovixStream {
   name: string;
@@ -18,6 +79,7 @@ export interface MovixStream {
   language: string;
   format: string;
   headers?: Record<string, string>;
+  server?: string;
 }
 
 function extractQuality(name: string): string {
@@ -45,13 +107,13 @@ async function fetchPurstream(
   episode?: number
 ): Promise<MovixStream[]> {
   const url = mediaType === 'series'
-    ? `${MOVIX_API}/api/purstream/tv/${tmdbId}/stream?season=${season || 1}&episode=${episode || 1}`
-    : `${MOVIX_API}/api/purstream/movie/${tmdbId}/stream`;
+    ? `${endpoints.api}/api/purstream/tv/${tmdbId}/stream?season=${season || 1}&episode=${episode || 1}`
+    : `${endpoints.api}/api/purstream/movie/${tmdbId}/stream`;
 
   console.log(`[Movix] Purstream: ${url}`);
 
   try {
-    const { data } = await axios.get(url, { headers: HEADERS, timeout: 10000 });
+    const { data } = await axios.get(url, { headers: buildHeaders(), timeout: 10000 });
 
     if (!data || !data.sources || !Array.isArray(data.sources)) {
       return [];
@@ -64,6 +126,7 @@ async function fetchPurstream(
       quality: extractQuality(source.name || ''),
       language: extractLanguage(source.name || ''),
       format: source.format || 'm3u8',
+      server: (source.name || '').split('|')[0].trim().toLowerCase() || 'purstream',
     }));
   } catch (e) {
     console.log('[Movix] Purstream failed:', e);
@@ -85,13 +148,13 @@ async function fetchCpasmal(
   episode?: number
 ): Promise<CpasmalLink[]> {
   const url = mediaType === 'series'
-    ? `${MOVIX_API}/api/cpasmal/tv/${tmdbId}/${season || 1}/${episode || 1}`
-    : `${MOVIX_API}/api/cpasmal/movie/${tmdbId}`;
+    ? `${endpoints.api}/api/cpasmal/tv/${tmdbId}/${season || 1}/${episode || 1}`
+    : `${endpoints.api}/api/cpasmal/movie/${tmdbId}`;
 
   console.log(`[Movix] Cpasmal: ${url}`);
 
   try {
-    const { data } = await axios.get(url, { headers: HEADERS, timeout: 10000 });
+    const { data } = await axios.get(url, { headers: buildHeaders(), timeout: 10000 });
 
     if (!data || !data.links) {
       return [];
@@ -121,6 +184,46 @@ async function fetchCpasmal(
   }
 }
 
+// API 3: FStream — VFQ/VFF/VOSTFR embeds
+async function fetchFStream(
+  tmdbId: string,
+  mediaType: 'movie' | 'series',
+  season?: number,
+  episode?: number
+): Promise<CpasmalLink[]> {
+  const url = mediaType === 'series'
+    ? `${endpoints.api}/api/fstream/tv/${tmdbId}/${season || 1}/${episode || 1}`
+    : `${endpoints.api}/api/fstream/movie/${tmdbId}`;
+
+  console.log(`[Movix] FStream: ${url}`);
+
+  try {
+    const { data } = await axios.get(url, { headers: buildHeaders(), timeout: 10000 });
+    if (!data?.players) return [];
+
+    const bucketToLang: Record<string, string> = { VFQ: 'VF', VFF: 'VF', VOSTFR: 'VOSTFR' };
+    const links: CpasmalLink[] = [];
+
+    for (const [bucket, lang] of Object.entries(bucketToLang)) {
+      const items = data.players[bucket];
+      if (!Array.isArray(items)) continue;
+      for (const item of items) {
+        if (item?.url) {
+          links.push({
+            server: (item.player || 'unknown').toLowerCase(),
+            url: item.url,
+            language: lang,
+          });
+        }
+      }
+    }
+    return links;
+  } catch (e) {
+    console.log('[Movix] FStream failed:', e);
+    return [];
+  }
+}
+
 export async function getMovixStreams(
   tmdbId: string,
   mediaType: 'movie' | 'series',
@@ -130,29 +233,32 @@ export async function getMovixStreams(
 ): Promise<MovixStream[]> {
   console.log(`[Movix] Searching for TMDB ${tmdbId}...`);
 
-  // Try Purstream first (direct m3u8)
-  const purstreamResults = await fetchPurstream(tmdbId, mediaType, season, episode);
+  // Fetch all 3 sources in parallel
+  const [purstreamResults, cpasmalLinks, fstreamLinks] = await Promise.all([
+    fetchPurstream(tmdbId, mediaType, season, episode),
+    fetchCpasmal(tmdbId, mediaType, season, episode),
+    fetchFStream(tmdbId, mediaType, season, episode),
+  ]);
 
-  if (purstreamResults.length > 0) {
-    console.log(`[Movix] Purstream returned ${purstreamResults.length} stream(s)`);
-    return purstreamResults;
+  console.log(`[Movix] Purstream=${purstreamResults.length}, Cpasmal=${cpasmalLinks.length}, FStream=${fstreamLinks.length}`);
+
+  const streams: MovixStream[] = [...purstreamResults];
+
+  // Merge embed links, keep only those our extractor supports (Voe/Uqload)
+  const allEmbeds = [...cpasmalLinks, ...fstreamLinks].filter(link => {
+    try { return detectExtractor(link.url) !== null; } catch { return false; }
+  });
+
+  if (allEmbeds.length === 0) {
+    console.log(`[Movix] No supported embeds to extract`);
+    return streams;
   }
 
-  // Fallback to Cpasmal (embed URLs that need extraction)
-  const cpasmalLinks = await fetchCpasmal(tmdbId, mediaType, season, episode);
+  console.log(`[Movix] ${allEmbeds.length} supported embed(s) to extract`);
 
-  if (cpasmalLinks.length === 0) {
-    console.log(`[Movix] No Cpasmal links found`);
-    return [];
-  }
-
-  console.log(`[Movix] Cpasmal returned ${cpasmalLinks.length} embed link(s)`);
-
-  // Extract video URLs from embeds (limit to 3 to avoid too many requests)
-  const streams: MovixStream[] = [];
   const processedServers = new Set<string>();
 
-  for (const link of cpasmalLinks.slice(0, 6)) {
+  for (const link of allEmbeds.slice(0, 8)) {
     // Skip if we already have a stream from this server+language combo
     const key = `${link.server}-${link.language}`;
     if (processedServers.has(key)) continue;
@@ -170,6 +276,7 @@ export async function getMovixStreams(
           language: link.language,
           format: extracted.format === 'hls' ? 'm3u8' : 'mp4',
           headers: extracted.headers,
+          server: link.server,
         });
         console.log(`[Movix] Extracted ${link.server} (${link.language}): ${extracted.format}`);
       }
