@@ -1,12 +1,18 @@
 const https = require('https');
 const http = require('http');
 const fs = require('fs');
+const dns = require('dns');
 const { spawn } = require('child_process');
+
+// Prefer IPv4 — host has no working IPv6 route to Telegram
+dns.setDefaultResultOrder('ipv4first');
 
 // Configuration paths
 const TELEGRAM_CONFIG_PATH = process.env.TELEGRAM_CONFIG || './config/telegram.json';
 const DOMAINS_CONFIG_PATH = process.env.DOMAINS_CONFIG || './config/allowed-domains.json';
+const MOVIX_ENDPOINTS_PATH = process.env.MOVIX_ENDPOINTS_CONFIG || './config/movix-endpoints.json';
 const LOOSTREAM_CONTAINER = process.env.LOOSTREAM_CONTAINER || 'loostream';
+const MOVIX_CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000; // 6h
 
 // Load Telegram config (from file or env)
 function loadTelegramConfig() {
@@ -96,6 +102,7 @@ function telegramRequest(method, data) {
       hostname: 'api.telegram.org',
       path: `/bot${BOT_TOKEN}/${method}`,
       method: 'POST',
+      family: 4,
       headers: {
         'Content-Type': 'application/json',
         'Content-Length': Buffer.byteLength(postData)
@@ -378,6 +385,16 @@ async function pollUpdates() {
       for (const update of result.result) {
         lastUpdateId = update.update_id;
 
+        const senderChatId = String(
+          update.message?.chat?.id ??
+          update.callback_query?.message?.chat?.id ??
+          ''
+        );
+        if (senderChatId !== String(CHAT_ID)) {
+          console.warn(`[Telegram] Ignoring update from unauthorized chat: ${senderChatId}`);
+          continue;
+        }
+
         if (update.callback_query) {
           await handleCallbackQuery(update.callback_query);
         }
@@ -419,6 +436,16 @@ async function pollUpdates() {
         // Handle /health command
         if (update.message?.text === '/health') {
           await sendHealthMessage();
+        }
+
+        // Handle /movix command (manual endpoint check)
+        if (update.message?.text === '/movix') {
+          await telegramRequest('sendMessage', {
+            chat_id: CHAT_ID,
+            text: '🔍 Vérification des endpoints Movix...',
+            parse_mode: 'HTML'
+          });
+          await checkMovixEndpoints({ manual: true });
         }
       }
     }
@@ -482,11 +509,165 @@ telegramRequest('sendMessage', {
     '/status - Whitelist status\n' +
     '/domains - Liste des domaines\n' +
     '/stats - Statistiques détaillées\n' +
-    '/health - État des sources',
+    '/health - État des sources\n' +
+    '/movix - Check endpoints Movix',
   parse_mode: 'HTML'
 }).then(() => {
   console.log('[Bot] Startup message sent');
 });
+
+// ============================================
+// MOVIX ENDPOINT WATCHER
+// ============================================
+
+function httpGetText(url, redirects = 5) {
+  return new Promise((resolve, reject) => {
+    const lib = url.startsWith('https') ? https : http;
+    const req = lib.get(url, {
+      family: 4,
+      headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' }
+    }, (res) => {
+      if ([301, 302, 303, 307, 308].includes(res.statusCode) && res.headers.location && redirects > 0) {
+        const next = new URL(res.headers.location, url).toString();
+        resolve(httpGetText(next, redirects - 1));
+        return;
+      }
+      let body = '';
+      res.on('data', c => body += c);
+      res.on('end', () => resolve(body));
+    });
+    req.on('error', reject);
+    req.setTimeout(15000, () => { req.destroy(); reject(new Error('Timeout')); });
+  });
+}
+
+async function detectMovixEndpoints() {
+  // 1. Scrape public Telegram channel preview
+  const tgHtml = await httpGetText('https://t.me/s/movix_site');
+  const msgRegex = /data-post="movix_site\/(\d+)"[\s\S]*?tgme_widget_message_text[^>]*>([\s\S]*?)<\/div>/g;
+  const messages = [];
+  let m;
+  while ((m = msgRegex.exec(tgHtml)) !== null) {
+    const id = parseInt(m[1], 10);
+    const text = m[2].replace(/<[^>]+>/g, ' ').replace(/&#39;/g, "'").replace(/&amp;/g, '&');
+    messages.push({ id, text });
+  }
+  messages.sort((a, b) => b.id - a.id);
+
+  let frontendDomain = null;
+  for (const msg of messages) {
+    const match = msg.text.match(/https?:\/\/(movix\.[a-z]{2,})/i);
+    if (match) { frontendDomain = match[1].toLowerCase(); break; }
+  }
+  if (!frontendDomain) throw new Error('No movix domain found in channel');
+
+  // 2. Follow HTML-level redirects (meta refresh + window.location.replace)
+  let currentUrl = `https://${frontendDomain}/`;
+  for (let i = 0; i < 5; i++) {
+    const html = await httpGetText(currentUrl);
+    const metaMatch = html.match(/<meta\s+http-equiv=["']refresh["']\s+content=["']\s*\d+\s*;\s*url=([^"'>]+)/i);
+    const jsMatch = html.match(/window\.location\.replace\(["']([^"']+)["']\)/);
+    const next = metaMatch ? metaMatch[1] : (jsMatch ? jsMatch[1] : null);
+    if (next && !next.startsWith(currentUrl)) {
+      currentUrl = new URL(next, currentUrl).toString();
+      continue;
+    }
+    break;
+  }
+  const finalHost = new URL(currentUrl).hostname.replace(/^www\./, '');
+
+  // 3. Fetch JS bundle and extract API URL
+  const appHtml = await httpGetText(`https://${finalHost}/`);
+  const bundleMatch = appHtml.match(/src=["'](\/assets\/index-[^"']+\.js)["']/);
+  if (!bundleMatch) throw new Error(`No JS bundle found on ${finalHost}`);
+  const bundleJs = await httpGetText(`https://${finalHost}${bundleMatch[1]}`);
+  const apiMatch = bundleJs.match(/https:\/\/api\.movix\.[a-z]{2,}/);
+  if (!apiMatch) throw new Error(`No api.movix.* URL found in bundle on ${finalHost}`);
+
+  return {
+    api: apiMatch[0],
+    referer: `https://${finalHost}/`,
+    origin: `https://${finalHost}`,
+  };
+}
+
+function readMovixConfig() {
+  try {
+    if (fs.existsSync(MOVIX_ENDPOINTS_PATH)) {
+      return JSON.parse(fs.readFileSync(MOVIX_ENDPOINTS_PATH, 'utf-8'));
+    }
+  } catch {}
+  return null;
+}
+
+async function triggerMovixReload() {
+  return new Promise((resolve) => {
+    const req = http.get(`http://${LOOSTREAM_CONTAINER}:7002/api/movix/endpoints?reload=true`, (res) => {
+      console.log(`[Movix] Reload triggered (status: ${res.statusCode})`);
+      resolve(true);
+    });
+    req.on('error', (e) => { console.error('[Movix] Reload failed:', e.message); resolve(false); });
+    req.setTimeout(5000, () => { req.destroy(); resolve(false); });
+  });
+}
+
+async function checkMovixEndpoints(opts = {}) {
+  const { manual = false } = opts;
+  try {
+    const detected = await detectMovixEndpoints();
+    const current = readMovixConfig() || {};
+
+    const now = new Date().toISOString();
+    const changed = current.api !== detected.api || current.referer !== detected.referer;
+
+    const next = {
+      _comment: 'Endpoints Movix auto-mis à jour par telegram-bot.js depuis t.me/movix_site. Hot-reloadé par le scraper.',
+      api: detected.api,
+      referer: detected.referer,
+      origin: detected.origin,
+      lastCheckedAt: now,
+      lastUpdatedAt: changed ? now : (current.lastUpdatedAt || null),
+    };
+    fs.writeFileSync(MOVIX_ENDPOINTS_PATH, JSON.stringify(next, null, 2));
+
+    if (changed) {
+      await triggerMovixReload();
+      const prevApi = current.api || '(none)';
+      await telegramRequest('sendMessage', {
+        chat_id: CHAT_ID,
+        text: `🔄 <b>Movix endpoints mis à jour</b>\n\n` +
+          `API: <code>${prevApi}</code> → <code>${detected.api}</code>\n` +
+          `Referer: <code>${detected.referer}</code>\n\n` +
+          `Source: t.me/movix_site — appliqué via hot-reload.`,
+        parse_mode: 'HTML'
+      });
+      console.log(`[Movix] Updated: ${prevApi} → ${detected.api}`);
+    } else {
+      console.log(`[Movix] No change (api=${detected.api})`);
+      if (manual) {
+        await telegramRequest('sendMessage', {
+          chat_id: CHAT_ID,
+          text: `✅ <b>Movix endpoints OK</b>\n\nAPI: <code>${detected.api}</code>\nReferer: <code>${detected.referer}</code>\n\nAucun changement.`,
+          parse_mode: 'HTML'
+        });
+      }
+    }
+  } catch (e) {
+    const detail = e && (e.message || e.code || String(e)) || 'unknown';
+    console.error('[Movix] Check failed:', detail, e && e.stack ? '\n' + e.stack : '');
+    if (manual) {
+      await telegramRequest('sendMessage', {
+        chat_id: CHAT_ID,
+        text: `❌ <b>Movix check échec</b>\n\n<code>${detail}</code>`,
+        parse_mode: 'HTML'
+      }).catch(() => {});
+    }
+  }
+}
+
+// First check after 60s, then every 6h
+setTimeout(checkMovixEndpoints, 60000);
+setInterval(checkMovixEndpoints, MOVIX_CHECK_INTERVAL_MS);
 
 // Start monitoring and polling
 monitorLogs();
