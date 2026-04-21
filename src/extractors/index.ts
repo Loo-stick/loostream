@@ -20,10 +20,11 @@ export interface ExtractorConfig {
 
 // Voe domains (they rotate frequently)
 const VOE_DOMAINS = [
-  'voe', 'voe.sx', 'vidara.so', 'smoki.cc', 'kinoger.ru',
+  'voe', 'voe.sx', 'vidara.so', 'vidara.to', 'smoki.cc', 'kinoger.ru',
   'ralphysuccessfull', 'audaciousdefaulthouse', 'launchreliantcleaverriver',
   'reputationsheriffkennethsand', 'greaseball6eventual20', 'timberwoodanotia',
   'yodelswartlike', 'figeterpiazine', 'chromotypic', 'wolfdyslectic',
+  'charlestoughrace',
 ];
 
 // Doodstream rotates between many TLDs and clone domains
@@ -39,10 +40,13 @@ const VIDOZA_DOMAINS = ['vidoza'];
 const VIDMOLY_DOMAINS = ['vidmoly', 'molystream', 'vidhide'];
 const STREAMTAPE_DOMAINS = ['streamtape', 'strcloud', 'shavetape', 'tapewithadblock'];
 const MIXDROP_DOMAINS = ['mixdrop', 'mdrop', 'mdy48tn97'];
-// sharecloudy.com redirects to moovbob.fr; both are the same infra
-const SHARECLOUDY_DOMAINS = ['sharecloudy', 'moovbob'];
+// sharecloudy.com / moovbob.fr / moovtop.fr are the same infra (same player format)
+const SHARECLOUDY_DOMAINS = ['sharecloudy', 'moovbob', 'moovtop'];
+const LULUSTREAM_DOMAINS = ['luluvdo', 'lulustream', 'lulu.st'];
+const FILELIONS_DOMAINS = ['filelions', 'minochinos', 'javplaya', 'lionshare'];
+const STREAMWISH_DOMAINS = ['streamwish', 'hgcloud', 'awish', 'embedwish', 'strwish'];
 
-type ExtractorId = 'voe' | 'uqload' | 'doodstream' | 'filemoon' | 'vidoza' | 'vidmoly' | 'streamtape' | 'mixdrop' | 'sharecloudy';
+type ExtractorId = 'voe' | 'uqload' | 'doodstream' | 'filemoon' | 'vidoza' | 'vidmoly' | 'streamtape' | 'mixdrop' | 'sharecloudy' | 'lulustream' | 'filelions' | 'streamwish';
 
 /**
  * Detect which extractor to use based on URL.
@@ -60,6 +64,9 @@ export function detectExtractor(url: string): ExtractorId | null {
   if (STREAMTAPE_DOMAINS.some(d => hostname.includes(d))) return 'streamtape';
   if (MIXDROP_DOMAINS.some(d => hostname.includes(d))) return 'mixdrop';
   if (SHARECLOUDY_DOMAINS.some(d => hostname.includes(d))) return 'sharecloudy';
+  if (LULUSTREAM_DOMAINS.some(d => hostname.includes(d))) return 'lulustream';
+  if (FILELIONS_DOMAINS.some(d => hostname.includes(d))) return 'filelions';
+  if (STREAMWISH_DOMAINS.some(d => hostname.includes(d))) return 'streamwish';
 
   return null;
 }
@@ -211,6 +218,9 @@ async function extractViaMediaFlow(
     'vidmoly': 'Vidmoly',
     'streamtape': 'Streamtape',
     'mixdrop': 'Mixdrop',
+    'lulustream': 'LuluStream',
+    'filelions': 'FileLions',
+    'streamwish': 'StreamWish',
   };
 
   const host = hostMap[extractor];
