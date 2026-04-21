@@ -127,6 +127,32 @@ function telegramRequest(method, data) {
   });
 }
 
+// Common multi-part TLDs where the eTLD is 2 labels instead of 1
+const MULTI_PART_TLDS = new Set([
+  'co.uk', 'co.jp', 'co.kr', 'co.in', 'co.za', 'co.il', 'co.nz',
+  'com.au', 'com.br', 'com.cn', 'com.mx', 'com.tw', 'com.tr', 'com.sg',
+  'com.hk', 'com.ar', 'com.my', 'com.ph', 'com.ua', 'com.vn',
+  'net.au', 'net.br', 'net.cn',
+  'org.uk', 'org.br', 'org.cn',
+  'ac.uk', 'gov.uk', 'edu.au',
+]);
+
+// Compute the effective base domain (eTLD+1) from a hostname.
+// moov265724.moovtop.fr -> moovtop.fr
+// cdn.a.co.uk -> a.co.uk
+// Returns null if equal to input (already base).
+function extractBaseDomain(hostname) {
+  const parts = hostname.split('.');
+  if (parts.length < 2) return null;
+
+  const last2 = parts.slice(-2).join('.');
+  if (parts.length >= 3 && MULTI_PART_TLDS.has(last2)) {
+    const last3 = parts.slice(-3).join('.');
+    return last3 !== hostname ? last3 : null;
+  }
+  return last2 !== hostname ? last2 : null;
+}
+
 // Send alert with inline buttons
 async function sendDomainAlert(domain, fullUrl) {
   const alertKey = domain;
@@ -139,23 +165,30 @@ async function sendDomainAlert(domain, fullUrl) {
   sentAlerts.add(alertKey);
   setTimeout(() => sentAlerts.delete(alertKey), ALERT_COOLDOWN);
 
-  const message = `🚫 <b>Domaine bloqué</b>\n\n` +
-    `<code>${domain}</code>\n\n` +
-    `URL: <code>${fullUrl.substring(0, 100)}${fullUrl.length > 100 ? '...' : ''}</code>`;
+  const baseDomain = extractBaseDomain(domain);
+
+  let message = `🚫 <b>Domaine bloqué</b>\n\n` +
+    `<code>${domain}</code>\n`;
+  if (baseDomain) {
+    message += `└ racine: <code>${baseDomain}</code>\n`;
+  }
+  message += `\nURL: <code>${fullUrl.substring(0, 100)}${fullUrl.length > 100 ? '...' : ''}</code>`;
+
+  const buttons = [];
+  buttons.push([{ text: `✅ Whitelist ${domain}`, callback_data: `add:${domain}` }]);
+  if (baseDomain) {
+    buttons.push([{ text: `✅ Whitelist ${baseDomain} (couvre les subdomains)`, callback_data: `add:${baseDomain}` }]);
+  }
+  buttons.push([{ text: '❌ Ignorer', callback_data: `ignore:${domain}` }]);
 
   try {
     await telegramRequest('sendMessage', {
       chat_id: CHAT_ID,
       text: message,
       parse_mode: 'HTML',
-      reply_markup: {
-        inline_keyboard: [[
-          { text: '✅ Ajouter à la whitelist', callback_data: `add:${domain}` },
-          { text: '❌ Ignorer', callback_data: `ignore:${domain}` }
-        ]]
-      }
+      reply_markup: { inline_keyboard: buttons }
     });
-    console.log(`[Telegram] Alert sent for: ${domain}`);
+    console.log(`[Telegram] Alert sent for: ${domain}${baseDomain ? ` (+base ${baseDomain})` : ''}`);
   } catch (e) {
     console.error('[Telegram] Failed to send alert:', e.message);
   }
@@ -271,7 +304,61 @@ async function sendHealthMessage() {
 }
 
 // Track source status for alerts
-const lastSourceStatus = { movix: 'up', netmirror: 'up', streamflix: 'up' };
+const lastSourceStatus = { movix: 'up', netmirror: 'up', streamflix: 'up', faklum: 'up' };
+const lastScraperMetricsStatus = { movix: 'ok', netmirror: 'ok', streamflix: 'ok', faklum: 'ok' };
+
+const SCRAPER_EMOJI = { ok: '🟢', warning: '🟡', down: '🔴' };
+function formatAge(ms) {
+  if (!ms) return 'jamais';
+  const s = Math.floor((Date.now() - ms) / 1000);
+  if (s < 60) return `${s}s`;
+  if (s < 3600) return `${Math.floor(s / 60)}min`;
+  if (s < 86400) return `${Math.floor(s / 3600)}h`;
+  return `${Math.floor(s / 86400)}j`;
+}
+
+async function periodicScraperMetricsCheck() {
+  try {
+    const stats = await fetchLoostreamApi('/api/stats');
+    if (!stats?.metrics) return;
+
+    for (const [scraper, m] of Object.entries(stats.metrics)) {
+      const prev = lastScraperMetricsStatus[scraper];
+      const curr = m.status;
+      if (prev === curr) continue;
+
+      // Escalation
+      if ((prev === 'ok' && curr !== 'ok') || (prev === 'warning' && curr === 'down')) {
+        await telegramRequest('sendMessage', {
+          chat_id: CHAT_ID,
+          text: `${SCRAPER_EMOJI[curr]} <b>Scraper ${scraper} → ${curr.toUpperCase()}</b>\n\n` +
+            `Raison: ${m.statusReason || 'inconnue'}\n` +
+            `Fenêtre: ${m.success}✓ ${m.empty}∅ ${m.errors}⚠ (${m.window} req)\n` +
+            `Dernier succès: ${formatAge(m.lastSuccessAt)}`,
+          parse_mode: 'HTML'
+        });
+      }
+      // Recovery
+      else if ((prev !== 'ok' && curr === 'ok') || (prev === 'down' && curr === 'warning')) {
+        await telegramRequest('sendMessage', {
+          chat_id: CHAT_ID,
+          text: `${SCRAPER_EMOJI[curr]} <b>Scraper ${scraper} récupère → ${curr.toUpperCase()}</b>\n\n` +
+            `Fenêtre: ${m.success}✓ ${m.empty}∅ ${m.errors}⚠ (${m.window} req)`,
+          parse_mode: 'HTML'
+        });
+      }
+
+      lastScraperMetricsStatus[scraper] = curr;
+      console.log(`[Metrics] ${scraper}: ${prev} → ${curr} (${m.statusReason || 'ok'})`);
+    }
+  } catch (e) {
+    console.error('[Metrics] Check error:', e.message);
+  }
+}
+
+// Poll scraper metrics every 10 minutes (first check 90s after startup)
+setInterval(periodicScraperMetricsCheck, 10 * 60 * 1000);
+setTimeout(periodicScraperMetricsCheck, 90000);
 
 // Periodic health check with alerts
 async function periodicHealthCheck() {

@@ -2,6 +2,9 @@ import axios from 'axios';
 import * as fs from 'fs';
 import * as path from 'path';
 import { extractStream, detectExtractor, ExtractorConfig } from '../extractors';
+import { cached } from '../cache';
+
+const STREAMS_TTL_MS = 15 * 60 * 1000;
 
 interface MovixEndpoints {
   api: string;
@@ -225,6 +228,22 @@ async function fetchFStream(
 }
 
 export async function getMovixStreams(
+  tmdbId: string,
+  mediaType: 'movie' | 'series',
+  season?: number,
+  episode?: number,
+  extractorConfig?: ExtractorConfig
+): Promise<MovixStream[]> {
+  const key = `movix:${mediaType}:${tmdbId}:${season || ''}:${episode || ''}`;
+  return cached(
+    key,
+    STREAMS_TTL_MS,
+    () => fetchMovixStreams(tmdbId, mediaType, season, episode, extractorConfig),
+    { scope: 'movix', shouldCache: r => r.length > 0 }
+  );
+}
+
+async function fetchMovixStreams(
   tmdbId: string,
   mediaType: 'movie' | 'series',
   season?: number,

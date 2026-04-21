@@ -4,17 +4,19 @@
   "description": "LooStream - Stremio addon for streaming (Netflix, Prime Video, Disney+ mirrors)",
   "main": "dist/index.js",
   "scripts": {
-    "build": "tsc && node -e \"require('fs').copyFileSync('src/configure.html', 'dist/configure.html')\"",
+    "build": "tsc && node -e \"['configure.html','admin.html','login.html'].forEach(f=>require('fs').copyFileSync('src/'+f,'dist/'+f))\"",
     "start": "node dist/index.js",
     "dev": "ts-node src/index.ts"
   },
   "dependencies": {
     "axios": "^1.6.0",
+    "better-sqlite3": "^12.9.0",
     "express": "^4.18.2",
     "express-rate-limit": "^7.5.0",
     "stremio-addon-sdk": "^1.6.10"
   },
   "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
     "@types/express": "^4.17.21",
     "@types/node": "^20.10.0",
     "ts-node": "^10.9.2",

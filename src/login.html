@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LooStream — Connexion admin</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        html, body {
+            min-height: 100vh;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+        }
+        body {
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+            color: #fff;
+        }
+        .login-card {
+            width: 100%;
+            max-width: 400px;
+            background: rgba(255, 255, 255, 0.06);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            border-radius: 14px;
+            padding: 40px 36px;
+            backdrop-filter: blur(10px);
+        }
+        .logo {
+            text-align: center;
+            margin-bottom: 32px;
+        }
+        .logo img {
+            width: 72px;
+            height: 72px;
+            border-radius: 16px;
+            margin-bottom: 12px;
+        }
+        .logo h1 {
+            font-size: 1.4rem;
+            font-weight: 700;
+            letter-spacing: -0.02em;
+        }
+        .logo small {
+            display: block;
+            font-size: 0.7rem;
+            color: rgba(255, 255, 255, 0.4);
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+            margin-top: 4px;
+        }
+        label {
+            display: block;
+            font-size: 0.85rem;
+            color: rgba(255, 255, 255, 0.65);
+            font-weight: 500;
+            margin-bottom: 6px;
+        }
+        input[type="text"],
+        input[type="password"] {
+            width: 100%;
+            background: rgba(0, 0, 0, 0.3);
+            border: 1px solid rgba(255, 255, 255, 0.12);
+            color: #fff;
+            border-radius: 8px;
+            padding: 10px 14px;
+            font-size: 0.9rem;
+            font-family: inherit;
+            outline: none;
+            transition: border-color 0.15s, box-shadow 0.15s;
+        }
+        input[type="text"]:focus,
+        input[type="password"]:focus {
+            border-color: #7f5af0;
+            box-shadow: 0 0 0 3px rgba(127, 90, 240, 0.2);
+        }
+        .field {
+            margin-bottom: 18px;
+        }
+        .btn-login {
+            width: 100%;
+            padding: 11px;
+            background: #7f5af0;
+            border: none;
+            border-radius: 8px;
+            color: #fff;
+            font-weight: 600;
+            font-size: 0.95rem;
+            cursor: pointer;
+            transition: background 0.15s;
+            font-family: inherit;
+            margin-top: 8px;
+        }
+        .btn-login:hover { background: #6b46e0; }
+        .error-alert {
+            background: rgba(248, 113, 113, 0.12);
+            border: 1px solid rgba(248, 113, 113, 0.3);
+            color: #fca5a5;
+            border-radius: 8px;
+            padding: 10px 14px;
+            font-size: 0.85rem;
+            margin-bottom: 20px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .note {
+            text-align: center;
+            margin-top: 20px;
+            font-size: 0.75rem;
+            color: rgba(255, 255, 255, 0.3);
+        }
+    </style>
+</head>
+<body>
+<div class="login-card">
+    <div class="logo">
+        <img src="/logo.png" alt="LooStream" onerror="this.style.display='none'">
+        <h1>LooStream</h1>
+        <small>Administration</small>
+    </div>
+
+    <div id="error-box"></div>
+
+    <form action="/admin/login" method="post" autocomplete="on">
+        <div class="field">
+            <label for="user">Utilisateur</label>
+            <input type="text" id="user" name="user" autocomplete="username" required autofocus>
+        </div>
+        <div class="field">
+            <label for="pass">Mot de passe</label>
+            <input type="password" id="pass" name="pass" autocomplete="current-password" required>
+        </div>
+        <button type="submit" class="btn-login">Connexion</button>
+    </form>
+
+    <div class="note">Accès restreint</div>
+</div>
+
+<script>
+    const params = new URLSearchParams(window.location.search);
+    const errorMap = {
+        invalid: 'Identifiants invalides',
+        notconfig: 'Admin non configuré (ADMIN_USER / ADMIN_PASS manquants)',
+        expired: 'Session expirée, reconnecte-toi'
+    };
+    const err = params.get('error');
+    if (err && errorMap[err]) {
+        document.getElementById('error-box').innerHTML = `<div class="error-alert">⚠ ${errorMap[err]}</div>`;
+    }
+</script>
+</body>
+</html>

@@ -39,8 +39,10 @@ const VIDOZA_DOMAINS = ['vidoza'];
 const VIDMOLY_DOMAINS = ['vidmoly', 'molystream', 'vidhide'];
 const STREAMTAPE_DOMAINS = ['streamtape', 'strcloud', 'shavetape', 'tapewithadblock'];
 const MIXDROP_DOMAINS = ['mixdrop', 'mdrop', 'mdy48tn97'];
+// sharecloudy.com redirects to moovbob.fr; both are the same infra
+const SHARECLOUDY_DOMAINS = ['sharecloudy', 'moovbob'];
 
-type ExtractorId = 'voe' | 'uqload' | 'doodstream' | 'filemoon' | 'vidoza' | 'vidmoly' | 'streamtape' | 'mixdrop';
+type ExtractorId = 'voe' | 'uqload' | 'doodstream' | 'filemoon' | 'vidoza' | 'vidmoly' | 'streamtape' | 'mixdrop' | 'sharecloudy';
 
 /**
  * Detect which extractor to use based on URL.
@@ -57,6 +59,7 @@ export function detectExtractor(url: string): ExtractorId | null {
   if (VIDMOLY_DOMAINS.some(d => hostname.includes(d))) return 'vidmoly';
   if (STREAMTAPE_DOMAINS.some(d => hostname.includes(d))) return 'streamtape';
   if (MIXDROP_DOMAINS.some(d => hostname.includes(d))) return 'mixdrop';
+  if (SHARECLOUDY_DOMAINS.some(d => hostname.includes(d))) return 'sharecloudy';
 
   return null;
 }
@@ -146,6 +149,39 @@ export async function extractUqload(embedUrl: string): Promise<ExtractedStream |
     return null;
   } catch (e: any) {
     console.log('[Extractor] Uqload error:', e.message);
+    return null;
+  }
+}
+
+
+/**
+ * Extract video URL from Sharecloudy / Moovbob iframe.
+ * The m3u8 is inlined in a JWPlayer `sources: [{ file: "..." }]` block — no obfuscation.
+ */
+export async function extractSharecloudy(embedUrl: string): Promise<ExtractedStream | null> {
+  try {
+    const { data: html, request } = await axios.get(embedUrl, {
+      headers: HEADERS,
+      timeout: 10000,
+      maxRedirects: 5,
+    });
+
+    const fileMatch = html.match(/file:\s*["']([^"']+\.m3u8[^"']*)["']/);
+    if (!fileMatch) {
+      console.log('[Extractor] Sharecloudy: No m3u8 URL found');
+      return null;
+    }
+
+    const finalHost = request?.res?.responseUrl ? new URL(request.res.responseUrl).origin : 'https://moovbob.fr';
+
+    return {
+      url: fileMatch[1],
+      quality: 'HD',
+      format: 'hls',
+      headers: { 'Referer': finalHost + '/' },
+    };
+  } catch (e: any) {
+    console.log('[Extractor] Sharecloudy error:', e.message);
     return null;
   }
 }
@@ -250,6 +286,8 @@ async function extractLocally(embedUrl: string, extractor: string): Promise<Extr
       return await extractVoe(embedUrl);
     case 'uqload':
       return await extractUqload(embedUrl);
+    case 'sharecloudy':
+      return await extractSharecloudy(embedUrl);
     default:
       return null;
   }

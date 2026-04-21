@@ -1,4 +1,8 @@
 import axios from 'axios';
+import { cached } from '../cache';
+
+const STREAMS_TTL_MS = 15 * 60 * 1000;
+const DUMP_TTL_MS = 30 * 60 * 1000;
 
 const SF_BASE = 'https://api.streamflix.app';
 const CONFIG_URL = `${SF_BASE}/config/config-streamflixapp.json`;
@@ -48,35 +52,31 @@ async function getData(): Promise<any[]> {
     return dataCache;
   }
 
-  try {
-    const { data } = await axios.get(DATA_URL, { headers: HEADERS, timeout: 30000 });
-
-    // Extract items array
-    let items: any[] = [];
-    if (Array.isArray(data)) {
-      items = data;
-    } else if (data.data && Array.isArray(data.data)) {
-      items = data.data;
-    } else if (data.movies && Array.isArray(data.movies)) {
-      items = data.movies;
-    } else {
-      // Try to find any array in the response
-      for (const val of Object.values(data)) {
-        if (Array.isArray(val) && val.length > 5) {
-          items = val as any[];
-          break;
+  const items = await cached<any[]>(
+    'streamflix:dump',
+    DUMP_TTL_MS,
+    async () => {
+      try {
+        const { data } = await axios.get(DATA_URL, { headers: HEADERS, timeout: 30000 });
+        if (Array.isArray(data)) return data;
+        if (data.data && Array.isArray(data.data)) return data.data;
+        if (data.movies && Array.isArray(data.movies)) return data.movies;
+        for (const val of Object.values(data)) {
+          if (Array.isArray(val) && val.length > 5) return val as any[];
         }
+        return [];
+      } catch (e) {
+        console.log('[StreamFlix] Error loading data:', e);
+        return [];
       }
-    }
+    },
+    { scope: 'streamflix-dump', shouldCache: r => r.length > 0 }
+  );
 
-    dataCache = items;
-    dataCacheTime = Date.now();
-    console.log(`[StreamFlix] Data loaded: ${items.length} items`);
-    return items;
-  } catch (e) {
-    console.log('[StreamFlix] Error loading data:', e);
-    return [];
-  }
+  dataCache = items;
+  dataCacheTime = Date.now();
+  console.log(`[StreamFlix] Data loaded: ${items.length} items`);
+  return items;
 }
 
 function getTitle(item: any): string {
@@ -196,6 +196,22 @@ export async function getStreamFlixStreams(
   episode?: number,
   tmdbKey?: string
 ): Promise<StreamFlixStream[]> {
+  const key = `streamflix:${mediaType}:${tmdbId}:${season || ''}:${episode || ''}`;
+  return cached(
+    key,
+    STREAMS_TTL_MS,
+    () => fetchStreamFlixStreams(tmdbId, mediaType, season, episode, tmdbKey),
+    { scope: 'streamflix', shouldCache: r => r.length > 0 }
+  );
+}
+
+async function fetchStreamFlixStreams(
+  tmdbId: string,
+  mediaType: 'movie' | 'series',
+  season?: number,
+  episode?: number,
+  tmdbKey?: string
+): Promise<StreamFlixStream[]> {
   const apiKey = tmdbKey || DEFAULT_TMDB_API_KEY;
 
   if (!apiKey) {
@@ -206,15 +222,23 @@ export async function getStreamFlixStreams(
   console.log(`[StreamFlix] Searching for TMDB ${tmdbId}...`);
 
   try {
-    // Get TMDB info
+    // Get TMDB info (cached 12h, shared across scrapers)
     const endpoint = mediaType === 'movie' ? 'movie' : 'tv';
-    const { data: tmdbData } = await axios.get(
-      `https://api.themoviedb.org/3/${endpoint}/${tmdbId}?api_key=${apiKey}`,
-      { timeout: 10000 }
+    const tmdbData = await cached<any>(
+      `tmdb:${endpoint}:${tmdbId}`,
+      12 * 60 * 60 * 1000,
+      async () => {
+        const { data } = await axios.get(
+          `https://api.themoviedb.org/3/${endpoint}/${tmdbId}?api_key=${apiKey}`,
+          { timeout: 10000 }
+        );
+        return data;
+      },
+      { scope: 'tmdb', shouldCache: r => !!r }
     );
 
-    const title = tmdbData.title || tmdbData.name;
-    const year = (tmdbData.release_date || tmdbData.first_air_date || '').split('-')[0];
+    const title = tmdbData?.title || tmdbData?.name;
+    const year = (tmdbData?.release_date || tmdbData?.first_air_date || '').split('-')[0];
 
     if (!title) {
       console.log('[StreamFlix] No TMDB title found');
@@ -231,23 +255,32 @@ export async function getStreamFlixStreams(
       return [];
     }
 
-    // Search for matching content with similarity threshold
-    const normalizedTitle = normalizeTitle(title);
-    const matches = items
-      .map(item => {
-        const itemTitle = normalizeTitle(getTitle(item));
-        const similarity = calculateSimilarity(normalizedTitle, itemTitle);
-        return { item, itemTitle, similarity };
-      })
-      .filter(({ similarity }) => similarity >= 0.6) // 60% similarity threshold
-      .sort((a, b) => b.similarity - a.similarity); // Best matches first
+    // Prefer exact TMDB id match (items carry a `tmdb` field); fall back to fuzzy title matching
+    const tmdbMatches = items
+      .filter(item => String(item.tmdb || '') === String(tmdbId))
+      .map(item => ({ item, itemTitle: getTitle(item), similarity: 1 }));
 
-    if (!matches.length) {
-      console.log('[StreamFlix] No matches found');
-      return [];
+    let matches: { item: any; itemTitle: string; similarity: number }[];
+    if (tmdbMatches.length > 0) {
+      matches = tmdbMatches;
+      console.log(`[StreamFlix] TMDB match: ${matches.length} item(s)`);
+    } else {
+      const normalizedTitle = normalizeTitle(title);
+      matches = items
+        .map(item => {
+          const itemTitle = normalizeTitle(getTitle(item));
+          const similarity = calculateSimilarity(normalizedTitle, itemTitle);
+          return { item, itemTitle, similarity };
+        })
+        .filter(({ similarity }) => similarity >= 0.6)
+        .sort((a, b) => b.similarity - a.similarity);
+
+      if (!matches.length) {
+        console.log('[StreamFlix] No matches found (no TMDB id + fuzzy title <60%)');
+        return [];
+      }
+      console.log(`[StreamFlix] Fuzzy match ${matches.length} item(s): ${matches.map(m => `${m.itemTitle} (${(m.similarity * 100).toFixed(0)}%)`).join(', ')}`);
     }
-
-    console.log(`[StreamFlix] Found ${matches.length} match(es): ${matches.map(m => `${m.itemTitle} (${(m.similarity * 100).toFixed(0)}%)`).join(', ')}`);
 
     // Get CDN base URLs
     const cdnUrls = getCdnUrls(config);

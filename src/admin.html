@@ -1,0 +1,269 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LooStream - Admin</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+            min-height: 100vh;
+            color: #fff;
+            padding: 20px;
+        }
+        .container { max-width: 1200px; margin: 0 auto; }
+        .header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 30px;
+            flex-wrap: wrap;
+            gap: 15px;
+        }
+        .header h1 { font-size: 1.8em; }
+        .header .meta { color: #a0a0b0; font-size: 0.9em; }
+        .btn {
+            background: #7f5af0;
+            color: #fff;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 0.9em;
+            transition: background 0.2s;
+        }
+        .btn:hover { background: #6b46e0; }
+        .btn.secondary { background: rgba(255,255,255,0.1); }
+        .btn.secondary:hover { background: rgba(255,255,255,0.15); }
+
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: 20px;
+            margin-bottom: 20px;
+        }
+        .card {
+            background: rgba(255, 255, 255, 0.06);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            border-radius: 12px;
+            padding: 20px;
+            backdrop-filter: blur(10px);
+        }
+        .card h2 {
+            font-size: 1em;
+            margin-bottom: 12px;
+            color: #a0a0b0;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .scraper-card {
+            border-left: 4px solid #888;
+            position: relative;
+        }
+        .scraper-card.status-ok { border-left-color: #4ade80; }
+        .scraper-card.status-warning { border-left-color: #facc15; }
+        .scraper-card.status-down { border-left-color: #f87171; }
+        .scraper-card .name {
+            font-size: 1.2em;
+            font-weight: 600;
+            margin-bottom: 6px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .scraper-card .reason {
+            color: #facc15;
+            font-size: 0.85em;
+            margin-bottom: 10px;
+        }
+        .bars {
+            display: flex;
+            gap: 3px;
+            margin: 10px 0;
+            height: 6px;
+        }
+        .bars > div { flex: 1; border-radius: 2px; }
+        .bar-s { background: #4ade80; }
+        .bar-e { background: #facc15; }
+        .bar-x { background: #f87171; }
+        .stats-row {
+            display: flex;
+            justify-content: space-between;
+            color: #a0a0b0;
+            font-size: 0.85em;
+            margin-top: 8px;
+        }
+        .stats-row strong { color: #fff; }
+
+        .kv { display: grid; grid-template-columns: 1fr auto; row-gap: 6px; font-size: 0.9em; }
+        .kv .k { color: #a0a0b0; }
+        .kv .v { font-weight: 600; color: #fff; }
+
+        .health-box { margin-top: 20px; }
+        .health-source {
+            padding: 10px 14px;
+            background: rgba(255, 255, 255, 0.04);
+            border-radius: 8px;
+            margin-bottom: 8px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .health-source.up { border-left: 3px solid #4ade80; }
+        .health-source.down { border-left: 3px solid #f87171; }
+        .health-source.degraded { border-left: 3px solid #facc15; }
+        .loader { color: #a0a0b0; font-size: 0.9em; font-style: italic; }
+        .error { color: #f87171; font-size: 0.9em; }
+
+        @media (max-width: 600px) {
+            .header { flex-direction: column; align-items: flex-start; }
+        }
+    </style>
+</head>
+<body>
+<div class="container">
+    <div class="header">
+        <div>
+            <h1>⚙️ LooStream Admin</h1>
+            <div class="meta" id="meta">Chargement...</div>
+        </div>
+        <div style="display: flex; gap: 10px;">
+            <button class="btn secondary" onclick="checkHealth()">Health check</button>
+            <button class="btn" onclick="refreshAll()">Refresh</button>
+            <form action="/admin/logout" method="post" style="display: inline;">
+                <button type="submit" class="btn secondary">Déconnexion</button>
+            </form>
+        </div>
+    </div>
+
+    <h2 style="margin-bottom: 12px; font-size: 1.1em; color: #a0a0b0;">Scrapers</h2>
+    <div class="grid" id="scrapers"><div class="loader">Chargement...</div></div>
+
+    <div class="grid" style="grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));">
+        <div class="card">
+            <h2>Cache</h2>
+            <div class="kv" id="cache"></div>
+        </div>
+        <div class="card">
+            <h2>Requêtes</h2>
+            <div class="kv" id="requests"></div>
+        </div>
+        <div class="card">
+            <h2>Streams servis</h2>
+            <div class="kv" id="served"></div>
+        </div>
+    </div>
+
+    <div class="card health-box">
+        <h2>Live health check</h2>
+        <div id="health"><div class="loader">Clique "Health check" pour lancer une sonde</div></div>
+    </div>
+</div>
+
+<script>
+const fmtPct = n => (n * 100).toFixed(0) + '%';
+const fmtAge = ts => {
+    if (!ts) return 'jamais';
+    const s = Math.floor((Date.now() - ts) / 1000);
+    if (s < 60) return s + 's';
+    if (s < 3600) return Math.floor(s / 60) + 'min';
+    if (s < 86400) return Math.floor(s / 3600) + 'h';
+    return Math.floor(s / 86400) + 'j';
+};
+const fmtBytes = b => {
+    if (b < 1024) return b + ' B';
+    if (b < 1024 * 1024) return (b / 1024).toFixed(1) + ' KB';
+    return (b / 1024 / 1024).toFixed(2) + ' MB';
+};
+const EMOJI = { ok: '🟢', warning: '🟡', down: '🔴' };
+
+function buildScraperCard(name, m) {
+    const bars = [];
+    const pad = 20 - m.window;
+    for (let i = 0; i < pad; i++) bars.push('<div style="background:rgba(255,255,255,0.05)"></div>');
+    for (let i = 0; i < m.success; i++) bars.push('<div class="bar-s"></div>');
+    for (let i = 0; i < m.empty; i++) bars.push('<div class="bar-e"></div>');
+    for (let i = 0; i < m.errors; i++) bars.push('<div class="bar-x"></div>');
+
+    return `
+        <div class="card scraper-card status-${m.status}">
+            <div class="name">${EMOJI[m.status]} ${name}</div>
+            ${m.statusReason ? `<div class="reason">${m.statusReason}</div>` : ''}
+            <div class="bars">${bars.join('')}</div>
+            <div class="stats-row">
+                <span>Fenêtre <strong>${m.window}/20</strong></span>
+                <span>Empty <strong>${fmtPct(m.emptyRate)}</strong></span>
+                <span>Erreurs <strong>${fmtPct(m.errorRate)}</strong></span>
+            </div>
+            <div class="stats-row">
+                <span>Dernier succès</span>
+                <span><strong>${fmtAge(m.lastSuccessAt)}</strong></span>
+            </div>
+            ${m.lastError ? `<div class="stats-row"><span>Dernière erreur</span><span><strong title="${m.lastError}">${m.lastError.substring(0, 30)}...</strong></span></div>` : ''}
+        </div>
+    `;
+}
+
+async function loadStats() {
+    try {
+        const r = await fetch('/api/stats');
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        const s = await r.json();
+
+        document.getElementById('meta').textContent =
+            `Uptime ${s.uptime} · Dernière MAJ ${new Date().toLocaleTimeString('fr-FR')}`;
+
+        document.getElementById('scrapers').innerHTML = Object.entries(s.metrics)
+            .map(([name, m]) => buildScraperCard(name, m)).join('');
+
+        const c = s.cache;
+        document.getElementById('cache').innerHTML = `
+            <span class="k">Hit rate</span><span class="v">${fmtPct(c.hitRate)}</span>
+            <span class="k">Hits / Misses</span><span class="v">${c.hits} / ${c.misses}</span>
+            <span class="k">Entrées actives</span><span class="v">${c.liveEntries}</span>
+            <span class="k">Taille DB</span><span class="v">${fmtBytes(c.fileSizeBytes)}</span>
+            ${Object.entries(c.byScope).map(([sc, n]) => `<span class="k">└ ${sc}</span><span class="v">${n}</span>`).join('')}
+        `;
+
+        document.getElementById('requests').innerHTML = `
+            <span class="k">Total</span><span class="v">${s.requests.total}</span>
+            <span class="k">Streams</span><span class="v">${s.requests.streams}</span>
+            <span class="k">Proxy</span><span class="v">${s.requests.proxy}</span>
+        `;
+
+        document.getElementById('served').innerHTML = Object.entries(s.streamsServed)
+            .map(([k, v]) => `<span class="k">${k}</span><span class="v">${v}</span>`).join('');
+    } catch (e) {
+        document.getElementById('meta').innerHTML = `<span class="error">Erreur: ${e.message}</span>`;
+    }
+}
+
+async function checkHealth() {
+    const box = document.getElementById('health');
+    box.innerHTML = '<div class="loader">Vérification en cours...</div>';
+    try {
+        const r = await fetch('/api/health');
+        const h = await r.json();
+        box.innerHTML = Object.entries(h.sources).map(([src, d]) => `
+            <div class="health-source ${d.status}">
+                <span><strong>${src}</strong></span>
+                <span>${d.status.toUpperCase()} · ${d.latency ? d.latency + 'ms' : ''} ${d.error ? '— ' + d.error : ''}</span>
+            </div>
+        `).join('');
+    } catch (e) {
+        box.innerHTML = `<div class="error">Erreur: ${e.message}</div>`;
+    }
+}
+
+function refreshAll() {
+    loadStats();
+}
+
+loadStats();
+setInterval(loadStats, 30000);
+</script>
+</body>
+</html>

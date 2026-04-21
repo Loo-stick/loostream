@@ -1,4 +1,7 @@
 import axios from 'axios';
+import { cached } from '../cache';
+
+const STREAMS_TTL_MS = 15 * 60 * 1000;
 
 const NETMIRROR_BASE = 'https://net22.cc';
 const NETMIRROR_PLAY = 'https://net52.cc';
@@ -262,6 +265,22 @@ function findEpisode(
 }
 
 export async function getStreams(
+  title: string,
+  year: string,
+  season?: number,
+  episode?: number
+): Promise<StreamResult[]> {
+  const normTitle = title.toLowerCase().replace(/\s+/g, ' ').trim();
+  const key = `netmirror:${normTitle}:${year || ''}:${season || ''}:${episode || ''}`;
+  return cached(
+    key,
+    STREAMS_TTL_MS,
+    () => fetchNetmirrorStreams(title, year, season, episode),
+    { scope: 'netmirror', shouldCache: r => r.length > 0 }
+  );
+}
+
+async function fetchNetmirrorStreams(
   title: string,
   year: string,
   season?: number,

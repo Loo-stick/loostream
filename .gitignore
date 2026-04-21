@@ -26,3 +26,11 @@ npm-debug.log*
 
 # Sensitive configs
 config/telegram.json
+
+# SQLite cache (runtime, regenerates)
+config/cache.db
+config/cache.db-wal
+config/cache.db-shm
+
+# Local Claude Code state
+.claude/

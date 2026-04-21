@@ -5,6 +5,10 @@ import { rateLimit } from 'express-rate-limit';
 import { getStreams, getStreamUrl } from './scrapers/netmirror';
 import { getStreamFlixStreams } from './scrapers/streamflix';
 import { getMovixStreams, reloadMovixEndpoints, getMovixEndpoints } from './scrapers/movix';
+import { getFaklumStreams } from './scrapers/faklum';
+import { cached, getCacheStats } from './cache';
+import { recordOutcome, getAllMetrics } from './metrics';
+import crypto from 'crypto';
 import proxyRouter, { isAllowedUrl } from './proxy';
 import { ExtractorConfig } from './extractors';
 
@@ -27,11 +31,13 @@ interface Stats {
     movix: { requests: number; success: number; errors: number; lastSuccess: number | null };
     netmirror: { requests: number; success: number; errors: number; lastSuccess: number | null };
     streamflix: { requests: number; success: number; errors: number; lastSuccess: number | null };
+    faklum: { requests: number; success: number; errors: number; lastSuccess: number | null };
   };
   streamsServed: {
     movix: number;
     netmirror: number;
     streamflix: number;
+    faklum: number;
   };
 }
 
@@ -42,11 +48,12 @@ const stats: Stats = {
     movix: { requests: 0, success: 0, errors: 0, lastSuccess: null },
     netmirror: { requests: 0, success: 0, errors: 0, lastSuccess: null },
     streamflix: { requests: 0, success: 0, errors: 0, lastSuccess: null },
+    faklum: { requests: 0, success: 0, errors: 0, lastSuccess: null },
   },
-  streamsServed: { movix: 0, netmirror: 0, streamflix: 0 },
+  streamsServed: { movix: 0, netmirror: 0, streamflix: 0, faklum: 0 },
 };
 
-function trackSourceResult(source: 'movix' | 'netmirror' | 'streamflix', success: boolean, streamCount: number = 0) {
+function trackSourceResult(source: 'movix' | 'netmirror' | 'streamflix' | 'faklum', success: boolean, streamCount: number = 0) {
   stats.sources[source].requests++;
   if (success) {
     stats.sources[source].success++;
@@ -436,6 +443,8 @@ app.get('/:config/manifest.json', (req, res) => {
 // TMDB API helper
 const DEFAULT_TMDB_KEY = process.env.TMDB_API_KEY || '';
 
+const TMDB_TTL_MS = 12 * 60 * 60 * 1000;
+
 async function getTmdbInfo(type: string, id: string, config?: UserConfig | null): Promise<{ title: string; year: string; tmdbId: string } | null> {
   const tmdbKey = config?.tmdbKey || DEFAULT_TMDB_KEY;
 
@@ -444,32 +453,38 @@ async function getTmdbInfo(type: string, id: string, config?: UserConfig | null)
     return null;
   }
 
-  try {
-    let tmdbId = id;
+  return cached(
+    `tmdb:info:${type}:${id}`,
+    TMDB_TTL_MS,
+    async () => {
+      try {
+        let tmdbId = id;
 
-    // Convert IMDB ID to TMDB ID if needed
-    if (id.startsWith('tt')) {
-      const findResp = await axios.get(
-        `https://api.themoviedb.org/3/find/${id}?api_key=${tmdbKey}&external_source=imdb_id`
-      );
-      const results = type === 'movie' ? findResp.data.movie_results : findResp.data.tv_results;
-      if (!results || results.length === 0) return null;
-      tmdbId = String(results[0].id);
-    } else if (id.startsWith('tmdb:')) {
-      tmdbId = id.replace('tmdb:', '').split(':')[0];
-    }
+        if (id.startsWith('tt')) {
+          const findResp = await axios.get(
+            `https://api.themoviedb.org/3/find/${id}?api_key=${tmdbKey}&external_source=imdb_id`
+          );
+          const results = type === 'movie' ? findResp.data.movie_results : findResp.data.tv_results;
+          if (!results || results.length === 0) return null;
+          tmdbId = String(results[0].id);
+        } else if (id.startsWith('tmdb:')) {
+          tmdbId = id.replace('tmdb:', '').split(':')[0];
+        }
 
-    const endpoint = type === 'movie' ? 'movie' : 'tv';
-    const resp = await axios.get(`https://api.themoviedb.org/3/${endpoint}/${tmdbId}?api_key=${tmdbKey}`);
+        const endpoint = type === 'movie' ? 'movie' : 'tv';
+        const resp = await axios.get(`https://api.themoviedb.org/3/${endpoint}/${tmdbId}?api_key=${tmdbKey}`);
 
-    const title = resp.data.title || resp.data.name;
-    const year = (resp.data.release_date || resp.data.first_air_date || '').split('-')[0];
+        const title = resp.data.title || resp.data.name;
+        const year = (resp.data.release_date || resp.data.first_air_date || '').split('-')[0];
 
-    return { title, year, tmdbId };
-  } catch (e) {
-    console.error('[TMDB] Error:', e);
-    return null;
-  }
+        return { title, year, tmdbId };
+      } catch (e) {
+        console.error('[TMDB] Error:', e);
+        return null;
+      }
+    },
+    { scope: 'tmdb', shouldCache: r => r !== null }
+  );
 }
 
 // Parse Stremio ID
@@ -519,16 +534,19 @@ async function handleStream(req: express.Request, res: express.Response, type: s
       mediaFlowPassword: config?.mfPass || DEFAULT_MEDIAFLOW_PASSWORD,
     };
 
-    const [netmirrorResults, streamflixResults, movixResults] = await Promise.all([
+    const [netmirrorResults, streamflixResults, movixResults, faklumResults] = await Promise.all([
       getStreams(info.title, info.year, parsed.season, parsed.episode)
-        .then(r => { trackSourceResult('netmirror', true, r.length); return r; })
-        .catch(e => { console.log('[NetMirror] Error:', e); trackSourceResult('netmirror', false); return []; }),
+        .then(r => { trackSourceResult('netmirror', true, r.length); recordOutcome('netmirror', r.length > 0 ? 'success' : 'empty'); return r; })
+        .catch(e => { console.log('[NetMirror] Error:', e); trackSourceResult('netmirror', false); recordOutcome('netmirror', 'error', e?.message); return []; }),
       getStreamFlixStreams(info.tmdbId, type as 'movie' | 'series', parsed.season, parsed.episode, config?.tmdbKey || DEFAULT_TMDB_KEY)
-        .then(r => { trackSourceResult('streamflix', true, r.length); return r; })
-        .catch(e => { console.log('[StreamFlix] Error:', e); trackSourceResult('streamflix', false); return []; }),
+        .then(r => { trackSourceResult('streamflix', true, r.length); recordOutcome('streamflix', r.length > 0 ? 'success' : 'empty'); return r; })
+        .catch(e => { console.log('[StreamFlix] Error:', e); trackSourceResult('streamflix', false); recordOutcome('streamflix', 'error', e?.message); return []; }),
       getMovixStreams(info.tmdbId, type as 'movie' | 'series', parsed.season, parsed.episode, extractorConfig)
-        .then(r => { trackSourceResult('movix', true, r.length); return r; })
-        .catch(e => { console.log('[Movix] Error:', e); trackSourceResult('movix', false); return []; }),
+        .then(r => { trackSourceResult('movix', true, r.length); recordOutcome('movix', r.length > 0 ? 'success' : 'empty'); return r; })
+        .catch(e => { console.log('[Movix] Error:', e); trackSourceResult('movix', false); recordOutcome('movix', 'error', e?.message); return []; }),
+      getFaklumStreams(info.tmdbId, type as 'movie' | 'series', extractorConfig, config?.tmdbKey || DEFAULT_TMDB_KEY)
+        .then(r => { trackSourceResult('faklum', true, r.length); recordOutcome('faklum', r.length > 0 ? 'success' : 'empty'); return r; })
+        .catch(e => { console.log('[Faklum] Error:', e); trackSourceResult('faklum', false); recordOutcome('faklum', 'error', e?.message); return []; }),
     ]);
 
     const streams: StreamWithMeta[] = [];
@@ -643,6 +661,41 @@ async function handleStream(req: express.Request, res: express.Response, type: s
       });
     }
 
+    // Process Faklum results
+    for (const fk of faklumResults) {
+      let finalUrl: string;
+
+      const mfUrl = config?.mfUrl || DEFAULT_MEDIAFLOW_URL;
+      const isMediaFlowUrl = mfUrl && fk.url.includes(new URL(mfUrl).hostname);
+
+      if (isMediaFlowUrl) {
+        finalUrl = fk.url;
+      } else {
+        const proxyHeaders: Record<string, string> = {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+          ...fk.headers,
+        };
+        const proxiedUrl = buildProxyUrl(fk.url, proxyHeaders, false, req, config);
+        if (!proxiedUrl) continue;
+        finalUrl = proxiedUrl;
+      }
+
+      streams.push({
+        name: `Faklum\n${fk.language}`,
+        title: `${fk.language} [${fk.quality}]`,
+        url: finalUrl,
+        behaviorHints: {
+          notWebReady: false,
+          bingeGroup: 'faklum',
+        },
+        _meta: {
+          quality: fk.quality,
+          language: fk.language,
+          source: 'faklum',
+        },
+      });
+    }
+
     if (streams.length === 0) {
       console.log('[Stream] No streams found');
       return res.json({ streams: [] });
@@ -734,6 +787,105 @@ app.get('/', (_req, res) => {
 });
 
 // ============================================
+// ADMIN DASHBOARD — session cookie auth
+// ============================================
+
+const SESSION_SECRET = process.env.SESSION_SECRET || crypto.randomBytes(32).toString('hex');
+const SESSION_MAX_AGE_MS = 2 * 60 * 60 * 1000;
+const ADMIN_COOKIE = 'loostream_admin';
+
+function signSession(payload: string): string {
+  const sig = crypto.createHmac('sha256', SESSION_SECRET).update(payload).digest('hex');
+  return `${payload}.${sig}`;
+}
+
+function verifySession(token: string | undefined): { user: string; exp: number } | null {
+  if (!token) return null;
+  const dot = token.lastIndexOf('.');
+  if (dot < 0) return null;
+  const payload = token.slice(0, dot);
+  const sig = token.slice(dot + 1);
+  const expected = crypto.createHmac('sha256', SESSION_SECRET).update(payload).digest('hex');
+  if (sig.length !== expected.length || !crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(expected))) return null;
+  try {
+    const parsed = JSON.parse(Buffer.from(payload, 'base64').toString());
+    if (!parsed.user || !parsed.exp || parsed.exp < Date.now()) return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function createSession(user: string): string {
+  const payload = Buffer.from(JSON.stringify({ user, exp: Date.now() + SESSION_MAX_AGE_MS })).toString('base64');
+  return signSession(payload);
+}
+
+function parseCookies(header: string | undefined): Record<string, string> {
+  if (!header) return {};
+  const out: Record<string, string> = {};
+  for (const part of header.split(';')) {
+    const [k, ...v] = part.trim().split('=');
+    if (k) out[k] = decodeURIComponent(v.join('='));
+  }
+  return out;
+}
+
+function requireAdminSession(req: express.Request, res: express.Response, next: express.NextFunction): void {
+  if (!process.env.ADMIN_USER || !process.env.ADMIN_PASS) {
+    res.status(503).send('Admin dashboard not configured. Set ADMIN_USER and ADMIN_PASS in .env');
+    return;
+  }
+  const cookies = parseCookies(req.headers.cookie);
+  const session = verifySession(cookies[ADMIN_COOKIE]);
+  if (!session) {
+    res.redirect('/admin/login' + (cookies[ADMIN_COOKIE] ? '?error=expired' : ''));
+    return;
+  }
+  next();
+}
+
+app.get('/admin/login', (req, res) => {
+  const cookies = parseCookies(req.headers.cookie);
+  if (verifySession(cookies[ADMIN_COOKIE])) {
+    res.redirect('/admin');
+    return;
+  }
+  res.sendFile('login.html', { root: path.join(__dirname) });
+});
+
+app.post('/admin/login', express.urlencoded({ extended: false }), (req, res) => {
+  if (!process.env.ADMIN_USER || !process.env.ADMIN_PASS) {
+    res.redirect('/admin/login?error=notconfig');
+    return;
+  }
+  const { user, pass } = req.body || {};
+  if (user === process.env.ADMIN_USER && pass === process.env.ADMIN_PASS) {
+    const token = createSession(user);
+    const secure = (req.headers['x-forwarded-proto'] || req.protocol) === 'https';
+    res.cookie(ADMIN_COOKIE, token, {
+      httpOnly: true,
+      secure,
+      sameSite: 'lax',
+      maxAge: SESSION_MAX_AGE_MS,
+      path: '/',
+    });
+    res.redirect('/admin');
+    return;
+  }
+  res.redirect('/admin/login?error=invalid');
+});
+
+app.post('/admin/logout', (_req, res) => {
+  res.clearCookie(ADMIN_COOKIE, { path: '/' });
+  res.redirect('/admin/login');
+});
+
+app.get('/admin', requireAdminSession, (_req, res) => {
+  res.sendFile('admin.html', { root: path.join(__dirname) });
+});
+
+// ============================================
 // ADMIN API (for Telegram bot)
 // ============================================
 
@@ -756,7 +908,14 @@ app.get('/api/stats', (_req, res) => {
     requests: stats.requests,
     sources: stats.sources,
     streamsServed: stats.streamsServed,
+    metrics: getAllMetrics(),
+    cache: getCacheStats(),
   });
+});
+
+// Cache stats standalone
+app.get('/api/cache/stats', (_req, res) => {
+  res.json(getCacheStats());
 });
 
 // Health check endpoint - tests each source
@@ -809,6 +968,22 @@ app.get('/api/health', async (_req, res) => {
     };
   } catch (e: any) {
     results.streamflix = { status: 'down', error: e.message };
+  }
+
+  // Test Faklum (homepage returns token link)
+  const faklumStart = Date.now();
+  try {
+    const resp = await axios.get('https://faklum.com/', {
+      timeout: 10000,
+      validateStatus: (s) => s < 500,
+    });
+    const hasToken = /<a\s+id=["']faklumc["']\s+href=["'][a-z0-9]+["']/i.test(resp.data);
+    results.faklum = {
+      status: hasToken ? 'up' : 'degraded',
+      latency: Date.now() - faklumStart,
+    };
+  } catch (e: any) {
+    results.faklum = { status: 'down', error: e.message };
   }
 
   const allUp = Object.values(results).every(r => r.status === 'up');
