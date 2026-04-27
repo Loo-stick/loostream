@@ -95,20 +95,29 @@ interface SearchResult {
   language: string;
 }
 
-// DataLife search returns an HTML list of film cards
+// Flemmix ships DataLife's AJAX autocomplete endpoint (dle_do_search in
+// /public/js/dle_js.js). The old POST /?do=search&story=X form submit no
+// longer filters results — the backend just returns the homepage. The
+// autocomplete endpoint at /index.php?controller=ajax&mod=search is what
+// the browser actually uses and still works.
 function parseSearchHtml(html: string): SearchResult[] {
   const results: SearchResult[] = [];
-  // Each card has a div.item > a href with title1 + optional title0 spans
-  const itemRegex = /<div class="item">\s*<a href="([^"]+)">[\s\S]*?<span class="title1">([^<]+)<\/span>(?:[\s\S]{0,200}?<span class="title0">([^<]*)<\/span>)?/g;
+  // <a href="..." class="fsr-wrap"> ... <span class="fsr-title">TITLE</span>
+  // ... optional <span class="fsr-badge fsr-lang">VF|VOSTFR|TrueFrench</span>
+  const itemRegex = /<a href="([^"]+)"[^>]*class="fsr-wrap"[\s\S]*?<span class="fsr-title">([^<]+)<\/span>(?:[\s\S]{0,800}?<span class="fsr-badge fsr-lang">([^<]+)<\/span>)?/g;
   let m: RegExpExecArray | null;
   while ((m = itemRegex.exec(html)) !== null) {
     const url = m[1].trim();
-    if (!/\/film-en-streaming\/\d+-/.test(url) && !/\/serie-en-streaming\/\d+-/.test(url)) continue;
+    // Accept both the new /vf/ and /film-ancien/ URL patterns and the legacy
+    // /film-en-streaming/ / /serie-en-streaming/ ones (defensive).
+    if (!/\/(?:vf|film-ancien|film-en-streaming|serie-en-streaming)\/\d+-/.test(url)) continue;
+    const rawLang = m[3] ? m[3].trim().toLowerCase() : '';
+    const language = rawLang.includes('vostfr') ? 'VOSTFR' : 'VF';
     results.push({
       url,
       title: decodeEntities(m[2].trim()),
-      origTitle: m[3] ? decodeEntities(m[3].trim()) : null,
-      language: 'VF',
+      origTitle: null,  // autocomplete response doesn't expose the original title
+      language,
     });
   }
   return results;
@@ -142,23 +151,72 @@ function jaccard(a: string, b: string): number {
   return inter / union;
 }
 
+// DataLife autocomplete needs a session: PHPSESSID cookie + dle_login_hash
+// + dle_skin (all extracted from the homepage). Cache them because they're
+// stable per-visitor for the whole day.
+interface FlemmixSession {
+  hash: string;
+  skin: string;
+  cookie: string;
+  at: number;
+}
+const SESSION_TTL_MS = 6 * 60 * 60 * 1000;
+let cachedSession: FlemmixSession | null = null;
+
+async function getSession(force = false): Promise<FlemmixSession | null> {
+  if (!force && cachedSession && Date.now() - cachedSession.at < SESSION_TTL_MS) {
+    return cachedSession;
+  }
+  try {
+    const resp = await axios.get(endpoints.base + '/', {
+      headers: HEADERS,
+      timeout: 10000,
+    });
+    const hash = resp.data.match(/dle_login_hash\s*=\s*['"]([a-f0-9]+)['"]/)?.[1];
+    const skin = resp.data.match(/dle_skin\s*=\s*['"]([^'"]+)['"]/)?.[1];
+    const setCookie = resp.headers['set-cookie'] || [];
+    const cookie = (Array.isArray(setCookie) ? setCookie : [setCookie])
+      .map((c: string) => c.split(';')[0])
+      .filter(Boolean)
+      .join('; ');
+    if (!hash || !skin) {
+      console.log('[Flemmix] Could not extract dle_login_hash / dle_skin from homepage');
+      return null;
+    }
+    cachedSession = { hash, skin, cookie, at: Date.now() };
+    console.log(`[Flemmix] Session ready (skin=${skin})`);
+    return cachedSession;
+  } catch (e: any) {
+    console.log('[Flemmix] Session fetch failed:', e.message);
+    return null;
+  }
+}
+
 async function searchFilms(query: string): Promise<SearchResult[]> {
+  const sess = await getSession();
+  if (!sess) return [];
   try {
     const body = new URLSearchParams({
-      do: 'search',
-      subaction: 'search',
-      story: query,
+      query,
+      skin: sess.skin,
+      user_hash: sess.hash,
     }).toString();
 
-    const { data: html } = await axios.post(`${endpoints.base}/index.php?do=search`, body, {
-      headers: {
-        ...HEADERS,
-        'Content-Type': 'application/x-www-form-urlencoded',
-        'Origin': endpoints.origin,
-        'Referer': endpoints.referer,
-      },
-      timeout: 15000,
-    });
+    const { data: html } = await axios.post(
+      `${endpoints.base}/index.php?controller=ajax&mod=search`,
+      body,
+      {
+        headers: {
+          ...HEADERS,
+          'Content-Type': 'application/x-www-form-urlencoded',
+          'X-Requested-With': 'XMLHttpRequest',
+          'Origin': endpoints.origin,
+          'Referer': endpoints.referer,
+          'Cookie': sess.cookie,
+        },
+        timeout: 10000,
+      }
+    );
     return parseSearchHtml(html);
   } catch (e: any) {
     console.log('[Flemmix] Search failed:', e.message);
@@ -194,6 +252,54 @@ async function fetchFilmEmbeds(filmUrl: string): Promise<EmbedLink[]> {
   }
 }
 
+// Each season is a separate Flemmix page; the title always ends with " - Saison N".
+function parseSeriesTitle(title: string): { base: string; season: number | null } {
+  const m = title.match(/^(.*?)\s*-\s*Saison\s+(\d+)\s*$/i);
+  if (m) return { base: m[1].trim(), season: parseInt(m[2], 10) };
+  return { base: title.trim(), season: null };
+}
+
+// Series episode embeds live inside <div class="ep<N>vf"> or <div class="ep<N>vs">
+// (VF / VOSTFR). The loadVideo calls there drop the second `this` arg and the
+// <span> label is generic ("Lecteur 1"), so we derive the real server from the
+// embed URL's hostname.
+async function fetchSeriesEpisodeEmbeds(
+  filmUrl: string,
+  episode: number,
+  langPref: 'vf' | 'vs'
+): Promise<EmbedLink[]> {
+  try {
+    const { data: html } = await axios.get(filmUrl, {
+      headers: { ...HEADERS, Referer: endpoints.referer },
+      timeout: 15000,
+    });
+    const divRegex = new RegExp(
+      `<div[^>]+class="ep${episode}${langPref}"[^>]*>([\\s\\S]*?)<\\/div>`,
+      'i'
+    );
+    const m = html.match(divRegex);
+    if (!m) return [];
+
+    const embeds: EmbedLink[] = [];
+    const lvRegex = /loadVideo\(\s*['"]([^'"]+)['"]/g;
+    let lv: RegExpExecArray | null;
+    while ((lv = lvRegex.exec(m[1])) !== null) {
+      const url = lv[1].trim();
+      let server = 'unknown';
+      try {
+        server = new URL(url).hostname.replace(/^www\./, '').split('.')[0];
+      } catch {
+        continue;
+      }
+      embeds.push({ server, url });
+    }
+    return embeds;
+  } catch (e: any) {
+    console.log(`[Flemmix] Series page fetch failed: ${e.message}`);
+    return [];
+  }
+}
+
 export async function getFlemmixStreams(
   tmdbId: string,
   mediaType: 'movie' | 'series',
@@ -202,38 +308,42 @@ export async function getFlemmixStreams(
   season?: number,
   episode?: number
 ): Promise<FlemmixStream[]> {
-  if (mediaType !== 'movie') return []; // MVP: films only
-
   const apiKey = tmdbKey || DEFAULT_TMDB_API_KEY;
   if (!apiKey) {
     console.log('[Flemmix] No TMDB API key, skipping');
     return [];
   }
+  if (mediaType === 'series' && (!season || !episode)) return [];
 
   const key = `flemmix:${mediaType}:${tmdbId}:${season || ''}:${episode || ''}`;
   return cached(
     key,
     STREAMS_TTL_MS,
-    () => fetchFlemmixStreams(tmdbId, apiKey, extractorConfig),
+    () => fetchFlemmixStreams(tmdbId, mediaType, apiKey, extractorConfig, season, episode),
     { scope: 'flemmix', shouldCache: r => r.length > 0 }
   );
 }
 
 async function fetchFlemmixStreams(
   tmdbId: string,
+  mediaType: 'movie' | 'series',
   apiKey: string,
-  extractorConfig: ExtractorConfig
+  extractorConfig: ExtractorConfig,
+  season?: number,
+  episode?: number
 ): Promise<FlemmixStream[]> {
-  console.log(`[Flemmix] Searching for TMDB ${tmdbId}...`);
+  console.log(`[Flemmix] Searching for TMDB ${tmdbId} (${mediaType}${season ? ` S${season}E${episode}` : ''})...`);
 
   try {
-    // Reuse the fr-FR TMDB cache already populated by Faklum
+    // TMDB in fr-FR (films + series use the same cache scope — the id space is
+    // disjoint across types so keying by tmdbId alone is fine)
+    const tmdbEndpoint = mediaType === 'series' ? 'tv' : 'movie';
     const tmdbData = await cached<any>(
-      `tmdb:movie-fr:${tmdbId}`,
+      `tmdb:${tmdbEndpoint}-fr:${tmdbId}`,
       TMDB_TTL_MS,
       async () => {
         const { data } = await axios.get(
-          `https://api.themoviedb.org/3/movie/${tmdbId}?api_key=${apiKey}&language=fr-FR`,
+          `https://api.themoviedb.org/3/${tmdbEndpoint}/${tmdbId}?api_key=${apiKey}&language=fr-FR`,
           { timeout: 10000 }
         );
         return data;
@@ -241,12 +351,12 @@ async function fetchFlemmixStreams(
       { scope: 'tmdb', shouldCache: r => !!r }
     );
 
-    const frTitle: string = tmdbData?.title || tmdbData?.original_title;
-    const origTitle: string = tmdbData?.original_title || '';
-    const year = tmdbData?.release_date ? parseInt(tmdbData.release_date.split('-')[0], 10) : null;
+    const frTitle: string = tmdbData?.title || tmdbData?.name || tmdbData?.original_title || tmdbData?.original_name;
+    const origTitle: string = tmdbData?.original_title || tmdbData?.original_name || '';
+    const year = (tmdbData?.release_date || tmdbData?.first_air_date || '').split('-')[0];
     if (!frTitle) return [];
 
-    console.log(`[Flemmix] TMDB: ${frTitle} (${year}) / orig: ${origTitle}`);
+    console.log(`[Flemmix] TMDB: ${frTitle}${year ? ` (${year})` : ''} / orig: ${origTitle}`);
 
     const searchResults = await searchFilms(frTitle);
     if (searchResults.length === 0) {
@@ -254,31 +364,53 @@ async function fetchFlemmixStreams(
       return [];
     }
 
-    // Fuzzy match on FR or original title
+    // For series, strip " - Saison N" from each result before fuzzy matching
+    // and keep only results whose season number equals the requested one.
     const normFr = normalize(frTitle);
     const normOrig = origTitle ? normalize(origTitle) : '';
     const ranked = searchResults
       .map(r => {
-        const simFr = jaccard(normFr, normalize(r.title));
+        const { base, season: parsedSeason } = mediaType === 'series'
+          ? parseSeriesTitle(r.title)
+          : { base: r.title, season: null };
+        const simFr = jaccard(normFr, normalize(base));
         const simOrig = r.origTitle ? jaccard(normOrig || normFr, normalize(r.origTitle)) : 0;
         const sim = Math.max(simFr, simOrig);
-        return { r, sim };
+        return { r, sim, parsedSeason };
       })
-      .filter(({ sim }) => sim >= 0.7)
+      .filter(({ sim, parsedSeason }) => {
+        if (sim < 0.7) return false;
+        if (mediaType === 'series') return parsedSeason === season;
+        return true;
+      })
       .sort((a, b) => b.sim - a.sim);
 
     if (ranked.length === 0) {
-      console.log('[Flemmix] No fuzzy match above threshold');
+      console.log(`[Flemmix] No fuzzy match above threshold${mediaType === 'series' ? ` for S${season}` : ''}`);
       return [];
     }
 
     console.log(`[Flemmix] ${ranked.length} match(es), best: ${ranked[0].r.title} (${(ranked[0].sim * 100).toFixed(0)}%)`);
 
     const best = ranked[0].r;
-    const embeds = await fetchFilmEmbeds(best.url);
-    if (embeds.length === 0) {
-      console.log('[Flemmix] No embeds on film page');
-      return [];
+    // Series episode embeds live per-episode; try VF first, fall back to VOSTFR
+    // if the VF block is empty.
+    let embeds: EmbedLink[];
+    if (mediaType === 'series') {
+      embeds = await fetchSeriesEpisodeEmbeds(best.url, episode!, 'vf');
+      if (embeds.length === 0) {
+        embeds = await fetchSeriesEpisodeEmbeds(best.url, episode!, 'vs');
+      }
+      if (embeds.length === 0) {
+        console.log(`[Flemmix] No embeds for episode S${season}E${episode}`);
+        return [];
+      }
+    } else {
+      embeds = await fetchFilmEmbeds(best.url);
+      if (embeds.length === 0) {
+        console.log('[Flemmix] No embeds on film page');
+        return [];
+      }
     }
 
     // Filter only embeds we can resolve (MFP or local)
@@ -287,29 +419,39 @@ async function fetchFlemmixStreams(
     });
     console.log(`[Flemmix] ${embeds.length} embeds, ${supported.length} supported: ${supported.map(e => e.server).join(', ')}`);
 
-    const streams: FlemmixStream[] = [];
+    // Dedupe per server BEFORE extraction to avoid wasting parallel calls on
+    // the same server (we'd only keep one anyway).
     const seen = new Set<string>();
-
-    for (const embed of supported.slice(0, 6)) {
-      if (seen.has(embed.server)) continue;
+    const dedupedEmbeds = supported.filter(embed => {
+      if (seen.has(embed.server)) return false;
       seen.add(embed.server);
+      return true;
+    }).slice(0, 6);
 
-      const extracted = await extractStream(embed.url, extractorConfig);
-      if (!extracted) {
-        console.log(`[Flemmix] Extraction failed for ${embed.server} (${embed.url})`);
-        continue;
-      }
+    const extracted = await Promise.all(
+      dedupedEmbeds.map(async embed => {
+        const r = await extractStream(embed.url, extractorConfig);
+        if (!r) {
+          console.log(`[Flemmix] Extraction failed for ${embed.server} (${embed.url})`);
+          return null;
+        }
+        console.log(`[Flemmix] Extracted ${embed.server}: ${r.format}`);
+        return { embed, r };
+      })
+    );
 
+    const streams: FlemmixStream[] = [];
+    for (const item of extracted) {
+      if (!item) continue;
       streams.push({
         name: 'Flemmix',
         title: best.title,
-        url: extracted.url,
-        quality: extracted.quality || 'HD',
+        url: item.r.url,
+        quality: item.r.quality || 'HD',
         language: best.language,
-        server: embed.server.toLowerCase(),
-        headers: extracted.headers,
+        server: item.embed.server.toLowerCase(),
+        headers: item.r.headers,
       });
-      console.log(`[Flemmix] Extracted ${embed.server}: ${extracted.format}`);
     }
 
     console.log(`[Flemmix] Returning ${streams.length} stream(s)`);
