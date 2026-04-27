@@ -2,6 +2,57 @@ import axios from 'axios';
 import { cached } from '../cache';
 
 const STREAMS_TTL_MS = 15 * 60 * 1000;
+// Cache empty results shorter so we retry sooner once NetMirror comes back,
+// but long enough to absorb a flurry of requests when net22.cc is 522-ing.
+const EMPTY_TTL_MS = 5 * 60 * 1000;
+
+// Per-axios-call timeout. NetMirror's search/post/episodes live on net22.cc
+// which regularly 522s (~20s) — without a timeout every stream request blocks ~120s.
+const REQ_TIMEOUT_MS = 5000;
+// bypass() / play.php legs are slower on net52.cc, give them more headroom
+const PLAY_TIMEOUT_MS = 8000;
+
+// Module-level circuit breaker. When the backend is throwing network errors
+// (timeout / 5xx) repeatedly, skip the whole scraper instead of waiting on
+// every single request. Resets as soon as any call succeeds.
+const CIRCUIT_THRESHOLD = 3;
+const CIRCUIT_COOLDOWN_MS = 5 * 60 * 1000;
+let consecutiveBackendFailures = 0;
+let backendDownUntil = 0;
+
+function isBackendFailure(err: any): boolean {
+  const code = err?.code || '';
+  const status = err?.response?.status ?? 0;
+  return (
+    code === 'ECONNABORTED' ||
+    code === 'ETIMEDOUT' ||
+    code === 'ECONNRESET' ||
+    code === 'ENOTFOUND' ||
+    status >= 500
+  );
+}
+
+function recordBackendFailure(): void {
+  consecutiveBackendFailures++;
+  if (consecutiveBackendFailures === CIRCUIT_THRESHOLD) {
+    backendDownUntil = Date.now() + CIRCUIT_COOLDOWN_MS;
+    console.log(
+      `[Netmirror] Circuit breaker tripped after ${CIRCUIT_THRESHOLD} consecutive backend failures — skipping for ${CIRCUIT_COOLDOWN_MS / 60000}min`
+    );
+  }
+}
+
+function recordBackendSuccess(): void {
+  if (consecutiveBackendFailures > 0 || backendDownUntil > 0) {
+    console.log('[Netmirror] Backend recovered, circuit closed');
+  }
+  consecutiveBackendFailures = 0;
+  backendDownUntil = 0;
+}
+
+function isCircuitOpen(): boolean {
+  return Date.now() < backendDownUntil;
+}
 
 const NETMIRROR_BASE = 'https://net22.cc';
 const NETMIRROR_PLAY = 'https://net52.cc';
@@ -63,13 +114,17 @@ async function bypass(): Promise<string | null> {
     return cachedCookie;
   }
 
-  for (let attempt = 0; attempt < 5; attempt++) {
+  for (let attempt = 0; attempt < 3; attempt++) {
     try {
-      const response = await axios.post(`${NETMIRROR_PLAY}/tv/p.php`, null, {
+      // The auth endpoint moved from net52.cc/tv/p.php to net22.cc/p.php
+      // around 2026-04-27 (the same outage window where net22 came back).
+      // The cookie name also changed from `t_hash_t` to `t_hash`.
+      const response = await axios.post(`${NETMIRROR_BASE}/p.php`, null, {
         headers: {
           'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
           'Accept': 'application/json, text/plain, */*',
         },
+        timeout: PLAY_TIMEOUT_MS,
       });
 
       const text = typeof response.data === 'string' ? response.data : JSON.stringify(response.data);
@@ -77,16 +132,24 @@ async function bypass(): Promise<string | null> {
 
       const setCookie = response.headers['set-cookie'];
       const cookieStr = Array.isArray(setCookie) ? setCookie.join('; ') : (setCookie || '');
-      const match = cookieStr.match(/t_hash_t=([^;,\s]+)/);
+      // Match `t_hash=` but not `t_hash_t=` (legacy name) — anchor with a leading
+      // boundary so we don't catch a substring of the old name if it ever returns.
+      const match = cookieStr.match(/(?:^|[;,\s])t_hash=([^;,\s]+)/);
 
       if (match?.[1]) {
         cachedCookie = match[1];
         cookieTimestamp = Date.now();
+        // recordBackendSuccess() here is now correct: auth lives on net22.cc
+        // (the search/post API host), so a successful auth proves the backend
+        // is reachable. Closing the breaker after auth lets the rest of the
+        // request actually hit search/post instead of being short-circuited.
+        recordBackendSuccess();
         console.log('[Netmirror] Auth successful');
         return cachedCookie;
       }
-    } catch (e) {
-      console.log(`[Netmirror] Bypass attempt ${attempt + 1} failed`);
+    } catch (e: any) {
+      if (isBackendFailure(e)) recordBackendFailure();
+      console.log(`[Netmirror] Bypass attempt ${attempt + 1} failed: ${e.message}`);
     }
   }
   return null;
@@ -97,7 +160,7 @@ function buildHeaders(cookie: string, ott: string): Record<string, string> {
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
     'Accept': 'application/json, text/plain, */*',
     'X-Requested-With': 'XMLHttpRequest',
-    'Cookie': `t_hash_t=${cookie}; user_token=233123f803cf02184bf6c67e149cdd50; hd=on; ott=${ott}`,
+    'Cookie': `t_hash=${cookie}; user_token=233123f803cf02184bf6c67e149cdd50; hd=on; ott=${ott}`,
     'Referer': `${NETMIRROR_BASE}/tv/home`,
   };
 }
@@ -132,9 +195,13 @@ async function searchPlatform(
   const headers = buildHeaders(cookie, config.ott);
 
   const doSearch = async (query: string) => {
+    // Once the breaker trips mid-request, short-circuit remaining searches
+    // instead of paying 5s per dead call for the other platforms.
+    if (isCircuitOpen()) return null;
     try {
       const url = `${config.searchEndpoint}?s=${encodeURIComponent(query)}&t=${Math.floor(Date.now() / 1000)}`;
-      const { data } = await axios.get(url, { headers });
+      const { data } = await axios.get(url, { headers, timeout: REQ_TIMEOUT_MS });
+      recordBackendSuccess();
 
       const results = (data.searchResult || [])
         .map((item: { id: string; t: string }) => ({
@@ -146,7 +213,8 @@ async function searchPlatform(
         .sort((a: { score: number }, b: { score: number }) => b.score - a.score);
 
       return results.length > 0 ? { id: results[0].id, title: results[0].title } : null;
-    } catch {
+    } catch (e: any) {
+      if (isBackendFailure(e)) recordBackendFailure();
       return null;
     }
   };
@@ -179,7 +247,8 @@ async function loadContent(platform: Platform, contentId: string, cookie: string
   const url = `${config.postEndpoint}?id=${contentId}&t=${Math.floor(Date.now() / 1000)}`;
 
   try {
-    const { data } = await axios.get(url, { headers });
+    const { data } = await axios.get(url, { headers, timeout: REQ_TIMEOUT_MS });
+    recordBackendSuccess();
     return {
       episodes: (data.episodes || []).filter(Boolean),
       seasons: data.season || [],
@@ -187,7 +256,8 @@ async function loadContent(platform: Platform, contentId: string, cookie: string
       nextPageShow: data.nextPageShow,
       nextPageSeason: data.nextPageSeason,
     };
-  } catch {
+  } catch (e: any) {
+    if (isBackendFailure(e)) recordBackendFailure();
     return null;
   }
 }
@@ -228,14 +298,16 @@ async function fetchEpisodes(
   while (true) {
     try {
       const url = `${config.episodesEndpoint}?s=${seasonId}&series=${contentId}&t=${Math.floor(Date.now() / 1000)}&page=${page}`;
-      const { data } = await axios.get(url, { headers });
+      const { data } = await axios.get(url, { headers, timeout: REQ_TIMEOUT_MS });
+      recordBackendSuccess();
 
       if (data.episodes) {
         collected.push(...data.episodes.filter(Boolean));
       }
       if (data.nextPageShow === 0) break;
       page++;
-    } catch {
+    } catch (e: any) {
+      if (isBackendFailure(e)) recordBackendFailure();
       break;
     }
   }
@@ -276,7 +348,11 @@ export async function getStreams(
     key,
     STREAMS_TTL_MS,
     () => fetchNetmirrorStreams(title, year, season, episode),
-    { scope: 'netmirror', shouldCache: r => r.length > 0 }
+    {
+      scope: 'netmirror',
+      shouldCache: r => r.length > 0,
+      negativeTtlMs: EMPTY_TTL_MS,
+    }
   );
 }
 
@@ -286,6 +362,11 @@ async function fetchNetmirrorStreams(
   season?: number,
   episode?: number
 ): Promise<StreamResult[]> {
+  if (isCircuitOpen()) {
+    console.log('[Netmirror] Circuit breaker open, skipping');
+    return [];
+  }
+
   const cookie = await bypass();
   if (!cookie) {
     console.log('[Netmirror] Auth failed');
@@ -425,6 +506,15 @@ async function verifyHlsUrl(url: string, platform: string): Promise<boolean> {
       return false;
     }
 
+    // Guest-mode placeholder: NetMirror points all unauthenticated viewers'
+    // video variants at /files/220884/ ("Only Valid Users Allowed" when fetched).
+    // Audio still serves OK from the real CDN, hence the "white screen + sound"
+    // symptom. Reject these so they don't appear as broken streams in Stremio.
+    if (/\/files\/220884\//.test(manifest)) {
+      console.log(`[Netmirror] ${platform} returned guest-mode placeholder (account required), rejecting`);
+      return false;
+    }
+
     if (hasVideoVariants || hasVideoSegments) {
       console.log(`[Netmirror] ${platform} manifest verified OK`);
       return true;
@@ -444,14 +534,20 @@ export async function getStreamUrl(
   contentId: string,
   quality: string
 ): Promise<string | null> {
+  if (isCircuitOpen()) return null;
+
   const cookie = await bypass();
   if (!cookie) return null;
 
   const config = PLATFORMS[platform];
-  const jar = `t_hash_t=${cookie}; ott=${config.ott}; hd=on`;
+  const jar = `t_hash=${cookie}; ott=${config.ott}; hd=on`;
 
   try {
-    // Step 1: POST play.php
+    // Step 1: POST play.php on net22.cc — returns the playlist token directly.
+    // The previous flow had an intermediate GET play.php on net52.cc that
+    // returned HTML containing data-h="<token>"; that endpoint now 403s with
+    // err: 1003. The h returned here is now the final token usable on
+    // playlist.php straight away.
     const playResp = await axios.post(`${NETMIRROR_BASE}/play.php`, `id=${contentId}`, {
       headers: {
         'Content-Type': 'application/x-www-form-urlencoded',
@@ -460,24 +556,12 @@ export async function getStreamUrl(
         'Cookie': jar,
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
       },
+      timeout: PLAY_TIMEOUT_MS,
     });
-    const h = playResp.data.h;
+    const token: string | undefined = playResp.data?.h;
+    if (!token) return null;
 
-    // Step 2: GET play.php on PLAY domain
-    const htmlResp = await axios.get(`${NETMIRROR_PLAY}/play.php?id=${contentId}&${h}`, {
-      headers: {
-        'Accept': 'text/html,*/*',
-        'Referer': `${NETMIRROR_BASE}/`,
-        'Cookie': jar,
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-      },
-    });
-
-    const tokenMatch = htmlResp.data.match(/data-h="([^"]+)"/);
-    if (!tokenMatch) return null;
-    const token = tokenMatch[1];
-
-    // Step 3: Get playlist
+    // Step 2: Get playlist
     const playlistUrl = `${config.playlistEndpoint}?id=${contentId}&t=stream&tm=${Math.floor(Date.now() / 1000)}&h=${encodeURIComponent(token)}`;
     const playlistResp = await axios.get(playlistUrl, {
       headers: {
@@ -486,7 +570,9 @@ export async function getStreamUrl(
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
         'Accept': 'application/json, text/plain, */*',
       },
+      timeout: PLAY_TIMEOUT_MS,
     });
+    recordBackendSuccess();
 
     const playlist = playlistResp.data;
     if (!Array.isArray(playlist) || playlist.length === 0) return null;
@@ -541,8 +627,9 @@ export async function getStreamUrl(
 
     console.log(`[Netmirror] No URL found for ${platform}`);
     return null;
-  } catch (e) {
-    console.log('[Netmirror] Error getting stream URL:', e);
+  } catch (e: any) {
+    if (isBackendFailure(e)) recordBackendFailure();
+    console.log('[Netmirror] Error getting stream URL:', e?.message || e);
     return null;
   }
 }
