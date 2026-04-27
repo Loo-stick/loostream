@@ -72,6 +72,9 @@ export function del(key: string): void {
 export interface CachedOptions<T> {
   scope?: string;
   shouldCache?: (value: T) => boolean;
+  // When shouldCache returns false, cache under this (usually shorter) TTL anyway.
+  // Useful to avoid re-hitting dead upstreams for every empty result.
+  negativeTtlMs?: number;
 }
 
 export async function cached<T>(
@@ -87,6 +90,8 @@ export async function cached<T>(
   const shouldCache = opts?.shouldCache ?? (() => true);
   if (shouldCache(value)) {
     set(key, value, ttlMs, opts?.scope);
+  } else if (opts?.negativeTtlMs) {
+    set(key, value, opts.negativeTtlMs, opts?.scope);
   }
   return value;
 }
