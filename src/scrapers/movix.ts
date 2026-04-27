@@ -273,35 +273,45 @@ async function fetchMovixStreams(
     return streams;
   }
 
-  console.log(`[Movix] ${allEmbeds.length} supported embed(s) to extract`);
+  // Dedupe on server+language BEFORE extraction so parallel calls don't race
+  // on the same combo — we'd otherwise waste requests on duplicates.
+  const seen = new Set<string>();
+  const dedupedEmbeds = allEmbeds.filter(link => {
+    const k = `${link.server}-${link.language}`;
+    if (seen.has(k)) return false;
+    seen.add(k);
+    return true;
+  }).slice(0, 8);
 
-  const processedServers = new Set<string>();
+  console.log(`[Movix] Extracting ${dedupedEmbeds.length} embed(s) in parallel`);
 
-  for (const link of allEmbeds.slice(0, 8)) {
-    // Skip if we already have a stream from this server+language combo
-    const key = `${link.server}-${link.language}`;
-    if (processedServers.has(key)) continue;
-
-    try {
-      const extracted = await extractStream(link.url, extractorConfig);
-
-      if (extracted) {
-        processedServers.add(key);
-        streams.push({
-          name: 'Movix',
-          title: `${link.language} - ${link.server}`,
-          url: extracted.url,
-          quality: extracted.quality,
-          language: link.language,
-          format: extracted.format === 'hls' ? 'm3u8' : 'mp4',
-          headers: extracted.headers,
-          server: link.server,
-        });
-        console.log(`[Movix] Extracted ${link.server} (${link.language}): ${extracted.format}`);
+  const extracted = await Promise.all(
+    dedupedEmbeds.map(async link => {
+      try {
+        const r = await extractStream(link.url, extractorConfig);
+        if (r) {
+          console.log(`[Movix] Extracted ${link.server} (${link.language}): ${r.format}`);
+          return { link, r };
+        }
+      } catch (e: any) {
+        console.log(`[Movix] Failed to extract ${link.server}:`, e.message);
       }
-    } catch (e: any) {
-      console.log(`[Movix] Failed to extract ${link.server}:`, e.message);
-    }
+      return null;
+    })
+  );
+
+  for (const item of extracted) {
+    if (!item) continue;
+    streams.push({
+      name: 'Movix',
+      title: `${item.link.language} - ${item.link.server}`,
+      url: item.r.url,
+      quality: item.r.quality,
+      language: item.link.language,
+      format: item.r.format === 'hls' ? 'm3u8' : 'mp4',
+      headers: item.r.headers,
+      server: item.link.server,
+    });
   }
 
   console.log(`[Movix] Total: ${streams.length} stream(s) extracted`);

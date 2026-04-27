@@ -277,24 +277,29 @@ async function fetchFaklumStreams(
     const token = await getSessionToken();
     if (!token) return [];
 
+    const extracted = await Promise.all(
+      matches.map(async film => {
+        const iframeUrl = await getIframeUrl(token, film.linkId);
+        if (!iframeUrl) return null;
+        const r = await extractStream(iframeUrl, extractorConfig);
+        if (!r) {
+          console.log(`[Faklum] Extraction failed for ${film.title} (iframe: ${iframeUrl})`);
+          return null;
+        }
+        return { film, r };
+      })
+    );
+
     const streams: FaklumStream[] = [];
-    for (const film of matches) {
-      const iframeUrl = await getIframeUrl(token, film.linkId);
-      if (!iframeUrl) continue;
-
-      const extracted = await extractStream(iframeUrl, extractorConfig);
-      if (!extracted) {
-        console.log(`[Faklum] Extraction failed for ${film.title} (iframe: ${iframeUrl})`);
-        continue;
-      }
-
+    for (const item of extracted) {
+      if (!item) continue;
       streams.push({
         name: 'Faklum',
-        title: film.title,
-        url: extracted.url,
-        quality: film.hd ? 'HD' : 'SD',
-        language: film.vostfr ? 'VOSTFR' : 'VF',
-        headers: extracted.headers,
+        title: item.film.title,
+        url: item.r.url,
+        quality: item.film.hd ? 'HD' : 'SD',
+        language: item.film.vostfr ? 'VOSTFR' : 'VF',
+        headers: item.r.headers,
       });
     }
 
