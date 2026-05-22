@@ -48,6 +48,71 @@ const STREAMWISH_DOMAINS = ['streamwish', 'hgcloud', 'awish', 'embedwish', 'strw
 
 type ExtractorId = 'voe' | 'uqload' | 'doodstream' | 'filemoon' | 'vidoza' | 'vidmoly' | 'streamtape' | 'mixdrop' | 'sharecloudy' | 'lulustream' | 'filelions' | 'streamwish';
 
+export const EXTRACTOR_IDS: ExtractorId[] = [
+  'voe', 'uqload', 'doodstream', 'filemoon', 'vidoza', 'vidmoly',
+  'streamtape', 'mixdrop', 'sharecloudy', 'lulustream', 'filelions',
+  'streamwish',
+];
+
+export const DEFAULT_EXTRACTOR_DOMAINS: Record<ExtractorId, string[]> = {
+  voe: [
+    'voe', 'voe.sx', 'vidara.so', 'vidara.to', 'smoki.cc', 'kinoger.ru',
+    'ralphysuccessfull', 'audaciousdefaulthouse', 'launchreliantcleaverriver',
+    'reputationsheriffkennethsand', 'greaseball6eventual20', 'timberwoodanotia',
+    'yodelswartlike', 'figeterpiazine', 'chromotypic', 'wolfdyslectic',
+    'charlestoughrace',
+  ],
+  uqload: ['uqload'],
+  doodstream: ['dood', 'doodstream', 'dsvplay', 'd0o0d', 'dooood', 'd0000d', 'ds2play', 'dood.re'],
+  filemoon: ['filemoon', 'filmoon', 'moonlink', 'bysebuho', 'moonplayer'],
+  vidoza: ['vidoza'],
+  vidmoly: ['vidmoly', 'molystream', 'vidhide'],
+  streamtape: ['streamtape', 'strcloud', 'shavetape', 'tapewithadblock'],
+  mixdrop: ['mixdrop', 'mdrop', 'mdy48tn97'],
+  sharecloudy: ['sharecloudy', 'moovbob', 'moovtop'],
+  lulustream: ['luluvdo', 'lulustream', 'lulu.st'],
+  filelions: ['filelions', 'minochinos', 'javplaya', 'lionshare'],
+  streamwish: ['streamwish', 'hgcloud', 'awish', 'embedwish', 'strwish'],
+};
+
+/**
+ * Fusionne un JSON parsé (ou n'importe quelle valeur) avec les défauts.
+ * Par clé : le tableau du JSON est utilisé s'il est un tableau de strings,
+ * sinon le défaut. Entrée non-objet => tous les défauts.
+ */
+export function mergeExtractorDomains(parsed: unknown): Record<ExtractorId, string[]> {
+  const obj = (parsed && typeof parsed === 'object' && !Array.isArray(parsed))
+    ? parsed as Record<string, unknown>
+    : {};
+  const result = {} as Record<ExtractorId, string[]>;
+  for (const id of EXTRACTOR_IDS) {
+    const val = obj[id];
+    if (Array.isArray(val) && val.every(v => typeof v === 'string')) {
+      result[id] = val as string[];
+    } else {
+      result[id] = DEFAULT_EXTRACTOR_DOMAINS[id];
+    }
+  }
+  return result;
+}
+
+/** Détection pure : teste un hostname contre un jeu de domaines fourni. */
+export function detectExtractorIn(
+  url: string,
+  domains: Record<ExtractorId, string[]>,
+): ExtractorId | null {
+  let hostname: string;
+  try {
+    hostname = new URL(url).hostname.toLowerCase();
+  } catch {
+    return null;
+  }
+  for (const id of EXTRACTOR_IDS) {
+    if (domains[id].some(d => hostname.includes(d))) return id;
+  }
+  return null;
+}
+
 /**
  * Detect which extractor to use based on URL.
  * Returns an ID accepted both by our local fallback and MediaFlow's /extractor/video host param.
