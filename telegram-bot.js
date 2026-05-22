@@ -11,6 +11,12 @@ dns.setDefaultResultOrder('ipv4first');
 const TELEGRAM_CONFIG_PATH = process.env.TELEGRAM_CONFIG || './config/telegram.json';
 const DOMAINS_CONFIG_PATH = process.env.DOMAINS_CONFIG || './config/allowed-domains.json';
 const MOVIX_ENDPOINTS_PATH = process.env.MOVIX_ENDPOINTS_CONFIG || './config/movix-endpoints.json';
+const EXTRACTOR_DOMAINS_PATH = process.env.EXTRACTOR_DOMAINS_CONFIG || './config/extractor-domains.json';
+const {
+  deduceExtractor,
+  parseUnrecognizedHostLine,
+  addDomainToExtractorConfig,
+} = require('./telegram-bot-domains');
 const LOOSTREAM_CONTAINER = process.env.LOOSTREAM_CONTAINER || 'loostream';
 const MOVIX_CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000; // 6h
 
@@ -430,6 +436,45 @@ async function addDomainToWhitelist(domain) {
 // Handle Telegram callback queries (button clicks)
 async function handleCallbackQuery(query) {
   const { id, data, message } = query;
+
+  // Domaines d'extracteurs rotés
+  if (data.startsWith('xadd:')) {
+    const rest = data.slice(5);
+    const sep = rest.indexOf(':');
+    const extractor = rest.slice(0, sep);
+    const xdomain = rest.slice(sep + 1);
+    const ok = addExtractorDomain(extractor, xdomain);
+    await telegramRequest('answerCallbackQuery', {
+      callback_query_id: id,
+      text: ok
+        ? `✅ ${xdomain} ajouté à ${extractor}`
+        : `ℹ️ ${xdomain} déjà présent`,
+    });
+    await telegramRequest('editMessageText', {
+      chat_id: message.chat.id,
+      message_id: message.message_id,
+      text: ok
+        ? `✅ <code>${xdomain}</code> ajouté à <b>${extractor}</b> (rechargé)`
+        : `ℹ️ <code>${xdomain}</code> était déjà dans <b>${extractor}</b>`,
+      parse_mode: 'HTML',
+    });
+    return;
+  }
+  if (data.startsWith('xign:')) {
+    const xdomain = data.slice(5);
+    await telegramRequest('answerCallbackQuery', {
+      callback_query_id: id,
+      text: `🔇 ${xdomain} ignoré`,
+    });
+    await telegramRequest('editMessageText', {
+      chat_id: message.chat.id,
+      message_id: message.message_id,
+      text: `🔇 <code>${xdomain}</code> ignoré`,
+      parse_mode: 'HTML',
+    });
+    return;
+  }
+
   const [action, domain] = data.split(':');
 
   let responseText = '';
@@ -544,6 +589,68 @@ async function pollUpdates() {
   setTimeout(pollUpdates, 1000);
 }
 
+// --- Domaines d'extracteurs rotés ---
+
+function triggerExtractorDomainsReload() {
+  const req = http.get('http://loostream:7002/api/extractor-domains?reload=true', (res) => {
+    res.resume();
+    console.log(`[ExtractorDomains] Reload déclenché (HTTP ${res.statusCode})`);
+  });
+  req.on('error', (e) => console.error('[ExtractorDomains] Reload échoué:', e.message));
+  req.setTimeout(5000, () => req.destroy());
+}
+
+function addExtractorDomain(extractor, domain) {
+  let raw = {};
+  try {
+    if (fs.existsSync(EXTRACTOR_DOMAINS_PATH)) {
+      raw = JSON.parse(fs.readFileSync(EXTRACTOR_DOMAINS_PATH, 'utf-8'));
+    }
+  } catch (e) {
+    console.error('[ExtractorDomains] Lecture/parse échoué, abandon:', e.message);
+    return false;
+  }
+  const { config, added } = addDomainToExtractorConfig(raw, extractor, domain);
+  if (added) {
+    fs.writeFileSync(EXTRACTOR_DOMAINS_PATH, JSON.stringify(config, null, 2));
+    console.log(`[ExtractorDomains] ${domain} ajouté à ${extractor}`);
+    triggerExtractorDomainsReload();
+  }
+  return added;
+}
+
+function handleUnrecognizedHost(info) {
+  const alertKey = `xdom:${info.host}`;
+  if (sentAlerts.has(alertKey)) return;
+  const extractor = deduceExtractor(info.server);
+  if (!extractor) return; // label inconnu/générique => silencieux
+  sentAlerts.add(alertKey);
+  setTimeout(() => sentAlerts.delete(alertKey), ALERT_COOLDOWN);
+  sendExtractorDomainAlert(info.host, info.server, info.title, extractor);
+}
+
+async function sendExtractorDomainAlert(host, server, title, extractor) {
+  let message = `⚠️ <b>Domaine d'extracteur inconnu</b>\n\n` +
+    `<code>${host}</code>\n` +
+    `serveur : « ${server} »`;
+  if (title) message += `  —  film : ${title}`;
+  const buttons = [
+    [{ text: `➕ Ajouter à ${extractor}`, callback_data: `xadd:${extractor}:${host}` }],
+    [{ text: '❌ Ignorer', callback_data: `xign:${host}` }],
+  ];
+  try {
+    await telegramRequest('sendMessage', {
+      chat_id: CHAT_ID,
+      text: message,
+      parse_mode: 'HTML',
+      reply_markup: { inline_keyboard: buttons },
+    });
+    console.log(`[ExtractorDomains] Alerte envoyée: ${host} -> ${extractor}`);
+  } catch (e) {
+    console.error('[ExtractorDomains] Envoi alerte échoué:', e.message);
+  }
+}
+
 // Monitor Docker logs
 function monitorLogs() {
   console.log(`[Monitor] Watching logs for container: ${LOOSTREAM_CONTAINER}`);
@@ -559,6 +666,10 @@ function monitorLogs() {
         const [, domain, url] = match;
         sendDomainAlert(domain, url);
       }
+      const unrec = parseUnrecognizedHostLine(line);
+      if (unrec) {
+        handleUnrecognizedHost(unrec);
+      }
     }
   });
 
@@ -569,6 +680,10 @@ function monitorLogs() {
       if (match) {
         const [, domain, url] = match;
         sendDomainAlert(domain, url);
+      }
+      const unrec = parseUnrecognizedHostLine(line);
+      if (unrec) {
+        handleUnrecognizedHost(unrec);
       }
     }
   });

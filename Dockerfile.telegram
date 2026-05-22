@@ -5,6 +5,6 @@ RUN apk add --no-cache docker-cli
 
 WORKDIR /app
 
-COPY telegram-bot.js .
+COPY telegram-bot.js telegram-bot-domains.js ./
 
 CMD ["node", "telegram-bot.js"]
