@@ -11,7 +11,7 @@ import { cached, getCacheStats } from './cache';
 import { recordOutcome, getAllMetrics } from './metrics';
 import crypto from 'crypto';
 import proxyRouter, { isAllowedUrl } from './proxy';
-import { ExtractorConfig } from './extractors';
+import { ExtractorConfig, reloadExtractorDomains, getExtractorDomains } from './extractors';
 
 const app = express();
 
@@ -942,6 +942,13 @@ app.get('/api/movix/endpoints', (req, res) => {
 app.get('/api/flemmix/endpoints', (req, res) => {
   const reload = req.query.reload === 'true';
   const current = reload ? reloadFlemmixEndpoints() : getFlemmixEndpoints();
+  res.json({ ...current, reloaded: reload });
+});
+
+// Extractor domains admin (read + reload)
+app.get('/api/extractor-domains', (req, res) => {
+  const reload = req.query.reload === 'true';
+  const current = reload ? reloadExtractorDomains() : getExtractorDomains();
   res.json({ ...current, reloaded: reload });
 });
 

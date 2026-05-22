@@ -263,10 +263,19 @@ async function fetchMovixStreams(
 
   const streams: MovixStream[] = [...purstreamResults];
 
-  // Merge embed links, keep only those our extractor supports (Voe/Uqload)
-  const allEmbeds = [...cpasmalLinks, ...fstreamLinks].filter(link => {
+  // Merge embed links, keep only those our extractor supports.
+  const combinedEmbeds = [...cpasmalLinks, ...fstreamLinks];
+  const allEmbeds = combinedEmbeds.filter(link => {
     try { return detectExtractor(link.url) !== null; } catch { return false; }
   });
+
+  // Embeds rejetés : signale chaque hôte non reconnu (le bot Telegram grep ça).
+  // movix ne résout pas de titre humain ici => title vide.
+  for (const link of combinedEmbeds.filter(l => !allEmbeds.includes(l))) {
+    let host = link.url;
+    try { host = new URL(link.url).hostname; } catch { /* garde l'URL brute */ }
+    console.log(`[Movix] Unrecognized host: ${host} (server="${link.server}", title="")`);
+  }
 
   if (allEmbeds.length === 0) {
     console.log(`[Movix] No supported embeds to extract`);

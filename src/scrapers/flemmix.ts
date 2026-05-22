@@ -419,6 +419,13 @@ async function fetchFlemmixStreams(
     });
     console.log(`[Flemmix] ${embeds.length} embeds, ${supported.length} supported: ${supported.map(e => e.server).join(', ')}`);
 
+    // Embeds rejetés : signale chaque hôte non reconnu (le bot Telegram grep ça).
+    for (const e of embeds.filter(e => !supported.includes(e))) {
+      let host = e.url;
+      try { host = new URL(e.url).hostname; } catch { /* garde l'URL brute */ }
+      console.log(`[Flemmix] Unrecognized host: ${host} (server="${e.server}", title="${frTitle}")`);
+    }
+
     // Dedupe per server BEFORE extraction to avoid wasting parallel calls on
     // the same server (we'd only keep one anyway).
     const seen = new Set<string>();
