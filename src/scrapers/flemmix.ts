@@ -427,13 +427,17 @@ async function fetchFlemmixStreams(
     }
 
     // Dedupe per server BEFORE extraction to avoid wasting parallel calls on
-    // the same server (we'd only keep one anyway).
+    // the same server (we'd only keep one anyway). VOSTFR embeds are listed
+    // last on the page, so keep them at the front — the cap must never drop them.
     const seen = new Set<string>();
-    const dedupedEmbeds = supported.filter(embed => {
-      if (seen.has(embed.server)) return false;
-      seen.add(embed.server);
-      return true;
-    }).slice(0, 6);
+    const dedupedEmbeds = supported
+      .filter(embed => {
+        if (seen.has(embed.server)) return false;
+        seen.add(embed.server);
+        return true;
+      })
+      .sort((a, b) => (/vostfr/i.test(a.server) ? 0 : 1) - (/vostfr/i.test(b.server) ? 0 : 1))
+      .slice(0, 12);
 
     const extracted = await Promise.all(
       dedupedEmbeds.map(async embed => {
