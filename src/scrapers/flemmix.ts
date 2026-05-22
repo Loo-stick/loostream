@@ -459,7 +459,7 @@ async function fetchFlemmixStreams(
         title: best.title,
         url: item.r.url,
         quality: item.r.quality || 'HD',
-        language: best.language,
+        language: /vostfr/i.test(item.embed.server) ? 'VOSTFR' : best.language,
         server: item.embed.server.toLowerCase(),
         headers: item.r.headers,
       });
