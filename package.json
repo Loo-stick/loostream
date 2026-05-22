@@ -6,7 +6,8 @@
   "scripts": {
     "build": "tsc && node -e \"['configure.html','admin.html','login.html'].forEach(f=>require('fs').copyFileSync('src/'+f,'dist/'+f))\"",
     "start": "node dist/index.js",
-    "dev": "ts-node src/index.ts"
+    "dev": "ts-node src/index.ts",
+    "test": "node --import tsx --test \"src/**/*.test.ts\" \"*.test.js\""
   },
   "dependencies": {
     "axios": "^1.6.0",
@@ -20,6 +21,7 @@
     "@types/express": "^4.17.21",
     "@types/node": "^20.10.0",
     "ts-node": "^10.9.2",
+    "tsx": "^4.22.3",
     "typescript": "^5.3.0"
   }
 }
