@@ -1,4 +1,6 @@
 import axios from 'axios';
+import * as fs from 'fs';
+import * as path from 'path';
 
 const HEADERS = {
   'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
@@ -18,35 +20,7 @@ export interface ExtractorConfig {
   mediaFlowPassword?: string;
 }
 
-// Voe domains (they rotate frequently)
-const VOE_DOMAINS = [
-  'voe', 'voe.sx', 'vidara.so', 'vidara.to', 'smoki.cc', 'kinoger.ru',
-  'ralphysuccessfull', 'audaciousdefaulthouse', 'launchreliantcleaverriver',
-  'reputationsheriffkennethsand', 'greaseball6eventual20', 'timberwoodanotia',
-  'yodelswartlike', 'figeterpiazine', 'chromotypic', 'wolfdyslectic',
-  'charlestoughrace',
-];
-
-// Doodstream rotates between many TLDs and clone domains
-const DOOD_DOMAINS = [
-  'dood', 'doodstream', 'dsvplay', 'd0o0d', 'dooood', 'd0000d', 'ds2play', 'dood.re',
-];
-
-const FILEMOON_DOMAINS = [
-  'filemoon', 'filmoon', 'moonlink', 'bysebuho', 'moonplayer',
-];
-
-const VIDOZA_DOMAINS = ['vidoza'];
-const VIDMOLY_DOMAINS = ['vidmoly', 'molystream', 'vidhide'];
-const STREAMTAPE_DOMAINS = ['streamtape', 'strcloud', 'shavetape', 'tapewithadblock'];
-const MIXDROP_DOMAINS = ['mixdrop', 'mdrop', 'mdy48tn97'];
-// sharecloudy.com / moovbob.fr / moovtop.fr are the same infra (same player format)
-const SHARECLOUDY_DOMAINS = ['sharecloudy', 'moovbob', 'moovtop'];
-const LULUSTREAM_DOMAINS = ['luluvdo', 'lulustream', 'lulu.st'];
-const FILELIONS_DOMAINS = ['filelions', 'minochinos', 'javplaya', 'lionshare'];
-const STREAMWISH_DOMAINS = ['streamwish', 'hgcloud', 'awish', 'embedwish', 'strwish'];
-
-type ExtractorId = 'voe' | 'uqload' | 'doodstream' | 'filemoon' | 'vidoza' | 'vidmoly' | 'streamtape' | 'mixdrop' | 'sharecloudy' | 'lulustream' | 'filelions' | 'streamwish';
+type ExtractorId ='voe' | 'uqload' | 'doodstream' | 'filemoon' | 'vidoza' | 'vidmoly' | 'streamtape' | 'mixdrop' | 'sharecloudy' | 'lulustream' | 'filelions' | 'streamwish';
 
 export const EXTRACTOR_IDS: ExtractorId[] = [
   'voe', 'uqload', 'doodstream', 'filemoon', 'vidoza', 'vidmoly',
@@ -113,27 +87,61 @@ export function detectExtractorIn(
   return null;
 }
 
+const EXTRACTOR_DOMAINS_PATH = process.env.EXTRACTOR_DOMAINS_CONFIG ||
+  (fs.existsSync('/app/config/extractor-domains.json')
+    ? '/app/config/extractor-domains.json'
+    : path.join(process.cwd(), 'config', 'extractor-domains.json'));
+
+let currentDomains: Record<ExtractorId, string[]> = { ...DEFAULT_EXTRACTOR_DOMAINS };
+
+/** Charge les domaines depuis le JSON (fallback défauts). Met à jour l'état module. */
+export function loadExtractorDomains(
+  filePath: string = EXTRACTOR_DOMAINS_PATH,
+): Record<ExtractorId, string[]> {
+  try {
+    if (fs.existsSync(filePath)) {
+      const raw = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
+      currentDomains = mergeExtractorDomains(raw);
+      console.log(`[ExtractorDomains] Loaded from ${filePath}`);
+      return currentDomains;
+    }
+    console.log(`[ExtractorDomains] File not found, using defaults: ${filePath}`);
+  } catch (e: any) {
+    console.error(`[ExtractorDomains] Error loading, using defaults: ${e.message}`);
+  }
+  currentDomains = mergeExtractorDomains(null);
+  return currentDomains;
+}
+
+export function getExtractorDomains(): Record<ExtractorId, string[]> {
+  return currentDomains;
+}
+
+export function reloadExtractorDomains(): Record<ExtractorId, string[]> {
+  return loadExtractorDomains();
+}
+
+loadExtractorDomains();
+
+try {
+  if (fs.existsSync(EXTRACTOR_DOMAINS_PATH)) {
+    fs.watch(EXTRACTOR_DOMAINS_PATH, (eventType) => {
+      if (eventType === 'change') {
+        console.log('[ExtractorDomains] File changed, reloading...');
+        setTimeout(() => loadExtractorDomains(), 100);
+      }
+    });
+  }
+} catch {
+  // fs.watch non supporté — le reload reste possible via l'endpoint
+}
+
 /**
- * Detect which extractor to use based on URL.
- * Returns an ID accepted both by our local fallback and MediaFlow's /extractor/video host param.
+ * Detect which extractor to use based on URL, against the live domain set.
+ * Returns an ID accepted both by our local fallback and MediaFlow.
  */
 export function detectExtractor(url: string): ExtractorId | null {
-  const hostname = new URL(url).hostname.toLowerCase();
-
-  if (VOE_DOMAINS.some(d => hostname.includes(d))) return 'voe';
-  if (hostname.includes('uqload')) return 'uqload';
-  if (DOOD_DOMAINS.some(d => hostname.includes(d))) return 'doodstream';
-  if (FILEMOON_DOMAINS.some(d => hostname.includes(d))) return 'filemoon';
-  if (VIDOZA_DOMAINS.some(d => hostname.includes(d))) return 'vidoza';
-  if (VIDMOLY_DOMAINS.some(d => hostname.includes(d))) return 'vidmoly';
-  if (STREAMTAPE_DOMAINS.some(d => hostname.includes(d))) return 'streamtape';
-  if (MIXDROP_DOMAINS.some(d => hostname.includes(d))) return 'mixdrop';
-  if (SHARECLOUDY_DOMAINS.some(d => hostname.includes(d))) return 'sharecloudy';
-  if (LULUSTREAM_DOMAINS.some(d => hostname.includes(d))) return 'lulustream';
-  if (FILELIONS_DOMAINS.some(d => hostname.includes(d))) return 'filelions';
-  if (STREAMWISH_DOMAINS.some(d => hostname.includes(d))) return 'streamwish';
-
-  return null;
+  return detectExtractorIn(url, currentDomains);
 }
 
 /**

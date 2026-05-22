@@ -1,10 +1,16 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as nodePath from 'node:path';
 import {
   DEFAULT_EXTRACTOR_DOMAINS,
   EXTRACTOR_IDS,
   mergeExtractorDomains,
   detectExtractorIn,
+  loadExtractorDomains,
+  getExtractorDomains,
+  detectExtractor,
 } from './index';
 
 test('EXTRACTOR_IDS contient les 12 extracteurs', () => {
@@ -73,4 +79,38 @@ test('detectExtractorIn: respecte un domaine ajouté', () => {
     detectExtractorIn('https://kathyinformationwhether.com/e/x', domains),
     'voe',
   );
+});
+
+function writeFixture(content: string): string {
+  const dir = fs.mkdtempSync(nodePath.join(os.tmpdir(), 'exd-'));
+  const file = nodePath.join(dir, 'extractor-domains.json');
+  fs.writeFileSync(file, content);
+  return file;
+}
+
+test('loadExtractorDomains: lit un fichier valide', () => {
+  const file = writeFixture(JSON.stringify({ voe: ['fixture-voe.test'] }));
+  loadExtractorDomains(file);
+  assert.deepEqual(getExtractorDomains().voe, ['fixture-voe.test']);
+  assert.deepEqual(getExtractorDomains().uqload, DEFAULT_EXTRACTOR_DOMAINS.uqload);
+});
+
+test('loadExtractorDomains: JSON malformé retombe sur les défauts', () => {
+  const file = writeFixture('{ ceci n est pas du json');
+  loadExtractorDomains(file);
+  assert.deepEqual(getExtractorDomains(), DEFAULT_EXTRACTOR_DOMAINS);
+});
+
+test('loadExtractorDomains: fichier absent retombe sur les défauts', () => {
+  loadExtractorDomains('/chemin/inexistant/extractor-domains.json');
+  assert.deepEqual(getExtractorDomains(), DEFAULT_EXTRACTOR_DOMAINS);
+});
+
+test('detectExtractor: utilise le jeu de domaines chargé', () => {
+  const file = writeFixture(JSON.stringify({
+    ...DEFAULT_EXTRACTOR_DOMAINS,
+    voe: [...DEFAULT_EXTRACTOR_DOMAINS.voe, 'kathyinformationwhether.com'],
+  }));
+  loadExtractorDomains(file);
+  assert.equal(detectExtractor('https://kathyinformationwhether.com/e/x'), 'voe');
 });
