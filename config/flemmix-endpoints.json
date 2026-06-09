@@ -1,0 +1,7 @@
+{
+  "_comment": "Endpoints Flemmix. Domaine mis a jour manuellement (flemmix.wales -> flemmix.win). Hot-reload via GET /api/flemmix/endpoints?reload=true",
+  "base": "https://flemmix.win",
+  "origin": "https://flemmix.win",
+  "referer": "https://flemmix.win/",
+  "lastUpdatedAt": "2026-05-22T18:17:27.000Z"
+}

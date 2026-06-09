@@ -7,11 +7,13 @@ import { getStreamFlixStreams } from './scrapers/streamflix';
 import { getMovixStreams, reloadMovixEndpoints, getMovixEndpoints } from './scrapers/movix';
 import { getFaklumStreams } from './scrapers/faklum';
 import { getFlemmixStreams, reloadFlemmixEndpoints, getFlemmixEndpoints } from './scrapers/flemmix';
+import { getFrenchStreamStreams, reloadFrenchStreamEndpoints, getFrenchStreamEndpoints } from './scrapers/frenchstream';
 import { cached, getCacheStats } from './cache';
 import { recordOutcome, getAllMetrics } from './metrics';
 import crypto from 'crypto';
 import proxyRouter, { isAllowedUrl } from './proxy';
 import { ExtractorConfig, reloadExtractorDomains, getExtractorDomains } from './extractors';
+import { getSceneMeta, buildFilename, providerLabel } from './filename';
 
 const app = express();
 
@@ -34,6 +36,7 @@ interface Stats {
     streamflix: { requests: number; success: number; errors: number; lastSuccess: number | null };
     faklum: { requests: number; success: number; errors: number; lastSuccess: number | null };
     flemmix: { requests: number; success: number; errors: number; lastSuccess: number | null };
+    frenchstream: { requests: number; success: number; errors: number; lastSuccess: number | null };
   };
   streamsServed: {
     movix: number;
@@ -41,6 +44,7 @@ interface Stats {
     streamflix: number;
     faklum: number;
     flemmix: number;
+    frenchstream: number;
   };
 }
 
@@ -53,11 +57,12 @@ const stats: Stats = {
     streamflix: { requests: 0, success: 0, errors: 0, lastSuccess: null },
     faklum: { requests: 0, success: 0, errors: 0, lastSuccess: null },
     flemmix: { requests: 0, success: 0, errors: 0, lastSuccess: null },
+    frenchstream: { requests: 0, success: 0, errors: 0, lastSuccess: null },
   },
-  streamsServed: { movix: 0, netmirror: 0, streamflix: 0, faklum: 0, flemmix: 0 },
+  streamsServed: { movix: 0, netmirror: 0, streamflix: 0, faklum: 0, flemmix: 0, frenchstream: 0 },
 };
 
-function trackSourceResult(source: 'movix' | 'netmirror' | 'streamflix' | 'faklum' | 'flemmix', success: boolean, streamCount: number = 0) {
+function trackSourceResult(source: 'movix' | 'netmirror' | 'streamflix' | 'faklum' | 'flemmix' | 'frenchstream', success: boolean, streamCount: number = 0) {
   stats.sources[source].requests++;
   if (success) {
     stats.sources[source].success++;
@@ -104,7 +109,7 @@ interface StreamWithMeta {
   name: string;
   title: string;
   url: string;
-  behaviorHints: { notWebReady: boolean; bingeGroup: string };
+  behaviorHints: { notWebReady: boolean; bingeGroup: string; filename?: string };
   _meta: {
     quality: string;
     language: string;
@@ -538,7 +543,7 @@ async function handleStream(req: express.Request, res: express.Response, type: s
       mediaFlowPassword: config?.mfPass || DEFAULT_MEDIAFLOW_PASSWORD,
     };
 
-    const [netmirrorResults, streamflixResults, movixResults, faklumResults, flemmixResults] = await Promise.all([
+    const [netmirrorResults, streamflixResults, movixResults, faklumResults, flemmixResults, frenchstreamResults] = await Promise.all([
       getStreams(info.title, info.year, parsed.season, parsed.episode)
         .then(r => { trackSourceResult('netmirror', true, r.length); recordOutcome('netmirror', r.length > 0 ? 'success' : 'empty'); return r; })
         .catch(e => { console.log('[NetMirror] Error:', e); trackSourceResult('netmirror', false); recordOutcome('netmirror', 'error', e?.message); return []; }),
@@ -554,6 +559,9 @@ async function handleStream(req: express.Request, res: express.Response, type: s
       getFlemmixStreams(info.tmdbId, type as 'movie' | 'series', extractorConfig, config?.tmdbKey || DEFAULT_TMDB_KEY, parsed.season, parsed.episode)
         .then(r => { trackSourceResult('flemmix', true, r.length); recordOutcome('flemmix', r.length > 0 ? 'success' : 'empty'); return r; })
         .catch(e => { console.log('[Flemmix] Error:', e); trackSourceResult('flemmix', false); recordOutcome('flemmix', 'error', e?.message); return []; }),
+      getFrenchStreamStreams(info.tmdbId, type as 'movie' | 'series', extractorConfig, config?.tmdbKey || DEFAULT_TMDB_KEY, parsed.season, parsed.episode)
+        .then(r => { trackSourceResult('frenchstream', true, r.length); recordOutcome('frenchstream', r.length > 0 ? 'success' : 'empty'); return r; })
+        .catch(e => { console.log('[FrenchStream] Error:', e); trackSourceResult('frenchstream', false); recordOutcome('frenchstream', 'error', e?.message); return []; }),
     ]);
 
     const streams: StreamWithMeta[] = [];
@@ -738,9 +746,65 @@ async function handleStream(req: express.Request, res: express.Response, type: s
       });
     }
 
+    // Process FrenchStream results
+    for (const fr of frenchstreamResults) {
+      let finalUrl: string;
+
+      const mfUrl = config?.mfUrl || DEFAULT_MEDIAFLOW_URL;
+      const isMediaFlowUrl = mfUrl && fr.url.includes(new URL(mfUrl).hostname);
+
+      if (isMediaFlowUrl) {
+        finalUrl = fr.url;
+      } else {
+        const proxyHeaders: Record<string, string> = {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+          ...fr.headers,
+        };
+        const proxiedUrl = buildProxyUrl(fr.url, proxyHeaders, false, req, config);
+        if (!proxiedUrl) continue;
+        finalUrl = proxiedUrl;
+      }
+
+      streams.push({
+        name: `FrenchStream\n${fr.language}`,
+        title: `${fr.language} [${fr.quality}] • ${fr.server}`,
+        url: finalUrl,
+        behaviorHints: {
+          notWebReady: false,
+          bingeGroup: 'frenchstream',
+        },
+        _meta: {
+          quality: fr.quality,
+          language: fr.language,
+          source: 'frenchstream',
+        },
+      });
+    }
+
     if (streams.length === 0) {
       console.log('[Stream] No streams found');
       return res.json({ streams: [] });
+    }
+
+    // Add scene-style behaviorHints.filename so meta-addons (AIOStreams) can
+    // parse title/year/S-E/resolution/lang. Title comes from Cinemeta (English/
+    // scene) rather than the source site (often FR/translated).
+    const sceneMeta = await getSceneMeta(
+      type === 'series' ? 'series' : 'movie',
+      parsed.baseId,
+      { title: info.title, year: info.year }
+    );
+    for (const s of streams) {
+      s.behaviorHints.filename = buildFilename({
+        title: sceneMeta.title,
+        year: sceneMeta.year,
+        isSeries: type === 'series',
+        season: parsed.season,
+        episode: parsed.episode,
+        lang: s._meta.language,
+        resolution: s._meta.quality,
+        provider: providerLabel(s._meta.source),
+      });
     }
 
     // Apply user preferences (filter + sort)
@@ -942,6 +1006,13 @@ app.get('/api/movix/endpoints', (req, res) => {
 app.get('/api/flemmix/endpoints', (req, res) => {
   const reload = req.query.reload === 'true';
   const current = reload ? reloadFlemmixEndpoints() : getFlemmixEndpoints();
+  res.json({ ...current, reloaded: reload });
+});
+
+// FrenchStream endpoints admin (read + reload)
+app.get('/api/frenchstream/endpoints', (req, res) => {
+  const reload = req.query.reload === 'true';
+  const current = reload ? reloadFrenchStreamEndpoints() : getFrenchStreamEndpoints();
   res.json({ ...current, reloaded: reload });
 });
 

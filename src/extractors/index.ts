@@ -20,7 +20,7 @@ export interface ExtractorConfig {
   mediaFlowPassword?: string;
 }
 
-type ExtractorId ='voe' | 'uqload' | 'doodstream' | 'filemoon' | 'vidoza' | 'vidmoly' | 'streamtape' | 'mixdrop' | 'sharecloudy' | 'lulustream' | 'filelions' | 'streamwish';
+export type ExtractorId ='voe' | 'uqload' | 'doodstream' | 'filemoon' | 'vidoza' | 'vidmoly' | 'streamtape' | 'mixdrop' | 'sharecloudy' | 'lulustream' | 'filelions' | 'streamwish';
 
 export const EXTRACTOR_IDS: ExtractorId[] = [
   'voe', 'uqload', 'doodstream', 'filemoon', 'vidoza', 'vidmoly',
@@ -381,9 +381,13 @@ async function extractLocally(embedUrl: string, extractor: string): Promise<Extr
  */
 export async function extractStream(
   embedUrl: string,
-  config?: ExtractorConfig
+  config?: ExtractorConfig,
+  forceExtractor?: ExtractorId
 ): Promise<ExtractedStream | null> {
-  const extractor = detectExtractor(embedUrl);
+  // Domain-based detection first; fall back to a caller-provided host type when
+  // the source authoritatively knows it (e.g. a provider routes voe/filemoon
+  // through rotating domains the allowlist can't keep up with).
+  const extractor = detectExtractor(embedUrl) || forceExtractor || null;
 
   if (!extractor) {
     console.log(`[Extractor] Unknown embed host: ${new URL(embedUrl).hostname}`);
