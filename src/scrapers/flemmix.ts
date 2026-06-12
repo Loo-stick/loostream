@@ -11,9 +11,9 @@ interface FlemmixEndpoints {
 }
 
 const DEFAULT_ENDPOINTS: FlemmixEndpoints = {
-  base: 'https://flemmix.wales',
-  origin: 'https://flemmix.wales',
-  referer: 'https://flemmix.wales/',
+  base: 'https://flemmix.city',
+  origin: 'https://flemmix.city',
+  referer: 'https://flemmix.city/',
 };
 
 const ENDPOINTS_PATH = process.env.FLEMMIX_ENDPOINTS_CONFIG ||
