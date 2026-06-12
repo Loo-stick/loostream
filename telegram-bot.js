@@ -309,8 +309,12 @@ async function sendHealthMessage() {
   }
 }
 
-// Track source status for alerts
-const lastSourceStatus = { movix: 'up', netmirror: 'up', streamflix: 'up', faklum: 'up' };
+// Track source status for alerts. Flap damping: a new status must persist for
+// CONFIRM_THRESHOLD consecutive checks (5 min each) before we commit it and alert,
+// so a single transient TLS blip on a source no longer spams the chat.
+const CONFIRM_THRESHOLD = 2;
+// source -> { confirmed, pending, count } — null until first check seeds it.
+const sourceState = {};
 const lastScraperMetricsStatus = { movix: 'ok', netmirror: 'ok', streamflix: 'ok', faklum: 'ok' };
 
 const SCRAPER_EMOJI = { ok: '🟢', warning: '🟡', down: '🔴' };
@@ -372,29 +376,40 @@ async function periodicHealthCheck() {
     const health = await fetchLoostreamApi('/api/health');
 
     for (const [source, data] of Object.entries(health.sources)) {
-      const prevStatus = lastSourceStatus[source];
       const currentStatus = data.status;
+      let st = sourceState[source];
 
-      // Alert if status changed to down
-      if (prevStatus !== 'down' && currentStatus === 'down') {
-        await telegramRequest('sendMessage', {
-          chat_id: CHAT_ID,
-          text: `🔴 <b>ALERTE: ${source} est DOWN!</b>\n\nErreur: ${data.error || 'Inconnue'}`,
-          parse_mode: 'HTML'
-        });
-        console.log(`[Health] Alert: ${source} is DOWN`);
-      }
-      // Notify if status recovered
-      else if (prevStatus === 'down' && currentStatus === 'up') {
-        await telegramRequest('sendMessage', {
-          chat_id: CHAT_ID,
-          text: `🟢 <b>${source} est de retour!</b>\n\nLatence: ${data.latency}ms`,
-          parse_mode: 'HTML'
-        });
-        console.log(`[Health] ${source} recovered`);
+      // Seed on first observation — no alert.
+      if (!st) {
+        sourceState[source] = { confirmed: currentStatus, pending: currentStatus, count: CONFIRM_THRESHOLD };
+        continue;
       }
 
-      lastSourceStatus[source] = currentStatus;
+      // Count consecutive readings of the same status.
+      if (currentStatus === st.pending) st.count++;
+      else { st.pending = currentStatus; st.count = 1; }
+
+      // Only commit (and alert) once a new status has persisted long enough.
+      if (currentStatus !== st.confirmed && st.count >= CONFIRM_THRESHOLD) {
+        const prevStatus = st.confirmed;
+        st.confirmed = currentStatus;
+
+        if (currentStatus === 'down') {
+          await telegramRequest('sendMessage', {
+            chat_id: CHAT_ID,
+            text: `🔴 <b>ALERTE: ${source} est DOWN!</b>\n\nErreur: ${data.error || 'Inconnue'}`,
+            parse_mode: 'HTML'
+          });
+          console.log(`[Health] Alert: ${source} is DOWN`);
+        } else if (prevStatus === 'down' && currentStatus === 'up') {
+          await telegramRequest('sendMessage', {
+            chat_id: CHAT_ID,
+            text: `🟢 <b>${source} est de retour!</b>\n\nLatence: ${data.latency}ms`,
+            parse_mode: 'HTML'
+          });
+          console.log(`[Health] ${source} recovered`);
+        }
+      }
     }
   } catch (e) {
     console.error('[Health] Periodic check error:', e.message);

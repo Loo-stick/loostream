@@ -1045,6 +1045,29 @@ app.get('/api/cache/stats', (_req, res) => {
   res.json(getCacheStats());
 });
 
+// Retry a probe request on transient network/TLS errors. Some CDN edge nodes
+// intermittently return a TLS internal_error (alert 80) or serve an incomplete
+// cert chain (-> "unable to get local issuer certificate"); a single blip must
+// not be reported as "down". Retries only on transient errors, not on HTTP status.
+async function probeGet(url: string, opts: any, attempts = 3): Promise<any> {
+  let lastErr: any;
+  for (let i = 0; i < attempts; i++) {
+    try {
+      return await axios.get(url, opts);
+    } catch (e: any) {
+      lastErr = e;
+      const code = e?.code || '';
+      const transient =
+        ['EPROTO', 'ECONNRESET', 'ETIMEDOUT', 'ECONNABORTED', 'EAI_AGAIN',
+         'UNABLE_TO_GET_ISSUER_CERT_LOCALLY', 'UNABLE_TO_VERIFY_LEAF_SIGNATURE'].includes(code) ||
+        /unable to get local issuer certificate|socket hang up|alert|EPROTO/i.test(e?.message || '');
+      if (!transient || i === attempts - 1) throw e;
+      await new Promise(r => setTimeout(r, 500 * (i + 1)));
+    }
+  }
+  throw lastErr;
+}
+
 // Health check endpoint - tests each source
 app.get('/api/health', async (_req, res) => {
   const results: Record<string, { status: 'up' | 'down' | 'degraded'; latency?: number; error?: string }> = {};
@@ -1054,7 +1077,7 @@ app.get('/api/health', async (_req, res) => {
   try {
     const resp = await axios.post('https://net52.cc/tv/p.php', null, {
       timeout: 10000,
-      validateStatus: (s) => s < 500,
+      validateStatus: (s: number) => s < 500,
     });
     const body = typeof resp.data === 'string' ? resp.data : JSON.stringify(resp.data);
     results.netmirror = {
@@ -1069,10 +1092,10 @@ app.get('/api/health', async (_req, res) => {
   const movixEndpoints = getMovixEndpoints();
   const movixStart = Date.now();
   try {
-    const resp = await axios.get(`${movixEndpoints.api}/api/purstream/movie/550/stream`, {
+    const resp = await probeGet(`${movixEndpoints.api}/api/purstream/movie/550/stream`, {
       timeout: 10000,
       headers: { 'Referer': movixEndpoints.referer },
-      validateStatus: (s) => s < 500,
+      validateStatus: (s: number) => s < 500,
     });
     results.movix = {
       status: resp.status === 200 ? 'up' : 'degraded',
@@ -1085,9 +1108,9 @@ app.get('/api/health', async (_req, res) => {
   // Test StreamFlix
   const streamflixStart = Date.now();
   try {
-    const resp = await axios.get('https://api.streamflix.app/config/config-streamflixapp.json', {
+    const resp = await probeGet('https://api.streamflix.app/config/config-streamflixapp.json', {
       timeout: 10000,
-      validateStatus: (s) => s < 500,
+      validateStatus: (s: number) => s < 500,
     });
     results.streamflix = {
       status: resp.status === 200 ? 'up' : 'degraded',
@@ -1100,9 +1123,9 @@ app.get('/api/health', async (_req, res) => {
   // Test Faklum (homepage returns token link)
   const faklumStart = Date.now();
   try {
-    const resp = await axios.get('https://faklum.com/', {
+    const resp = await probeGet('https://faklum.com/', {
       timeout: 10000,
-      validateStatus: (s) => s < 500,
+      validateStatus: (s: number) => s < 500,
     });
     const hasToken = /<a\s+id=["']faklumc["']\s+href=["'][a-z0-9]+["']/i.test(resp.data);
     results.faklum = {
@@ -1117,9 +1140,9 @@ app.get('/api/health', async (_req, res) => {
   const flemmixEndpoints = getFlemmixEndpoints();
   const flemmixStart = Date.now();
   try {
-    const resp = await axios.get(flemmixEndpoints.base + '/', {
+    const resp = await probeGet(flemmixEndpoints.base + '/', {
       timeout: 10000,
-      validateStatus: (s) => s < 500,
+      validateStatus: (s: number) => s < 500,
     });
     const hasFilms = /\/film-en-streaming\/\d+-/.test(resp.data);
     results.flemmix = {
