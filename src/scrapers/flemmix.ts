@@ -11,9 +11,9 @@ interface FlemmixEndpoints {
 }
 
 const DEFAULT_ENDPOINTS: FlemmixEndpoints = {
-  base: 'https://flemmix.city',
-  origin: 'https://flemmix.city',
-  referer: 'https://flemmix.city/',
+  base: 'https://flemmix.fast',
+  origin: 'https://flemmix.fast',
+  referer: 'https://flemmix.fast/',
 };
 
 const ENDPOINTS_PATH = process.env.FLEMMIX_ENDPOINTS_CONFIG ||
