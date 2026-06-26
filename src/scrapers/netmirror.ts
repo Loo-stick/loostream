@@ -1,635 +1,262 @@
 import axios from 'axios';
 import { cached } from '../cache';
 
+// NetMirror, rebuilt 2026-06 against the **netfree** backend the official app +
+// third-party clients (Onyx) actually stream from — reverse-engineered by MITMing
+// Onyx live (redroid + mitmproxy). This is the real anonymous full-video path;
+// it supersedes BOTH the dead net52 playlist.php (10-min /files/220884 placeholder)
+// AND the net27 single-audio mp4 flow (Hindi-only, no language choice).
+//
+// Verified flow (movies):
+//   1. POST https://net52.cc/verify.php  (body "g-recaptcha-response=<uuid>")
+//        -> Set-Cookie t_hash_t (guest session, ~3 days). The recaptcha value is a
+//           throwaway UUID; net52 does not validate it.
+//   2. GET  https://net52.cc/mobile[/hs|/pv]/search.php?s=<title>&t=<unix>
+//        Cookie: t_hash_t=<v>; ott=<nf|hs|pv>; hd=on
+//        -> { status, searchResult:[{id, t}] }  (id = Netflix/Hotstar/Prime id)
+//   3. GET  https://tv.imgcdn.kim/newtv/hls/<ott>/<id>.m3u8   (NO auth, NO cookie)
+//        -> HLS master with EVERY audio track Netflix has (VO + VF when the title
+//           has a French dub) + subtitles + 1080p/720p/480p variants.
+//
+// The variant/segment token (`...?in=<IP>::<hash>::<ts>::xx`) is bound to the IP
+// that FETCHES the master — so this MUST be delivered via the LOCAL proxy (same
+// server IP), not MediaFlow. Segments are `.jpg`-disguised mpeg-ts; the local
+// proxy already transforms them (needsTransformer() sniffs the manifest).
+//
+// Multi-audio means we no longer drop Hindi or guess a language: we return one
+// adaptive stream and the player picks the track. Series not wired yet (FrenchStream
+// covers series VF); getNetmirrorStreams returns [] for series.
+
+const NET52_BASE = process.env.NETMIRROR_API_BASE || 'https://net52.cc';
+const HLS_BASE = process.env.NETMIRROR_HLS_BASE || 'https://tv.imgcdn.kim';
+const HLS_REFERER = 'https://tv.imgcdn.kim/';
+
+const UA =
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
+
 const STREAMS_TTL_MS = 15 * 60 * 1000;
-// Cache empty results shorter so we retry sooner once NetMirror comes back,
-// but long enough to absorb a flurry of requests when net22.cc is 522-ing.
 const EMPTY_TTL_MS = 5 * 60 * 1000;
+const COOKIE_TTL_MS = 30 * 60 * 1000;
+const REQ_TIMEOUT_MS = 12000;
 
-// Per-axios-call timeout. NetMirror's search/post/episodes live on net22.cc
-// which regularly 522s (~20s) — without a timeout every stream request blocks ~120s.
-const REQ_TIMEOUT_MS = 5000;
-// bypass() / play.php legs are slower on net52.cc, give them more headroom
-const PLAY_TIMEOUT_MS = 8000;
+// The OTT catalogs net52 mirrors. `prefix` is the search.php path segment; `ott`
+// is both the search cookie value and the imgcdn HLS path segment.
+// Netflix (nf) and Hotstar/Disney (hs) use numeric ids whose CDN sub-playlists
+// serve real segments. Prime Video (pv) uses encoded base32 ids whose sub-playlists
+// 404 (verified live) — kept here but filtered out by resolveMaster()'s liveness
+// check, which drops any platform/title whose stream doesn't actually resolve.
+const PLATFORMS: { ott: string; prefix: string; label: string }[] = [
+  { ott: 'nf', prefix: '', label: 'Netflix' },
+  { ott: 'hs', prefix: 'hs/', label: 'Disney+' },
+  { ott: 'pv', prefix: 'pv/', label: 'Prime Video' },
+];
 
-// Module-level circuit breaker. When the backend is throwing network errors
-// (timeout / 5xx) repeatedly, skip the whole scraper instead of waiting on
-// every single request. Resets as soon as any call succeeds.
-const CIRCUIT_THRESHOLD = 3;
-const CIRCUIT_COOLDOWN_MS = 5 * 60 * 1000;
-let consecutiveBackendFailures = 0;
-let backendDownUntil = 0;
-
-function isBackendFailure(err: any): boolean {
-  const code = err?.code || '';
-  const status = err?.response?.status ?? 0;
-  return (
-    code === 'ECONNABORTED' ||
-    code === 'ETIMEDOUT' ||
-    code === 'ECONNRESET' ||
-    code === 'ENOTFOUND' ||
-    status >= 500
-  );
+export interface NetmirrorStream {
+  quality: string;     // top resolution in the master ('1080p' | '720p' | …)
+  url: string;         // HLS master m3u8 (multi-audio, multi-resolution)
+  referer: string;     // Referer the imgcdn CDN expects
+  language: string;    // 'MULTI (VF+VO)' | 'MULTI' | 'VO' | 'VF' …
+  platform: string;    // 'Netflix' | 'Prime Video' | 'Disney+'
 }
 
-function recordBackendFailure(): void {
-  consecutiveBackendFailures++;
-  if (consecutiveBackendFailures === CIRCUIT_THRESHOLD) {
-    backendDownUntil = Date.now() + CIRCUIT_COOLDOWN_MS;
-    console.log(
-      `[Netmirror] Circuit breaker tripped after ${CIRCUIT_THRESHOLD} consecutive backend failures — skipping for ${CIRCUIT_COOLDOWN_MS / 60000}min`
-    );
-  }
+function normalizeTitle(s: string): string {
+  return s
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[̀-ͯ]/g, '')   // strip accents
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim();
 }
 
-function recordBackendSuccess(): void {
-  if (consecutiveBackendFailures > 0 || backendDownUntil > 0) {
-    console.log('[Netmirror] Backend recovered, circuit closed');
-  }
-  consecutiveBackendFailures = 0;
-  backendDownUntil = 0;
-}
-
-function isCircuitOpen(): boolean {
-  return Date.now() < backendDownUntil;
-}
-
-const NETMIRROR_BASE = 'https://net22.cc';
-const NETMIRROR_PLAY = 'https://net52.cc';
-
-type Platform = 'netflix' | 'primevideo' | 'disney';
-
-interface PlatformConfig {
-  ott: string;
-  label: string;
-  searchEndpoint: string;
-  episodesEndpoint: string;
-  postEndpoint: string;
-  playlistEndpoint: string;
-}
-
-const PLATFORMS: Record<Platform, PlatformConfig> = {
-  netflix: {
-    ott: 'nf',
-    label: 'Netflix',
-    searchEndpoint: `${NETMIRROR_BASE}/search.php`,
-    episodesEndpoint: `${NETMIRROR_BASE}/episodes.php`,
-    postEndpoint: `${NETMIRROR_BASE}/post.php`,
-    playlistEndpoint: `${NETMIRROR_PLAY}/playlist.php`,
-  },
-  primevideo: {
-    ott: 'pv',
-    label: 'Prime Video',
-    searchEndpoint: `${NETMIRROR_BASE}/pv/search.php`,
-    episodesEndpoint: `${NETMIRROR_BASE}/pv/episodes.php`,
-    postEndpoint: `${NETMIRROR_BASE}/pv/post.php`,
-    playlistEndpoint: `${NETMIRROR_PLAY}/pv/playlist.php`,
-  },
-  disney: {
-    ott: 'hs',
-    label: 'Disney+',
-    searchEndpoint: `${NETMIRROR_BASE}/mobile/hs/search.php`,
-    episodesEndpoint: `${NETMIRROR_BASE}/mobile/hs/episodes.php`,
-    postEndpoint: `${NETMIRROR_BASE}/mobile/hs/post.php`,
-    playlistEndpoint: `${NETMIRROR_PLAY}/mobile/hs/playlist.php`,
-  },
-};
-
-// Cookie cache
-let cachedCookie = '';
-let cookieTimestamp = 0;
-const COOKIE_EXPIRY_MS = 10 * 60 * 1000;
-
-export interface StreamResult {
-  platform: Platform;
-  contentId: string;
-  quality: string;
-  title: string;
-  languages: string[];
-}
-
-async function bypass(): Promise<string | null> {
-  const now = Date.now();
-  if (cachedCookie && (now - cookieTimestamp) < COOKIE_EXPIRY_MS) {
-    return cachedCookie;
-  }
-
-  for (let attempt = 0; attempt < 3; attempt++) {
+// Obtain (and cache) a guest t_hash_t cookie via verify.php.
+async function getGuestCookie(): Promise<string | null> {
+  return cached('netmirror:cookie', COOKIE_TTL_MS, async () => {
     try {
-      // The auth endpoint moved from net52.cc/tv/p.php to net22.cc/p.php
-      // around 2026-04-27 (the same outage window where net22 came back).
-      // The cookie name also changed from `t_hash_t` to `t_hash`.
-      const response = await axios.post(`${NETMIRROR_BASE}/p.php`, null, {
-        headers: {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-          'Accept': 'application/json, text/plain, */*',
-        },
-        timeout: PLAY_TIMEOUT_MS,
-      });
-
-      const text = typeof response.data === 'string' ? response.data : JSON.stringify(response.data);
-      if (!text.includes('"r":"n"')) continue;
-
-      const setCookie = response.headers['set-cookie'];
-      const cookieStr = Array.isArray(setCookie) ? setCookie.join('; ') : (setCookie || '');
-      // Match `t_hash=` but not `t_hash_t=` (legacy name) — anchor with a leading
-      // boundary so we don't catch a substring of the old name if it ever returns.
-      const match = cookieStr.match(/(?:^|[;,\s])t_hash=([^;,\s]+)/);
-
-      if (match?.[1]) {
-        cachedCookie = match[1];
-        cookieTimestamp = Date.now();
-        // recordBackendSuccess() here is now correct: auth lives on net22.cc
-        // (the search/post API host), so a successful auth proves the backend
-        // is reachable. Closing the breaker after auth lets the rest of the
-        // request actually hit search/post instead of being short-circuited.
-        recordBackendSuccess();
-        console.log('[Netmirror] Auth successful');
-        return cachedCookie;
+      const uuid = `${Math.random().toString(16).slice(2)}-${Date.now().toString(16)}`;
+      const resp = await axios.post(
+        `${NET52_BASE}/verify.php`,
+        `g-recaptcha-response=${uuid}`,
+        {
+          headers: {
+            'User-Agent': UA,
+            'Referer': `${NET52_BASE}/`,
+            'Content-Type': 'application/x-www-form-urlencoded',
+          },
+          timeout: REQ_TIMEOUT_MS,
+          maxRedirects: 0,
+          validateStatus: s => s < 400 || s === 301 || s === 302,
+        }
+      );
+      const setCookie: string[] = (resp.headers['set-cookie'] as string[]) || [];
+      for (const c of setCookie) {
+        const m = c.match(/t_hash_t=([^;]+)/);
+        if (m) return decodeURIComponent(m[1]);
       }
+      console.log('[Netmirror] verify.php returned no t_hash_t cookie');
+      return null;
     } catch (e: any) {
-      if (isBackendFailure(e)) recordBackendFailure();
-      console.log(`[Netmirror] Bypass attempt ${attempt + 1} failed: ${e.message}`);
-    }
-  }
-  return null;
-}
-
-function buildHeaders(cookie: string, ott: string): Record<string, string> {
-  return {
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-    'Accept': 'application/json, text/plain, */*',
-    'X-Requested-With': 'XMLHttpRequest',
-    'Cookie': `t_hash=${cookie}; user_token=233123f803cf02184bf6c67e149cdd50; hd=on; ott=${ott}`,
-    'Referer': `${NETMIRROR_BASE}/tv/home`,
-  };
-}
-
-function normalize(str: string): string {
-  // Remove special chars like / and normalize for comparison
-  return str.toLowerCase().trim().replace(/[\/\-_:]/g, '');
-}
-
-function similarity(a: string, b: string): number {
-  const s1 = normalize(a);
-  const s2 = normalize(b);
-  if (s1 === s2) return 1;
-  if (s1.startsWith(s2) || s2.startsWith(s1)) return 0.9;
-
-  // Also compare with spaces normalized
-  const words1 = s1.split(/\s+/).map(w => w.replace(/[^a-z0-9]/g, ''));
-  const words2 = s2.split(/\s+/).map(w => w.replace(/[^a-z0-9]/g, ''));
-  const shorter = words1.length < words2.length ? words1 : words2;
-  const longer = words1.length < words2.length ? words2 : words1;
-  const matched = shorter.filter(w => longer.includes(w)).length;
-  return matched / longer.length;
-}
-
-async function searchPlatform(
-  platform: Platform,
-  title: string,
-  year: string,
-  cookie: string
-): Promise<{ id: string; title: string } | null> {
-  const config = PLATFORMS[platform];
-  const headers = buildHeaders(cookie, config.ott);
-
-  const doSearch = async (query: string) => {
-    // Once the breaker trips mid-request, short-circuit remaining searches
-    // instead of paying 5s per dead call for the other platforms.
-    if (isCircuitOpen()) return null;
-    try {
-      const url = `${config.searchEndpoint}?s=${encodeURIComponent(query)}&t=${Math.floor(Date.now() / 1000)}`;
-      const { data } = await axios.get(url, { headers, timeout: REQ_TIMEOUT_MS });
-      recordBackendSuccess();
-
-      const results = (data.searchResult || [])
-        .map((item: { id: string; t: string }) => ({
-          id: item.id,
-          title: item.t,
-          score: similarity(item.t, title),
-        }))
-        .filter((r: { score: number }) => r.score >= 0.7)
-        .sort((a: { score: number }, b: { score: number }) => b.score - a.score);
-
-      return results.length > 0 ? { id: results[0].id, title: results[0].title } : null;
-    } catch (e: any) {
-      if (isBackendFailure(e)) recordBackendFailure();
+      console.log(`[Netmirror] verify.php failed: ${e.message}`);
       return null;
     }
-  };
-
-  // Try original title first
-  let result = await doSearch(title);
-  // Try without special characters (Re/Member -> ReMember)
-  if (!result) {
-    const cleanTitle = title.replace(/\//g, '');
-    if (cleanTitle !== title) {
-      result = await doSearch(cleanTitle);
-    }
-  }
-  // Try with year
-  if (!result && year) {
-    result = await doSearch(`${title} ${year}`);
-  }
-  if (!result && year) {
-    const cleanTitle = title.replace(/\//g, '');
-    if (cleanTitle !== title) {
-      result = await doSearch(`${cleanTitle} ${year}`);
-    }
-  }
-  return result;
+  }, { scope: 'netmirror', shouldCache: r => !!r, negativeTtlMs: 60 * 1000 });
 }
 
-async function loadContent(platform: Platform, contentId: string, cookie: string) {
-  const config = PLATFORMS[platform];
-  const headers = buildHeaders(cookie, config.ott);
-  const url = `${config.postEndpoint}?id=${contentId}&t=${Math.floor(Date.now() / 1000)}`;
-
+// Search one OTT catalog; returns the best-matching id (or null).
+async function searchPlatform(
+  title: string,
+  year: string,
+  platform: { ott: string; prefix: string },
+  cookie: string
+): Promise<string | null> {
   try {
-    const { data } = await axios.get(url, { headers, timeout: REQ_TIMEOUT_MS });
-    recordBackendSuccess();
-    return {
-      episodes: (data.episodes || []).filter(Boolean),
-      seasons: data.season || [],
-      langs: parseLangs(data.lang || []),
-      nextPageShow: data.nextPageShow,
-      nextPageSeason: data.nextPageSeason,
-    };
+    const ts = Math.floor(Date.now() / 1000);
+    const { data } = await axios.get(
+      `${NET52_BASE}/mobile/${platform.prefix}search.php`,
+      {
+        params: { s: title, t: ts },
+        headers: {
+          'User-Agent': UA,
+          'Referer': `${NET52_BASE}/`,
+          'Cookie': `t_hash_t=${cookie}; ott=${platform.ott}; hd=on`,
+        },
+        timeout: REQ_TIMEOUT_MS,
+      }
+    );
+
+    const results: { id: string; t: string }[] = Array.isArray(data?.searchResult) ? data.searchResult : [];
+    if (results.length === 0) return null;
+
+    const target = normalizeTitle(title);
+    // Prefer an exact normalized-title match, else a prefix/contains match.
+    let best = results.find(r => normalizeTitle(r.t) === target);
+    if (!best) best = results.find(r => {
+      const n = normalizeTitle(r.t);
+      return n.startsWith(target) || target.startsWith(n);
+    });
+    return best?.id || null;
   } catch (e: any) {
-    if (isBackendFailure(e)) recordBackendFailure();
+    console.log(`[Netmirror] search (${platform.ott}) failed: ${e.message}`);
     return null;
   }
 }
 
-function parseLangs(langs: Array<{ l?: string; s?: string }>): string[] {
-  const langMap: Record<string, string> = {
-    fra: 'French', fre: 'French', eng: 'English', deu: 'German', ger: 'German',
-    spa: 'Spanish', ita: 'Italian', por: 'Portuguese', jpn: 'Japanese',
-    kor: 'Korean', zho: 'Chinese', chi: 'Chinese', ara: 'Arabic', rus: 'Russian',
-    hin: 'Hindi', tur: 'Turkish', pol: 'Polish', nld: 'Dutch',
-  };
+// Fetch the HLS master and derive quality + language labels from it.
+async function resolveMaster(
+  ott: string,
+  id: string
+): Promise<{ url: string; quality: string; language: string } | null> {
+  const url = `${HLS_BASE}/newtv/hls/${ott}/${encodeURIComponent(id)}.m3u8`;
+  try {
+    const { data } = await axios.get<string>(url, {
+      headers: { 'User-Agent': UA, 'Referer': HLS_REFERER, 'Accept': '*/*' },
+      timeout: REQ_TIMEOUT_MS,
+      responseType: 'text',
+      transformResponse: r => r,
+    });
+    if (typeof data !== 'string' || !data.includes('#EXTM3U')) return null;
 
-  const seen = new Set<string>();
-  const result: string[] = [];
-
-  for (const entry of langs) {
-    const label = entry.l || langMap[(entry.s || '').toLowerCase()];
-    if (label && !seen.has(label)) {
-      seen.add(label);
-      result.push(label);
+    // Audio languages (TYPE=AUDIO ... LANGUAGE="xxx")
+    const langs = new Set<string>();
+    for (const m of data.matchAll(/TYPE=AUDIO[^\n]*LANGUAGE="([^"]+)"/g)) {
+      langs.add(m[1].toLowerCase().slice(0, 3));
     }
-  }
-  return result;
-}
-
-async function fetchEpisodes(
-  platform: Platform,
-  contentId: string,
-  seasonId: string,
-  cookie: string,
-  startPage = 1
-): Promise<Array<{ id: string; s?: string; ep?: string }>> {
-  const config = PLATFORMS[platform];
-  const headers = buildHeaders(cookie, config.ott);
-  const collected: Array<{ id: string; s?: string; ep?: string }> = [];
-
-  let page = startPage;
-  while (true) {
-    try {
-      const url = `${config.episodesEndpoint}?s=${seasonId}&series=${contentId}&t=${Math.floor(Date.now() / 1000)}&page=${page}`;
-      const { data } = await axios.get(url, { headers, timeout: REQ_TIMEOUT_MS });
-      recordBackendSuccess();
-
-      if (data.episodes) {
-        collected.push(...data.episodes.filter(Boolean));
-      }
-      if (data.nextPageShow === 0) break;
-      page++;
-    } catch (e: any) {
-      if (isBackendFailure(e)) recordBackendFailure();
-      break;
-    }
-  }
-  return collected;
-}
-
-function findEpisode(
-  episodes: Array<{ id: string; s?: string; ep?: string; season?: number; episode?: number }>,
-  targetSeason: number,
-  targetEpisode: number
-): { id: string } | null {
-  return episodes.find(ep => {
-    if (!ep) return false;
-    let epS: number, epE: number;
-
-    if (ep.s && ep.ep) {
-      epS = parseInt(String(ep.s).replace(/\D/g, ''));
-      epE = parseInt(String(ep.ep).replace(/\D/g, ''));
-    } else if (ep.season !== undefined && ep.episode !== undefined) {
-      epS = ep.season;
-      epE = ep.episode;
+    const hasFr = langs.has('fra') || langs.has('fre') || langs.has('fr');
+    const hasOther = [...langs].some(l => l !== 'fra' && l !== 'fre' && l !== 'fr');
+    let language: string;
+    if (langs.size <= 1) {
+      language = hasFr ? 'VF' : 'VO';
     } else {
-      return false;
+      language = hasFr && hasOther ? 'MULTI (VF+VO)' : hasFr ? 'MULTI (VF)' : 'MULTI';
     }
-    return epS === targetSeason && epE === targetEpisode;
-  }) || null;
+
+    // Top resolution among the variant streams.
+    let maxH = 0;
+    for (const m of data.matchAll(/RESOLUTION=\d+x(\d+)/g)) {
+      const h = parseInt(m[1], 10);
+      if (h > maxH) maxH = h;
+    }
+    const quality = maxH >= 2160 ? '4K' : maxH >= 1080 ? '1080p' : maxH >= 720 ? '720p' : maxH >= 480 ? '480p' : 'HD';
+
+    // Liveness check: some catalogs (Prime Video, a few Disney+ titles) return a
+    // master whose variant playlists 404 on the CDN. Fetch the first variant URL
+    // and drop the whole title if it doesn't actually resolve — never surface a
+    // stream that won't play.
+    const firstVariant = data.split('\n').map(l => l.trim()).find(l => l.startsWith('http'));
+    if (!firstVariant) return null;
+    try {
+      const probe = await axios.get(firstVariant, {
+        headers: { 'User-Agent': UA, 'Referer': HLS_REFERER },
+        timeout: REQ_TIMEOUT_MS,
+        responseType: 'text',
+        transformResponse: r => r,
+        validateStatus: () => true,
+      });
+      if (probe.status !== 200 || typeof probe.data !== 'string' || !probe.data.includes('#EXT')) {
+        console.log(`[Netmirror] ${ott}/${id} variant not playable (${probe.status}) — dropping`);
+        return null;
+      }
+    } catch {
+      return null;
+    }
+
+    return { url, quality, language };
+  } catch (e: any) {
+    console.log(`[Netmirror] master ${ott}/${id} failed: ${e.message}`);
+    return null;
+  }
 }
 
-export async function getStreams(
+export async function getNetmirrorStreams(
   title: string,
   year: string,
-  season?: number,
-  episode?: number
-): Promise<StreamResult[]> {
-  const normTitle = title.toLowerCase().replace(/\s+/g, ' ').trim();
-  const key = `netmirror:${normTitle}:${year || ''}:${season || ''}:${episode || ''}`;
+  mediaType: 'movie' | 'series',
+  _season?: number,
+  _episode?: number
+): Promise<NetmirrorStream[]> {
+  // Series flow (per-episode netfree ids) not implemented yet.
+  if (mediaType !== 'movie' || !title) return [];
+
+  const key = `netmirror:movie:${normalizeTitle(title)}:${year}`;
   return cached(
     key,
     STREAMS_TTL_MS,
-    () => fetchNetmirrorStreams(title, year, season, episode),
-    {
-      scope: 'netmirror',
-      shouldCache: r => r.length > 0,
-      negativeTtlMs: EMPTY_TTL_MS,
-    }
+    () => fetchNetmirrorStreams(title, year),
+    { scope: 'netmirror', shouldCache: r => r.length > 0, negativeTtlMs: EMPTY_TTL_MS }
   );
 }
 
-async function fetchNetmirrorStreams(
-  title: string,
-  year: string,
-  season?: number,
-  episode?: number
-): Promise<StreamResult[]> {
-  if (isCircuitOpen()) {
-    console.log('[Netmirror] Circuit breaker open, skipping');
+async function fetchNetmirrorStreams(title: string, year: string): Promise<NetmirrorStream[]> {
+  const cookie = await getGuestCookie();
+  if (!cookie) return [];
+
+  // Search all three catalogs in parallel; a title may live in more than one.
+  const ids = await Promise.all(
+    PLATFORMS.map(p => searchPlatform(title, year, p, cookie).then(id => ({ p, id })))
+  );
+
+  const masters = await Promise.all(
+    ids.map(async ({ p, id }) => {
+      if (!id) return null;
+      const m = await resolveMaster(p.ott, id);
+      if (!m) return null;
+      const s: NetmirrorStream = {
+        quality: m.quality,
+        url: m.url,
+        referer: HLS_REFERER,
+        language: m.language,
+        platform: p.label,
+      };
+      return s;
+    })
+  );
+
+  const streams = masters.filter((s): s is NetmirrorStream => s !== null);
+  if (streams.length === 0) {
+    console.log(`[Netmirror] No match for "${title}" (${year})`);
     return [];
   }
-
-  const cookie = await bypass();
-  if (!cookie) {
-    console.log('[Netmirror] Auth failed');
-    return [];
-  }
-
-  const results: StreamResult[] = [];
-  const platforms: Platform[] = ['netflix', 'primevideo', 'disney'];
-
-  for (const platform of platforms) {
-    try {
-      console.log(`[Netmirror] Searching ${PLATFORMS[platform].label} for "${title}"...`);
-
-      const searchResult = await searchPlatform(platform, title, year, cookie);
-      if (!searchResult) {
-        console.log(`[Netmirror] Not found on ${PLATFORMS[platform].label}`);
-        continue;
-      }
-
-      console.log(`[Netmirror] Found: ${searchResult.title} (${searchResult.id})`);
-
-      const content = await loadContent(platform, searchResult.id, cookie);
-      if (!content) continue;
-
-      let targetId = searchResult.id;
-
-      // For TV shows, find the episode
-      if (season && episode) {
-        let allEpisodes = [...content.episodes];
-
-        // Fetch more episodes if needed
-        if (content.nextPageShow === 1 && content.nextPageSeason) {
-          const more = await fetchEpisodes(platform, searchResult.id, content.nextPageSeason, cookie, 2);
-          allEpisodes.push(...more);
-        }
-
-        // Fetch from other seasons
-        for (const s of content.seasons.slice(0, -1)) {
-          const seasonEps = await fetchEpisodes(platform, searchResult.id, s.id, cookie, 1);
-          allEpisodes.push(...seasonEps);
-        }
-
-        const ep = findEpisode(allEpisodes, season, episode);
-        if (!ep) {
-          console.log(`[Netmirror] S${season}E${episode} not found on ${PLATFORMS[platform].label}`);
-          continue;
-        }
-        targetId = ep.id;
-      }
-
-      // Return results for different qualities
-      for (const quality of ['1080p', '720p', '480p']) {
-        results.push({
-          platform,
-          contentId: targetId,
-          quality,
-          title: `${PLATFORMS[platform].label} - ${searchResult.title}`,
-          languages: content.langs,
-        });
-      }
-
-      console.log(`[Netmirror] Added ${PLATFORMS[platform].label} streams`);
-    } catch (e) {
-      console.log(`[Netmirror] Error on ${PLATFORMS[platform].label}:`, e);
-    }
-  }
-
-  return results;
-}
-
-// Check audio languages in HLS manifest
-export async function checkAudioLanguages(
-  hlsUrl: string,
-  requiredLangs: string[] = ['fra', 'eng']
-): Promise<{ available: string[]; hasRequired: boolean }> {
-  try {
-    const resp = await axios.get(hlsUrl, {
-      headers: {
-        'Referer': 'https://net52.cc/',
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-      },
-      timeout: 10000,
-    });
-
-    const manifest = resp.data;
-    const audioLangs: string[] = [];
-
-    // Parse EXT-X-MEDIA lines for audio tracks
-    const mediaLines = manifest.match(/#EXT-X-MEDIA:TYPE=AUDIO[^\n]+/g) || [];
-    for (const line of mediaLines) {
-      const langMatch = line.match(/LANGUAGE="([^"]+)"/);
-      if (langMatch) {
-        audioLangs.push(langMatch[1].toLowerCase());
-      }
-    }
-
-    // Check if required languages are present
-    const hasRequired = requiredLangs.every(lang =>
-      audioLangs.some(available =>
-        available === lang ||
-        available.startsWith(lang) ||
-        (lang === 'fra' && available === 'fre') ||
-        (lang === 'eng' && available === 'en')
-      )
-    );
-
-    return { available: audioLangs, hasRequired };
-  } catch (e) {
-    console.log('[Netmirror] Error checking audio languages:', e);
-    return { available: [], hasRequired: false };
-  }
-}
-
-// Verify HLS URL works and has video streams
-async function verifyHlsUrl(url: string, platform: string): Promise<boolean> {
-  try {
-    const resp = await axios.get(url, {
-      headers: {
-        'Referer': 'https://net52.cc/',
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-      },
-      timeout: 5000,
-    });
-
-    const manifest = resp.data;
-
-    // Must have EXT-X-STREAM-INF (video variants) or video segments (.ts)
-    // Just having AUDIO tracks is not enough
-    const hasVideoVariants = manifest.includes('#EXT-X-STREAM-INF');
-    const hasVideoSegments = manifest.includes('.ts');
-
-    // Check if it's audio-only (has AUDIO but no video)
-    const hasAudioOnly = manifest.includes('TYPE=AUDIO') && !hasVideoVariants && !hasVideoSegments;
-
-    if (hasAudioOnly) {
-      console.log(`[Netmirror] ${platform} manifest is audio-only, rejecting`);
-      return false;
-    }
-
-    // Guest-mode placeholder: NetMirror points all unauthenticated viewers'
-    // video variants at /files/220884/ ("Only Valid Users Allowed" when fetched).
-    // Audio still serves OK from the real CDN, hence the "white screen + sound"
-    // symptom. Reject these so they don't appear as broken streams in Stremio.
-    if (/\/files\/220884\//.test(manifest)) {
-      console.log(`[Netmirror] ${platform} returned guest-mode placeholder (account required), rejecting`);
-      return false;
-    }
-
-    if (hasVideoVariants || hasVideoSegments) {
-      console.log(`[Netmirror] ${platform} manifest verified OK`);
-      return true;
-    }
-
-    console.log(`[Netmirror] ${platform} manifest has no video content`);
-    return false;
-  } catch (e) {
-    console.log(`[Netmirror] ${platform} manifest fetch failed:`, e);
-    return false;
-  }
-}
-
-// Get fresh HLS URL for playback
-export async function getStreamUrl(
-  platform: Platform,
-  contentId: string,
-  quality: string
-): Promise<string | null> {
-  if (isCircuitOpen()) return null;
-
-  const cookie = await bypass();
-  if (!cookie) return null;
-
-  const config = PLATFORMS[platform];
-  const jar = `t_hash=${cookie}; ott=${config.ott}; hd=on`;
-
-  try {
-    // Step 1: POST play.php on net22.cc — returns the playlist token directly.
-    // The previous flow had an intermediate GET play.php on net52.cc that
-    // returned HTML containing data-h="<token>"; that endpoint now 403s with
-    // err: 1003. The h returned here is now the final token usable on
-    // playlist.php straight away.
-    const playResp = await axios.post(`${NETMIRROR_BASE}/play.php`, `id=${contentId}`, {
-      headers: {
-        'Content-Type': 'application/x-www-form-urlencoded',
-        'X-Requested-With': 'XMLHttpRequest',
-        'Referer': `${NETMIRROR_BASE}/`,
-        'Cookie': jar,
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-      },
-      timeout: PLAY_TIMEOUT_MS,
-    });
-    const token: string | undefined = playResp.data?.h;
-    if (!token) return null;
-
-    // Step 2: Get playlist
-    const playlistUrl = `${config.playlistEndpoint}?id=${contentId}&t=stream&tm=${Math.floor(Date.now() / 1000)}&h=${encodeURIComponent(token)}`;
-    const playlistResp = await axios.get(playlistUrl, {
-      headers: {
-        'Cookie': jar,
-        'Referer': `${NETMIRROR_PLAY}/`,
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-        'Accept': 'application/json, text/plain, */*',
-      },
-      timeout: PLAY_TIMEOUT_MS,
-    });
-    recordBackendSuccess();
-
-    const playlist = playlistResp.data;
-    if (!Array.isArray(playlist) || playlist.length === 0) return null;
-
-    console.log(`[Netmirror] Playlist response for ${platform}:`, JSON.stringify(playlist).substring(0, 500));
-
-    // Find matching quality
-    for (const item of playlist) {
-      for (const src of (item.sources || [])) {
-        const srcUrl = src.file || '';
-        const srcQuality = (src.label || '').toLowerCase();
-
-        if (quality === '1080p' && !srcQuality.includes('full')) continue;
-        if (quality === '720p' && !srcQuality.includes('mid')) continue;
-        if (quality === '480p' && !srcQuality.includes('low')) continue;
-
-        if (srcUrl) {
-          let finalUrl = srcUrl.replace(/^\/tv\//, '/');
-          if (!finalUrl.startsWith('http')) {
-            finalUrl = `${NETMIRROR_PLAY}${finalUrl.startsWith('/') ? '' : '/'}${finalUrl}`;
-          }
-          console.log(`[Netmirror] Generated URL for ${platform}/${quality}: ${finalUrl}`);
-
-          // Verify the URL works
-          const isValid = await verifyHlsUrl(finalUrl, platform);
-          if (!isValid) {
-            console.log(`[Netmirror] URL verification failed for ${platform}/${quality}`);
-            return null;
-          }
-          return finalUrl;
-        }
-      }
-    }
-
-    // Fallback to first available
-    const first = playlist[0]?.sources?.[0];
-    if (first?.file) {
-      let finalUrl = first.file.replace(/^\/tv\//, '/');
-      if (!finalUrl.startsWith('http')) {
-        finalUrl = `${NETMIRROR_PLAY}${finalUrl.startsWith('/') ? '' : '/'}${finalUrl}`;
-      }
-      console.log(`[Netmirror] Fallback URL for ${platform}: ${finalUrl}`);
-
-      // Verify the URL works
-      const isValid = await verifyHlsUrl(finalUrl, platform);
-      if (!isValid) {
-        console.log(`[Netmirror] Fallback URL verification failed for ${platform}`);
-        return null;
-      }
-      return finalUrl;
-    }
-
-    console.log(`[Netmirror] No URL found for ${platform}`);
-    return null;
-  } catch (e: any) {
-    if (isBackendFailure(e)) recordBackendFailure();
-    console.log('[Netmirror] Error getting stream URL:', e?.message || e);
-    return null;
-  }
+  console.log(
+    `[Netmirror] "${title}" (${year}) -> ${streams.map(s => `${s.platform} ${s.quality} ${s.language}`).join(', ')}`
+  );
+  return streams;
 }

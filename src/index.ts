@@ -2,7 +2,7 @@ import express from 'express';
 import axios from 'axios';
 import path from 'path';
 import { rateLimit } from 'express-rate-limit';
-import { getStreams, getStreamUrl } from './scrapers/netmirror';
+import { getNetmirrorStreams } from './scrapers/netmirror';
 import { getStreamFlixStreams } from './scrapers/streamflix';
 import { getMovixStreams, reloadMovixEndpoints, getMovixEndpoints } from './scrapers/movix';
 import { getFaklumStreams } from './scrapers/faklum';
@@ -332,7 +332,8 @@ function buildProxyUrl(
   headers: Record<string, string>,
   useTransformer: boolean = false,
   req?: express.Request,
-  config?: UserConfig | null
+  config?: UserConfig | null,
+  forceLocal: boolean = false
 ): string | null {
   // SECURITY: Validate stream URL before proxying (applies to both local and MediaFlow)
   const validation = isAllowedUrl(streamUrl);
@@ -341,7 +342,10 @@ function buildProxyUrl(
     return null; // Return null for blocked URLs
   }
 
-  const useLocal = config ? config.proxy === 'local' : DEFAULT_USE_LOCAL_PROXY;
+  // forceLocal: some sources (NetMirror netfree HLS) require the local proxy —
+  // their segment token is bound to the fetcher's IP and segments are .jpg-disguised
+  // mpeg-ts that only the local /proxy transformer rewrites to video/mp2t.
+  const useLocal = forceLocal || (config ? config.proxy === 'local' : DEFAULT_USE_LOCAL_PROXY);
   const mfUrl = config?.mfUrl || DEFAULT_MEDIAFLOW_URL;
   const mfPass = config?.mfPass || DEFAULT_MEDIAFLOW_PASSWORD;
 
@@ -372,7 +376,10 @@ function buildProxyUrl(
       return streamUrl; // Fallback to direct URL
     }
 
-    const proxyUrl = new URL('/proxy/hls/manifest.m3u8', mfUrl);
+    // HLS -> MediaFlow HLS proxy; direct files (mp4/mkv) -> MediaFlow stream proxy
+    // (forwards Range for seeking). Sending an mp4 to the HLS endpoint 403s.
+    const endpoint = isHlsUrl(streamUrl) ? '/proxy/hls/manifest.m3u8' : '/proxy/stream';
+    const proxyUrl = new URL(endpoint, mfUrl);
     proxyUrl.searchParams.set('api_password', mfPass);
     proxyUrl.searchParams.set('d', streamUrl);
 
@@ -544,7 +551,7 @@ async function handleStream(req: express.Request, res: express.Response, type: s
     };
 
     const [netmirrorResults, streamflixResults, movixResults, faklumResults, flemmixResults, frenchstreamResults] = await Promise.all([
-      getStreams(info.title, info.year, parsed.season, parsed.episode)
+      getNetmirrorStreams(info.title, info.year, type as 'movie' | 'series', parsed.season, parsed.episode)
         .then(r => { trackSourceResult('netmirror', true, r.length); recordOutcome('netmirror', r.length > 0 ? 'success' : 'empty'); return r; })
         .catch(e => { console.log('[NetMirror] Error:', e); trackSourceResult('netmirror', false); recordOutcome('netmirror', 'error', e?.message); return []; }),
       getStreamFlixStreams(info.tmdbId, type as 'movie' | 'series', parsed.season, parsed.episode, config?.tmdbKey || DEFAULT_TMDB_KEY)
@@ -607,36 +614,21 @@ async function handleStream(req: express.Request, res: express.Response, type: s
       });
     }
 
-    // Process NetMirror results
-    const transformerCache = new Map<string, boolean>();
-
+    // Process NetMirror results (netfree multi-audio HLS master). MUST go through
+    // the LOCAL proxy: the segment token is IP-bound to the fetcher and the .jpg
+    // segments need the local transformer -> video/mp2t. One adaptive stream per
+    // platform; the player picks the audio track (VO + VF when available).
     for (const r of netmirrorResults) {
-      const hlsUrl = await getStreamUrl(
-        r.platform as 'netflix' | 'primevideo' | 'disney',
-        r.contentId,
-        r.quality
-      );
-
-      if (!hlsUrl) continue;
-
-      const contentKey = `${r.platform}:${r.contentId}`;
-      let useTransformer = transformerCache.get(contentKey);
-      if (useTransformer === undefined) {
-        useTransformer = await needsTransformer(hlsUrl);
-        transformerCache.set(contentKey, useTransformer);
-        console.log(`[Stream] ${r.platform} needs transformer: ${useTransformer}`);
-      }
-
-      const proxiedUrl = buildProxyUrl(hlsUrl, {
-        'Referer': 'https://net52.cc/',
+      const proxiedUrl = buildProxyUrl(r.url, {
+        'Referer': r.referer,
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-      }, useTransformer, req, config);
+      }, true, req, config, true);
 
       if (!proxiedUrl) continue; // Skip blocked URLs
 
       streams.push({
-        name: `NetMirror\n${r.quality}`,
-        title: `${r.title} [${r.quality}]`,
+        name: `NetMirror ${r.platform}\n${r.quality}`,
+        title: `${r.language} [${r.quality}]`,
         url: proxiedUrl,
         behaviorHints: {
           notWebReady: false,
@@ -644,7 +636,7 @@ async function handleStream(req: express.Request, res: express.Response, type: s
         },
         _meta: {
           quality: r.quality,
-          language: 'Original',
+          language: r.language,
           source: 'netmirror',
         },
       });
@@ -840,46 +832,6 @@ app.get('/:config/stream/:type/:id.json', async (req, res) => {
     return res.status(400).json({ error: 'Invalid configuration' });
   }
   await handleStream(req, res, type, id, userConfig);
-});
-
-// Play endpoint - generates fresh URL and proxies with headers
-app.get('/play/:platform/:contentId/:quality', async (req, res) => {
-  const { platform, contentId, quality } = req.params;
-  console.log(`[Play] Generating fresh URL for ${platform}/${contentId}/${quality}`);
-
-  try {
-    const url = await getStreamUrl(
-      platform as 'netflix' | 'primevideo' | 'disney',
-      contentId,
-      quality
-    );
-
-    if (!url) {
-      console.log('[Play] Failed to get stream URL');
-      return res.status(503).send('Stream not available');
-    }
-
-    console.log(`[Play] Proxying ${url}`);
-
-    // Proxy the request with required headers
-    const response = await axios.get(url, {
-      headers: {
-        'Referer': 'https://net52.cc/',
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-      },
-      responseType: 'stream',
-    });
-
-    // Forward headers
-    res.setHeader('Content-Type', response.headers['content-type'] || 'application/vnd.apple.mpegurl');
-    res.setHeader('Access-Control-Allow-Origin', '*');
-
-    // Pipe the stream
-    response.data.pipe(res);
-  } catch (e) {
-    console.error('[Play] Error:', e);
-    res.status(500).send('Internal error');
-  }
 });
 
 // Logo
