@@ -90,9 +90,29 @@ export interface CinemaosStream {
   quality: string;   // '4K' | '1080p' | '720p' | 'HD'
   url: string;       // direct HLS m3u8 (worker-unwrapped when applicable)
   referer: string;   // header the CDN needs (may be '')
-  language: string;  // 'English' | 'Original' | 'Hindi' | ... | 'VO'
+  language: string;  // 'VO' | 'VF' | 'MULTI' | 'English'
   server: string;    // e.g. 'Vidzee/Vega'
+  isHls: boolean;    // route through /proxy/manifest even if the url ends .txt
   subtitles: CinemaosSubtitle[];
+}
+
+// CinemaOS servers rarely set the `language` field — the language is in the
+// SERVER NAME (Rive/Hindi, Multimovies/🇮🇳 🇺🇸 Nova, …). Classify from both, and
+// DROP foreign dubs (which often carry burned-in subtitles), keeping only
+// VO / VF / MULTI — mirroring the NetMirror "drop Hindi" policy.
+const FOREIGN_DUB = /\b(hindi|bengali|bangla|tamil|telugu|bollywood|kannada|malayalam|marathi|punjabi|gujarati|urdu|arabic|turkish|russian|indonesian?|vietnam\w*|thai|korean|japanese|persian|farsi|dublado|dublada|latino|castellano)\b/;
+const HAS_INDIA = /🇮🇳/;
+const IS_FRENCH = /\b(french|français|francais|truefrench|vff?|vostfr)\b|🇫🇷/;
+
+function classifyLanguage(server: string, langField?: string): { label: string; drop: boolean } {
+  const s = `${server} ${langField || ''}`.toLowerCase();
+  if (IS_FRENCH.test(s)) return { label: 'VF', drop: false };
+  // Foreign dubs (incl. India-flagged multi-market releases) often ship burned-in
+  // subtitles — drop them entirely, keeping only VO/VF (mirrors NetMirror's no-Hindi policy).
+  if (FOREIGN_DUB.test(s) || HAS_INDIA.test(server)) return { label: 'DROP', drop: true };
+  if (/\bmulti\b/.test(s)) return { label: 'MULTI', drop: false };
+  if (langField && /english/i.test(langField)) return { label: 'English', drop: false };
+  return { label: 'VO', drop: false };
 }
 
 function mapQuality(bitrate?: string): string {
@@ -113,6 +133,9 @@ function unwrapWorker(u: string): { url: string; referer: string } {
   } catch { /* fall through */ }
   return { url: u, referer: '' };
 }
+
+// Subtitle languages we surface (VO/VF-relevant): English, French, undetermined.
+const KEEP_SUB_LANGS = new Set(['eng', 'fre', 'und']);
 
 // ISO-639 best effort from a caption's language / languageName.
 function toLang(language?: string, languageName?: string): string {
@@ -153,6 +176,7 @@ async function scrapeOne(meta: Record<string, string>, scraperId: string): Promi
     for (const cap of dec.captions || []) {
       if (!cap.url) continue;
       const lang = toLang(cap.language, cap.languageName);
+      if (!KEEP_SUB_LANGS.has(lang)) continue; // keep VO/VF-relevant subs only
       if (seenLang.has(lang)) continue;
       seenLang.add(lang);
       subs.push({ url: cap.url, lang });
@@ -160,14 +184,19 @@ async function scrapeOne(meta: Record<string, string>, scraperId: string): Promi
 
     const streams: CinemaosStream[] = [];
     for (const [serverName, s] of Object.entries(sources)) {
-      if (!s || !s.url || String(s.type || 'hls') !== 'hls') continue;
+      const kind = String(s?.type || 'hls');
+      if (!s || !s.url || (kind !== 'hls' && kind !== 'mp4')) continue;
+      const server = `${dec.name || scraperId}/${serverName}`;
+      const { label, drop } = classifyLanguage(server, s.language);
+      if (drop) continue; // skip foreign dubs (Hindi/Bengali/… — often burned-in subs)
       const { url, referer } = unwrapWorker(s.url);
       streams.push({
         quality: mapQuality(s.bitrate),
         url,
         referer: referer || s.headers?.Referer || s.headers?.referer || '',
-        language: s.language || 'VO',
-        server: `${dec.name || scraperId}/${serverName}`,
+        language: label,
+        server,
+        isHls: kind === 'hls',
         subtitles: subs,
       });
     }

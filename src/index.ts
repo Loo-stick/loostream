@@ -338,7 +338,8 @@ function buildProxyUrl(
   useTransformer: boolean = false,
   req?: express.Request,
   config?: UserConfig | null,
-  forceLocal: boolean = false
+  forceLocal: boolean = false,
+  forceHls: boolean = false
 ): string | null {
   // SECURITY: Validate stream URL before proxying (applies to both local and MediaFlow)
   const validation = isAllowedUrl(streamUrl);
@@ -361,7 +362,7 @@ function buildProxyUrl(
     const baseUrl = `${proto}://${host}`;
 
     // Choose endpoint based on stream type
-    const endpoint = isHlsUrl(streamUrl) ? '/proxy/manifest' : '/proxy/stream';
+    const endpoint = (forceHls || isHlsUrl(streamUrl)) ? '/proxy/manifest' : '/proxy/stream';
     const proxyUrl = new URL(endpoint, baseUrl);
     proxyUrl.searchParams.set('url', streamUrl);
 
@@ -390,7 +391,7 @@ function buildProxyUrl(
 
     // HLS -> MediaFlow HLS proxy; direct files (mp4/mkv) -> MediaFlow stream proxy
     // (forwards Range for seeking). Sending an mp4 to the HLS endpoint 403s.
-    const endpoint = isHlsUrl(streamUrl) ? '/proxy/hls/manifest.m3u8' : '/proxy/stream';
+    const endpoint = (forceHls || isHlsUrl(streamUrl)) ? '/proxy/hls/manifest.m3u8' : '/proxy/stream';
     const proxyUrl = new URL(endpoint, mfUrl);
     proxyUrl.searchParams.set('api_password', mfPass);
     proxyUrl.searchParams.set('d', streamUrl);
@@ -691,12 +692,13 @@ async function handleStream(req: express.Request, res: express.Response, type: s
       });
     }
 
-    // Process CinemaOS results (aggregated HLS + per-source subtitles).
+    // Process CinemaOS results (aggregated HLS + per-source subtitles). Many HLS
+    // masters have a .txt extension, so force HLS routing based on the source type.
     for (const cs of cinemaosResults) {
       const proxiedUrl = buildProxyUrl(cs.url, {
         ...(cs.referer ? { 'Referer': cs.referer } : {}),
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-      }, false, req, config);
+      }, false, req, config, false, cs.isHls);
 
       if (!proxiedUrl) continue; // Skip blocked URLs
 
