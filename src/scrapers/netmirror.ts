@@ -24,8 +24,9 @@ import { cached } from '../cache';
 // proxy already transforms them (needsTransformer() sniffs the manifest).
 //
 // Multi-audio means we no longer drop Hindi or guess a language: we return one
-// adaptive stream and the player picks the track. Series not wired yet (FrenchStream
-// covers series VF); getNetmirrorStreams returns [] for series.
+// adaptive stream and the player picks the track. Series are supported too:
+// post.php/episodes.php map a series id -> the episode's own content id, which
+// resolves to the same multi-audio HLS master as a movie.
 
 const NET52_BASE = process.env.NETMIRROR_API_BASE || 'https://net52.cc';
 const HLS_BASE = process.env.NETMIRROR_HLS_BASE || 'https://tv.imgcdn.kim';
@@ -206,38 +207,102 @@ async function resolveMaster(
   }
 }
 
+// Resolve a series episode's netfree content id for one catalog. netfree keys
+// every episode by its own id (like a movie): post.php?id={seriesId} returns the
+// season list + the selected season's episodes; episodes.php?s={seasonId}&page=N
+// pages any season's episodes. Each episode's id feeds newtv/hls/{ott}/{id}.m3u8.
+async function resolveEpisodeId(
+  seriesId: string,
+  season: number,
+  episode: number,
+  platform: { ott: string },
+  cookie: string
+): Promise<string | null> {
+  const headers = () => ({
+    'User-Agent': UA,
+    'Referer': `${NET52_BASE}/`,
+    'Cookie': `t_hash_t=${cookie}; ott=${platform.ott}; hd=on`,
+  });
+  const ts = () => Math.floor(Date.now() / 1000);
+  const findEp = (eps: any[]): string | null => {
+    const want = `e${episode}`;
+    const m = Array.isArray(eps) ? eps.find(e => String(e?.ep || '').toLowerCase() === want) : null;
+    return m?.id || null;
+  };
+  try {
+    const { data: post } = await axios.get(`${NET52_BASE}/mobile/post.php`, {
+      params: { id: seriesId, t: ts() }, headers: headers(), timeout: REQ_TIMEOUT_MS,
+    });
+    const seasons: any[] = Array.isArray(post?.season) ? post.season : [];
+    const target = seasons.find(s => String(s?.s) === String(season));
+    if (!target) return null;
+
+    // Fast path: post.php already returned the requested season's episodes.
+    const selected = seasons.find(s => String(s?.sele || '').includes('select'));
+    if (selected && String(selected.s) === String(season)) {
+      const id = findEp(post?.episodes);
+      if (id) return id;
+    }
+
+    // Otherwise (or if not found on the selected page), page episodes.php.
+    for (let page = 1; page <= 6; page++) {
+      const { data: ep } = await axios.get(`${NET52_BASE}/mobile/episodes.php`, {
+        params: { s: target.id, t: ts(), page }, headers: headers(), timeout: REQ_TIMEOUT_MS,
+      });
+      const id = findEp(ep?.episodes);
+      if (id) return id;
+      if (!ep?.nextPageShow) break;
+    }
+    return null;
+  } catch (e: any) {
+    console.log(`[Netmirror] episode resolve (${platform.ott}) failed: ${e.message}`);
+    return null;
+  }
+}
+
 export async function getNetmirrorStreams(
   title: string,
   year: string,
   mediaType: 'movie' | 'series',
-  _season?: number,
-  _episode?: number
+  season?: number,
+  episode?: number
 ): Promise<NetmirrorStream[]> {
-  // Series flow (per-episode netfree ids) not implemented yet.
-  if (mediaType !== 'movie' || !title) return [];
+  if (!title) return [];
+  if (mediaType === 'series' && (!season || !episode)) return [];
 
-  const key = `netmirror:movie:${normalizeTitle(title)}:${year}`;
+  const key = mediaType === 'series'
+    ? `netmirror:series:${normalizeTitle(title)}:${season}:${episode}`
+    : `netmirror:movie:${normalizeTitle(title)}:${year}`;
   return cached(
     key,
     STREAMS_TTL_MS,
-    () => fetchNetmirrorStreams(title, year),
+    () => fetchNetmirrorStreams(title, year, mediaType, season, episode),
     { scope: 'netmirror', shouldCache: r => r.length > 0, negativeTtlMs: EMPTY_TTL_MS }
   );
 }
 
-async function fetchNetmirrorStreams(title: string, year: string): Promise<NetmirrorStream[]> {
+async function fetchNetmirrorStreams(
+  title: string,
+  year: string,
+  mediaType: 'movie' | 'series',
+  season?: number,
+  episode?: number
+): Promise<NetmirrorStream[]> {
   const cookie = await getGuestCookie();
   if (!cookie) return [];
+  const label = mediaType === 'series' ? `${title} S${season}E${episode}` : `${title} (${year})`;
 
-  // Search all three catalogs in parallel; a title may live in more than one.
-  const ids = await Promise.all(
-    PLATFORMS.map(p => searchPlatform(title, year, p, cookie).then(id => ({ p, id })))
-  );
-
+  // Search every catalog in parallel; a title may live in more than one. For a
+  // series, map the found series id -> the requested episode's own content id.
   const masters = await Promise.all(
-    ids.map(async ({ p, id }) => {
-      if (!id) return null;
-      const m = await resolveMaster(p.ott, id);
+    PLATFORMS.map(async (p) => {
+      const found = await searchPlatform(title, year, p, cookie);
+      if (!found) return null;
+      const contentId = mediaType === 'series'
+        ? await resolveEpisodeId(found, season!, episode!, p, cookie)
+        : found;
+      if (!contentId) return null;
+      const m = await resolveMaster(p.ott, contentId);
       if (!m) return null;
       const s: NetmirrorStream = {
         quality: m.quality,
@@ -252,11 +317,11 @@ async function fetchNetmirrorStreams(title: string, year: string): Promise<Netmi
 
   const streams = masters.filter((s): s is NetmirrorStream => s !== null);
   if (streams.length === 0) {
-    console.log(`[Netmirror] No match for "${title}" (${year})`);
+    console.log(`[Netmirror] No match for "${label}"`);
     return [];
   }
   console.log(
-    `[Netmirror] "${title}" (${year}) -> ${streams.map(s => `${s.platform} ${s.quality} ${s.language}`).join(', ')}`
+    `[Netmirror] "${label}" -> ${streams.map(s => `${s.platform} ${s.quality} ${s.language}`).join(', ')}`
   );
   return streams;
 }
