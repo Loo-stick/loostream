@@ -468,7 +468,7 @@ const DEFAULT_TMDB_KEY = process.env.TMDB_API_KEY || '';
 
 const TMDB_TTL_MS = 12 * 60 * 60 * 1000;
 
-async function getTmdbInfo(type: string, id: string, config?: UserConfig | null): Promise<{ title: string; year: string; tmdbId: string } | null> {
+async function getTmdbInfo(type: string, id: string, config?: UserConfig | null): Promise<{ title: string; year: string; tmdbId: string; imdbId: string } | null> {
   const tmdbKey = config?.tmdbKey || DEFAULT_TMDB_KEY;
 
   if (!tmdbKey) {
@@ -500,7 +500,15 @@ async function getTmdbInfo(type: string, id: string, config?: UserConfig | null)
         const title = resp.data.title || resp.data.name;
         const year = (resp.data.release_date || resp.data.first_air_date || '').split('-')[0];
 
-        return { title, year, tmdbId };
+        let imdbId = id.startsWith('tt') ? id : (resp.data.imdb_id || '');
+        if (!imdbId) {
+          try {
+            const ext = await axios.get(`https://api.themoviedb.org/3/${endpoint}/${tmdbId}/external_ids?api_key=${tmdbKey}`);
+            imdbId = ext.data?.imdb_id || '';
+          } catch { /* imdbId optional */ }
+        }
+
+        return { title, year, tmdbId, imdbId };
       } catch (e) {
         console.error('[TMDB] Error:', e);
         return null;
