@@ -127,7 +127,8 @@ function rewriteManifest(
   originalUrl: string,
   baseUrl: string,
   headers: Record<string, string>,
-  useTransformer: boolean
+  useTransformer: boolean,
+  audioKeep?: string[] | null
 ): string {
   const originalBase = originalUrl.substring(0, originalUrl.lastIndexOf('/') + 1);
 
@@ -136,7 +137,22 @@ function rewriteManifest(
     .map(([k, v]) => `h_${k.toLowerCase()}=${encodeURIComponent(v)}`)
     .join('&');
 
-  const lines = manifest.split('\n');
+  let lines = manifest.split('\n');
+
+  // Optional audio-rendition trim (master playlists). Some sources (NetMirror
+  // netfree) expose 20+ audio tracks; players fetch EVERY rendition playlist
+  // before playback starts, making startup painfully slow. Keep only the wanted
+  // languages (by LANGUAGE prefix) plus the DEFAULT track (the original / VO).
+  if (audioKeep && audioKeep.length && /#EXT-X-MEDIA:TYPE=AUDIO/.test(manifest)) {
+    lines = lines.filter(line => {
+      const t = line.trim();
+      if (!t.startsWith('#EXT-X-MEDIA:') || !/TYPE=AUDIO/.test(t)) return true;
+      if (/DEFAULT=YES/i.test(t)) return true; // always keep the original track
+      const lang = (t.match(/LANGUAGE="([^"]+)"/i)?.[1] || '').toLowerCase();
+      return audioKeep.some(k => lang.startsWith(k));
+    });
+  }
+
   const rewritten = lines.map(line => {
     const trimmed = line.trim();
 
@@ -191,6 +207,10 @@ function rewriteManifest(
 router.get('/manifest', async (req: Request, res: Response) => {
   const url = req.query.url as string;
   const transformer = req.query.transformer === 'ts_stream';
+  const audioParam = (req.query.audio as string) || '';
+  const audioKeep = audioParam
+    ? audioParam.split(',').map(s => s.trim().toLowerCase()).filter(Boolean)
+    : null;
 
   if (!url) {
     return res.status(400).send('Missing url parameter');
@@ -217,7 +237,7 @@ router.get('/manifest', async (req: Request, res: Response) => {
     });
 
     const baseUrl = getBaseUrl(req);
-    const rewritten = rewriteManifest(response.data, url, baseUrl, headers, transformer);
+    const rewritten = rewriteManifest(response.data, url, baseUrl, headers, transformer, audioKeep);
 
     res.setHeader('Content-Type', 'application/vnd.apple.mpegurl');
     res.setHeader('Access-Control-Allow-Origin', '*');

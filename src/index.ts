@@ -364,6 +364,13 @@ function buildProxyUrl(
       proxyUrl.searchParams.set('transformer', 'ts_stream');
     }
 
+    // NetMirror (forceLocal) masters carry 20+ audio tracks; trim to the useful
+    // languages so the player doesn't fetch every rendition before playback.
+    // The DEFAULT track (original/VO) is always kept by the proxy on top of these.
+    if (forceLocal) {
+      proxyUrl.searchParams.set('audio', 'fr,en,und');
+    }
+
     for (const [key, value] of Object.entries(headers)) {
       proxyUrl.searchParams.set(`h_${key.toLowerCase()}`, value);
     }
