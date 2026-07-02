@@ -1,7 +1,6 @@
 const WINDOW_SIZE = 20;
 const NO_SUCCESS_ALERT_MS = 2 * 60 * 60 * 1000;
 const CONSECUTIVE_ERRORS_DOWN = 5;
-const EMPTY_RATE_WARN = 0.8;
 
 export type Scraper = 'netmirror' | 'streamflix' | 'movix' | 'faklum' | 'flemmix' | 'frenchstream';
 export type Outcome = 'success' | 'empty' | 'error';
@@ -78,15 +77,18 @@ export function getMetrics(scraper: Scraper): ScraperMetrics {
   let status: ScraperStatus = 'ok';
   let statusReason: string | null = null;
 
+  // "Empty" is a normal outcome — most content simply isn't on every scraper
+  // (especially series, which several scrapers don't cover). So a high empty
+  // rate is NOT a fault and no longer warns; it just created false alarms on a
+  // low-traffic instance whenever the 20-request window filled with series tests.
+  // We alert only on real failure signals: sustained errors, or a scraper that
+  // has produced zero successes across a full window spanning 2h+ (likely dead).
   if (consecutiveErrors >= CONSECUTIVE_ERRORS_DOWN) {
     status = 'down';
     statusReason = `${consecutiveErrors} consecutive errors (last: ${lastError})`;
-  } else if (window >= 5 && emptyRate > EMPTY_RATE_WARN) {
+  } else if (window >= WINDOW_SIZE && !lastSuccessAt && (Date.now() - (buf[0]?.at || Date.now())) > NO_SUCCESS_ALERT_MS) {
     status = 'warning';
-    statusReason = `${empty}/${window} requests returned empty`;
-  } else if (window >= 5 && !lastSuccessAt && (Date.now() - (buf[0]?.at || Date.now())) > NO_SUCCESS_ALERT_MS) {
-    status = 'warning';
-    statusReason = `No successful stream in last ${window} requests`;
+    statusReason = `No successful stream in last ${window} requests (${'>'}2h)`;
   }
 
   return {
