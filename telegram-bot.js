@@ -131,6 +131,13 @@ function telegramRequest(method, data) {
     });
 
     req.on('error', reject);
+    // Guard against a silently hung connection. getUpdates is a long-poll
+    // (timeout:30s); without an HTTP-level timeout a stalled socket never fires
+    // 'error'/'end', the Promise never settles, and the pollUpdates loop dies
+    // forever (setTimeout(pollUpdates,…) is never reached). 40s > the 30s poll.
+    req.setTimeout(40000, () => {
+      req.destroy(new Error('Telegram request timeout'));
+    });
     req.write(postData);
     req.end();
   });
