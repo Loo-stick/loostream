@@ -90,6 +90,7 @@ const PROVIDER_LABELS: Record<string, string> = {
   faklum: 'Faklum',
   flemmix: 'Flemmix',
   frenchstream: 'FrenchStream',
+  cinemaos: 'CinemaOS',
 };
 
 export function providerLabel(source: string): string {

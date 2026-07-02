@@ -3,6 +3,7 @@ import axios from 'axios';
 import path from 'path';
 import { rateLimit } from 'express-rate-limit';
 import { getNetmirrorStreams } from './scrapers/netmirror';
+import { getCinemaosStreams, reloadCinemaosConfig } from './scrapers/cinemaos';
 import { getStreamFlixStreams } from './scrapers/streamflix';
 import { getMovixStreams, reloadMovixEndpoints, getMovixEndpoints } from './scrapers/movix';
 import { getFaklumStreams } from './scrapers/faklum';
@@ -37,6 +38,7 @@ interface Stats {
     faklum: { requests: number; success: number; errors: number; lastSuccess: number | null };
     flemmix: { requests: number; success: number; errors: number; lastSuccess: number | null };
     frenchstream: { requests: number; success: number; errors: number; lastSuccess: number | null };
+    cinemaos: { requests: number; success: number; errors: number; lastSuccess: number | null };
   };
   streamsServed: {
     movix: number;
@@ -45,6 +47,7 @@ interface Stats {
     faklum: number;
     flemmix: number;
     frenchstream: number;
+    cinemaos: number;
   };
 }
 
@@ -58,11 +61,12 @@ const stats: Stats = {
     faklum: { requests: 0, success: 0, errors: 0, lastSuccess: null },
     flemmix: { requests: 0, success: 0, errors: 0, lastSuccess: null },
     frenchstream: { requests: 0, success: 0, errors: 0, lastSuccess: null },
+    cinemaos: { requests: 0, success: 0, errors: 0, lastSuccess: null },
   },
-  streamsServed: { movix: 0, netmirror: 0, streamflix: 0, faklum: 0, flemmix: 0, frenchstream: 0 },
+  streamsServed: { movix: 0, netmirror: 0, streamflix: 0, faklum: 0, flemmix: 0, frenchstream: 0, cinemaos: 0 },
 };
 
-function trackSourceResult(source: 'movix' | 'netmirror' | 'streamflix' | 'faklum' | 'flemmix' | 'frenchstream', success: boolean, streamCount: number = 0) {
+function trackSourceResult(source: 'movix' | 'netmirror' | 'streamflix' | 'faklum' | 'flemmix' | 'frenchstream' | 'cinemaos', success: boolean, streamCount: number = 0) {
   stats.sources[source].requests++;
   if (success) {
     stats.sources[source].success++;
@@ -110,6 +114,7 @@ interface StreamWithMeta {
   title: string;
   url: string;
   behaviorHints: { notWebReady: boolean; bingeGroup: string; filename?: string };
+  subtitles?: { id: string; url: string; lang: string }[];
   _meta: {
     quality: string;
     language: string;
@@ -565,7 +570,7 @@ async function handleStream(req: express.Request, res: express.Response, type: s
       mediaFlowPassword: config?.mfPass || DEFAULT_MEDIAFLOW_PASSWORD,
     };
 
-    const [netmirrorResults, streamflixResults, movixResults, faklumResults, flemmixResults, frenchstreamResults] = await Promise.all([
+    const [netmirrorResults, streamflixResults, movixResults, faklumResults, flemmixResults, frenchstreamResults, cinemaosResults] = await Promise.all([
       getNetmirrorStreams(info.title, info.year, type as 'movie' | 'series', parsed.season, parsed.episode)
         .then(r => { trackSourceResult('netmirror', true, r.length); recordOutcome('netmirror', r.length > 0 ? 'success' : 'empty'); return r; })
         .catch(e => { console.log('[NetMirror] Error:', e); trackSourceResult('netmirror', false); recordOutcome('netmirror', 'error', e?.message); return []; }),
@@ -584,6 +589,9 @@ async function handleStream(req: express.Request, res: express.Response, type: s
       getFrenchStreamStreams(info.tmdbId, type as 'movie' | 'series', extractorConfig, config?.tmdbKey || DEFAULT_TMDB_KEY, parsed.season, parsed.episode)
         .then(r => { trackSourceResult('frenchstream', true, r.length); recordOutcome('frenchstream', r.length > 0 ? 'success' : 'empty'); return r; })
         .catch(e => { console.log('[FrenchStream] Error:', e); trackSourceResult('frenchstream', false); recordOutcome('frenchstream', 'error', e?.message); return []; }),
+      getCinemaosStreams(info.tmdbId, info.imdbId, type as 'movie' | 'series', info.title, info.year, parsed.season, parsed.episode)
+        .then(r => { trackSourceResult('cinemaos', true, r.length); recordOutcome('cinemaos', r.length > 0 ? 'success' : 'empty'); return r; })
+        .catch(e => { console.log('[CinemaOS] Error:', e); trackSourceResult('cinemaos', false); recordOutcome('cinemaos', 'error', e?.message); return []; }),
     ]);
 
     const streams: StreamWithMeta[] = [];
@@ -679,6 +687,32 @@ async function handleStream(req: express.Request, res: express.Response, type: s
           quality: sf.quality,
           language: sf.language,
           source: 'streamflix',
+        },
+      });
+    }
+
+    // Process CinemaOS results (aggregated HLS + per-source subtitles).
+    for (const cs of cinemaosResults) {
+      const proxiedUrl = buildProxyUrl(cs.url, {
+        ...(cs.referer ? { 'Referer': cs.referer } : {}),
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+      }, false, req, config);
+
+      if (!proxiedUrl) continue; // Skip blocked URLs
+
+      streams.push({
+        name: `CinemaOS ${cs.server}`,
+        title: `${cs.language} [${cs.quality}]`,
+        url: proxiedUrl,
+        behaviorHints: {
+          notWebReady: false,
+          bingeGroup: `cinemaos-${cs.server}`,
+        },
+        subtitles: cs.subtitles.map((s, i) => ({ id: `cinemaos-${i}-${s.lang}`, url: s.url, lang: s.lang })),
+        _meta: {
+          quality: cs.quality,
+          language: cs.language,
+          source: 'cinemaos',
         },
       });
     }
@@ -824,8 +858,9 @@ async function handleStream(req: express.Request, res: express.Response, type: s
     const movixCount = streams.filter(s => s._meta?.source === 'movix').length;
     const netmirrorCount = streams.filter(s => s._meta?.source === 'netmirror').length;
     const streamflixCount = streams.filter(s => s._meta?.source === 'streamflix').length;
+    const cinemaosCount = streams.filter(s => s._meta?.source === 'cinemaos').length;
 
-    console.log(`[Stream] Returning ${cleanStreams.length} streams (Movix: ${movixCount}, NetMirror: ${netmirrorCount}, StreamFlix: ${streamflixCount})`);
+    console.log(`[Stream] Returning ${cleanStreams.length} streams (Movix: ${movixCount}, NetMirror: ${netmirrorCount}, StreamFlix: ${streamflixCount}, CinemaOS: ${cinemaosCount})`);
     res.json({ streams: cleanStreams });
   } catch (e) {
     console.error('[Stream] Error:', e);
@@ -988,6 +1023,15 @@ app.get('/api/extractor-domains', (req, res) => {
   const reload = req.query.reload === 'true';
   const current = reload ? reloadExtractorDomains() : getExtractorDomains();
   res.json({ ...current, reloaded: reload });
+});
+
+// CinemaOS config admin (reload keys/token/scrapers without a rebuild)
+app.get('/api/cinemaos/config', (req, res) => {
+  if (req.query.reload === 'true') {
+    try { const c = reloadCinemaosConfig(); return res.json({ ok: true, scrapers: c.scrapers.length }); }
+    catch (e: any) { return res.status(500).json({ ok: false, error: e.message }); }
+  }
+  res.json({ ok: true });
 });
 
 // Stats endpoint
