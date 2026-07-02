@@ -135,7 +135,7 @@ async function scrapeOne(meta: Record<string, string>, scraperId: string): Promi
   const c = loadCinemaosConfig();
   const params = new URLSearchParams({
     ...meta,
-    secret: signSecret({ tmdbId: meta.tmdbId, imdbId: meta.imdbId, season: meta.season, episode: meta.episode }),
+    secret: signSecret({ tmdbId: meta.tmdbId, imdbId: meta.imdbId, season: meta.seasonId, episode: meta.episodeId }),
     _gt: c.gt,
     scraper: scraperId,
   });
@@ -201,7 +201,7 @@ async function fetchCinemaos(
 ): Promise<CinemaosStream[]> {
   const c = loadCinemaosConfig();
   const meta: Record<string, string> = { type: mediaType === 'series' ? 'tv' : 'movie', tmdbId, imdbId, t: title, ry: year };
-  if (mediaType === 'series') { meta.season = String(season); meta.episode = String(episode); }
+  if (mediaType === 'series') { meta.seasonId = String(season); meta.episodeId = String(episode); }
 
   const results = await Promise.all(c.scrapers.map(id => scrapeOne(meta, id)));
   const streams = results.filter((r): r is { streams: CinemaosStream[] } => !!r).flatMap(r => r.streams);
