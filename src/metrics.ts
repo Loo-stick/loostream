@@ -1,5 +1,4 @@
 const WINDOW_SIZE = 20;
-const NO_SUCCESS_ALERT_MS = 2 * 60 * 60 * 1000;
 const CONSECUTIVE_ERRORS_DOWN = 5;
 
 export type Scraper = 'netmirror' | 'streamflix' | 'movix' | 'faklum' | 'flemmix' | 'frenchstream' | 'cinemaos';
@@ -87,9 +86,11 @@ export function getMetrics(scraper: Scraper): ScraperMetrics {
   if (consecutiveErrors >= CONSECUTIVE_ERRORS_DOWN) {
     status = 'down';
     statusReason = `${consecutiveErrors} consecutive errors (last: ${lastError})`;
-  } else if (window >= WINDOW_SIZE && !lastSuccessAt && (Date.now() - (buf[0]?.at || Date.now())) > NO_SUCCESS_ALERT_MS) {
+  } else if (window >= WINDOW_SIZE && !lastSuccessAt) {
+    // Stable: no time term. A sliding window kept crossing the age threshold back
+    // and forth, flapping OK<->WARNING on every check and spamming Telegram.
     status = 'warning';
-    statusReason = `No successful stream in last ${window} requests (${'>'}2h)`;
+    statusReason = `No successful stream in last ${window} requests`;
   }
 
   return {

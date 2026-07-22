@@ -3,7 +3,7 @@ import axios from 'axios';
 import path from 'path';
 import { rateLimit } from 'express-rate-limit';
 import { getNetmirrorStreams } from './scrapers/netmirror';
-import { getCinemaosStreams, reloadCinemaosConfig } from './scrapers/cinemaos';
+import { getCinemaosStreams, reloadCinemaosConfig, isCinemaosEnabled } from './scrapers/cinemaos';
 import { getStreamFlixStreams } from './scrapers/streamflix';
 import { getMovixStreams, reloadMovixEndpoints, getMovixEndpoints } from './scrapers/movix';
 import { getFaklumStreams } from './scrapers/faklum';
@@ -591,8 +591,8 @@ async function handleStream(req: express.Request, res: express.Response, type: s
         .then(r => { trackSourceResult('frenchstream', true, r.length); recordOutcome('frenchstream', r.length > 0 ? 'success' : 'empty'); return r; })
         .catch(e => { console.log('[FrenchStream] Error:', e); trackSourceResult('frenchstream', false); recordOutcome('frenchstream', 'error', e?.message); return []; }),
       getCinemaosStreams(info.tmdbId, info.imdbId, type as 'movie' | 'series', info.title, info.year, parsed.season, parsed.episode)
-        .then(r => { trackSourceResult('cinemaos', true, r.length); recordOutcome('cinemaos', r.length > 0 ? 'success' : 'empty'); return r; })
-        .catch(e => { console.log('[CinemaOS] Error:', e); trackSourceResult('cinemaos', false); recordOutcome('cinemaos', 'error', e?.message); return []; }),
+        .then(r => { if (isCinemaosEnabled()) { trackSourceResult('cinemaos', true, r.length); recordOutcome('cinemaos', r.length > 0 ? 'success' : 'empty'); } return r; })
+        .catch(e => { console.log('[CinemaOS] Error:', e); if (isCinemaosEnabled()) { trackSourceResult('cinemaos', false); recordOutcome('cinemaos', 'error', e?.message); } return []; }),
     ]);
 
     const streams: StreamWithMeta[] = [];
@@ -696,7 +696,7 @@ async function handleStream(req: express.Request, res: express.Response, type: s
     // masters have a .txt extension, so force HLS routing based on the source type.
     for (const cs of cinemaosResults) {
       const proxiedUrl = buildProxyUrl(cs.url, {
-        ...(cs.referer ? { 'Referer': cs.referer } : {}),
+        ...cs.headers,
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
       }, false, req, config, false, cs.isHls);
 

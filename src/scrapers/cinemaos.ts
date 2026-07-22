@@ -40,6 +40,12 @@ export function loadCinemaosConfig(): CinemaosConfig {
   return cfg;
 }
 
+// Disabled = empty scraper list. Callers skip metrics so a deliberately-off
+// source doesn't sit at "0 success" and trigger permanent WARNING alerts.
+export function isCinemaosEnabled(): boolean {
+  return cfg.scrapers.length > 0;
+}
+
 export function reloadCinemaosConfig(): CinemaosConfig {
   cfg = loadFromDisk();
   console.log(`[CinemaOS] Config reloaded (${cfg.scrapers.length} scrapers)`);
@@ -87,12 +93,12 @@ const REQ_TIMEOUT_MS = 15000;
 
 export interface CinemaosSubtitle { url: string; lang: string; }
 export interface CinemaosStream {
-  quality: string;   // '4K' | '1080p' | '720p' | 'HD'
-  url: string;       // direct HLS m3u8 (worker-unwrapped when applicable)
-  referer: string;   // header the CDN needs (may be '')
-  language: string;  // 'VO' | 'VF' | 'MULTI' | 'English'
-  server: string;    // e.g. 'Vidzee/Vega'
-  isHls: boolean;    // route through /proxy/manifest even if the url ends .txt
+  quality: string;                    // '4K' | '1080p' | '720p' | 'HD'
+  url: string;                        // HLS m3u8 (cinemaos worker URL kept as-is, or direct CDN)
+  headers: Record<string, string>;    // exact headers the url needs (Origin/Referer)
+  language: string;                   // 'VO' | 'VF' | 'MULTI' | 'English'
+  server: string;                     // e.g. 'Vidzee/Vega'
+  isHls: boolean;                     // route through /proxy/manifest even if the url ends .txt
   subtitles: CinemaosSubtitle[];
 }
 
@@ -100,7 +106,7 @@ export interface CinemaosStream {
 // SERVER NAME (Rive/Hindi, Multimovies/🇮🇳 🇺🇸 Nova, …). Classify from both, and
 // DROP foreign dubs (which often carry burned-in subtitles), keeping only
 // VO / VF / MULTI — mirroring the NetMirror "drop Hindi" policy.
-const FOREIGN_DUB = /\b(hindi|bengali|bangla|tamil|telugu|bollywood|kannada|malayalam|marathi|punjabi|gujarati|urdu|arabic|turkish|russian|indonesian?|vietnam\w*|thai|korean|japanese|persian|farsi|dublado|dublada|latino|castellano)\b/;
+const FOREIGN_DUB = /\b(hindi|bengali|bangla|tamil|telugu|bollywood|kannada|malayalam|marathi|punjabi|gujarati|urdu|arabic|turkish|russian|indonesian?|vietnam\w*|vietsub|ophim|thai|korean|japanese|persian|farsi|dublado|dublada|latino|castellano)\b/;
 const HAS_INDIA = /🇮🇳/;
 const IS_FRENCH = /\b(french|français|francais|truefrench|vff?|vostfr)\b|🇫🇷/;
 
@@ -123,15 +129,16 @@ function mapQuality(bitrate?: string): string {
   return 'HD';
 }
 
-// play.cinemaos.workers.dev/api/proxy?url=<enc>&referer=<enc> -> unwrap to the real CDN url.
-function unwrapWorker(u: string): { url: string; referer: string } {
-  try {
-    const parsed = new URL(u);
-    if (parsed.hostname.endsWith('cinemaos.workers.dev') && parsed.searchParams.get('url')) {
-      return { url: parsed.searchParams.get('url')!, referer: parsed.searchParams.get('referer') || '' };
-    }
-  } catch { /* fall through */ }
-  return { url: u, referer: '' };
+// Compute the headers a source url needs. cinemaos's own worker
+// (play.cinemaos.workers.dev/api/proxy) gates on Origin and self-proxies its
+// segments (relative ?url= URLs) — KEEP the worker url as-is and spoof the
+// cinemaos.live origin. Direct CDN sources use the provider's own referer.
+function headersFor(u: string, srcHeaders?: Record<string, string>): Record<string, string> {
+  let isWorker = false;
+  try { isWorker = new URL(u).hostname.endsWith('cinemaos.workers.dev'); } catch { /* keep false */ }
+  if (isWorker) return { Origin: 'https://cinemaos.live', Referer: 'https://cinemaos.live/' };
+  const ref = srcHeaders?.Referer || srcHeaders?.referer;
+  return ref ? { Referer: ref } : {};
 }
 
 // Subtitle languages we surface (VO/VF-relevant): English, French, undetermined.
@@ -149,6 +156,24 @@ function toLang(language?: string, languageName?: string): string {
   if (/port/.test(s)) return 'por';
   if (/hind/.test(s)) return 'hin';
   return (language || languageName || 'und').slice(0, 3).toLowerCase();
+}
+
+// Liveness: many CinemaOS sources return an empty/dead manifest (just "#EXTM3U",
+// or a 4xx) — playing them is a black screen. Fetch the master and confirm it
+// actually references variants/segments. mp4 sources are checked with a HEAD.
+async function isLive(s: CinemaosStream): Promise<boolean> {
+  const headers: Record<string, string> = { 'User-Agent': UA, ...s.headers };
+  try {
+    if (!s.isHls) {
+      const r = await axios.head(s.url, { headers, timeout: 8000, validateStatus: () => true, maxRedirects: 3 });
+      return r.status >= 200 && r.status < 400;
+    }
+    const r = await axios.get<string>(s.url, { headers, timeout: 8000, responseType: 'text', transformResponse: v => v, validateStatus: () => true, maxRedirects: 3 });
+    if (r.status < 200 || r.status >= 400 || typeof r.data !== 'string') return false;
+    return /#EXT-X-STREAM-INF|#EXTINF|\.m3u8|\.ts(\?|$|\n)|\.jpg/i.test(r.data);
+  } catch {
+    return false;
+  }
 }
 
 interface DecodedSource { url?: string; type?: string; language?: string; bitrate?: string; headers?: Record<string, string>; server?: string; }
@@ -189,11 +214,10 @@ async function scrapeOne(meta: Record<string, string>, scraperId: string): Promi
       const server = `${dec.name || scraperId}/${serverName}`;
       const { label, drop } = classifyLanguage(server, s.language);
       if (drop) continue; // skip foreign dubs (Hindi/Bengali/… — often burned-in subs)
-      const { url, referer } = unwrapWorker(s.url);
       streams.push({
         quality: mapQuality(s.bitrate),
-        url,
-        referer: referer || s.headers?.Referer || s.headers?.referer || '',
+        url: s.url,
+        headers: headersFor(s.url, s.headers),
         language: label,
         server,
         isHls: kind === 'hls',
@@ -238,6 +262,11 @@ async function fetchCinemaos(
   const seen = new Set<string>();
   const deduped = streams.filter(s => (seen.has(s.url) ? false : (seen.add(s.url), true)));
   if (deduped.length === 0) { console.log(`[CinemaOS] No streams for "${title}" (${year})`); return []; }
-  console.log(`[CinemaOS] "${title}" -> ${deduped.length} stream(s): ${deduped.map(s => `${s.server}[${s.quality}/${s.language}]`).slice(0, 8).join(', ')}`);
-  return deduped;
+
+  // Drop dead/empty sources so we never surface a black-screen stream.
+  const liveness = await Promise.all(deduped.map(isLive));
+  const live = deduped.filter((_, i) => liveness[i]);
+  if (live.length === 0) { console.log(`[CinemaOS] All ${deduped.length} sources dead for "${title}" (${year})`); return []; }
+  console.log(`[CinemaOS] "${title}" -> ${live.length}/${deduped.length} live: ${live.map(s => `${s.server}[${s.quality}/${s.language}]`).slice(0, 8).join(', ')}`);
+  return live;
 }
