@@ -261,14 +261,46 @@ function isWrapper(url: string): boolean {
   }
 }
 
+// Wrapper timeouts dominate the addon's cold response time: the wrappers are
+// resolved before extraction, so one dead endpoint stalls the whole source.
+// Keep the budget short and remember dead endpoints for a while.
+const WRAPPER_TIMEOUT_MS = 5000;
+const WRAPPER_DEAD_TTL_MS = 10 * 60 * 1000;
+const deadWrappers = new Map<string, number>();
+
+// kakaflix serves several "chambers" (/sydney/, /tokyo/, …) and they die
+// independently — one can hang forever while another answers in 400ms. So the
+// cooldown key is host + first path segment, not just the host.
+function wrapperKey(url: string): string {
+  try {
+    const u = new URL(url);
+    return `${u.hostname}${u.pathname.split('/').slice(0, 2).join('/')}`;
+  } catch {
+    return url;
+  }
+}
+
+function isWrapperDead(url: string): boolean {
+  const until = deadWrappers.get(wrapperKey(url));
+  if (until === undefined) return false;
+  if (Date.now() < until) return true;
+  deadWrappers.delete(wrapperKey(url));
+  return false;
+}
+
 async function resolveWrapper(url: string): Promise<string> {
+  if (isWrapperDead(url)) {
+    console.log(`[FrenchStream] Wrapper skipped (en cooldown): ${wrapperKey(url)}`);
+    return url;
+  }
   // voe bounces through several rotation domains; the chain is flaky and can
-  // ECONNRESET mid-way, so retry once.
+  // ECONNRESET mid-way, so retry once — but never on a timeout, which means the
+  // endpoint is hanging and a second attempt just doubles the wait.
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
       const resp = await axios.get(url, {
         headers: { ...HEADERS, Referer: `${endpoints.base}/` },
-        timeout: 8000,
+        timeout: WRAPPER_TIMEOUT_MS,
         maxRedirects: 12,
         httpsAgent: insecureAgent,
         validateStatus: () => true,
@@ -280,6 +312,12 @@ async function resolveWrapper(url: string): Promise<string> {
       }
       return url;
     } catch (e: any) {
+      const timedOut = e.code === 'ECONNABORTED' || e.code === 'ETIMEDOUT';
+      if (timedOut) {
+        deadWrappers.set(wrapperKey(url), Date.now() + WRAPPER_DEAD_TTL_MS);
+        console.log(`[FrenchStream] Wrapper timeout, cooldown ${WRAPPER_DEAD_TTL_MS / 60000}min: ${wrapperKey(url)}`);
+        return url;
+      }
       if (attempt === 1) console.log(`[FrenchStream] Wrapper resolve failed (${url}): ${e.message}`);
     }
   }
