@@ -54,6 +54,12 @@ export async function getSceneMeta(
 // "Dune: Part Two" -> "Dune.Part.Two" ; strip accents and : , ' ! ?
 export function normalizeForFilename(title: string): string {
   return title
+    // Ligatures don't decompose under NFD; spell them out first so "Æon Flux"
+    // becomes "Aeon.Flux" instead of losing its first letter to the dot strip.
+    .replace(/Æ/g, 'AE').replace(/æ/g, 'ae')
+    .replace(/Œ/g, 'OE').replace(/œ/g, 'oe')
+    .replace(/ß/g, 'ss')
+    .replace(/Ø/g, 'O').replace(/ø/g, 'o')
     .normalize('NFD')
     .replace(/[̀-ͯ]/g, '')   // accents
     .replace(/[:,'’!?]/g, '')          // punctuation to drop entirely
@@ -62,25 +68,43 @@ export function normalizeForFilename(title: string): string {
     .replace(/^\.|\.$/g, '');
 }
 
-// Map our internal language tag to a scene-style token. VO -> none (default EN).
-function mapLang(lang: string): string {
+// ISO 639-1 -> scene-style spoken-language token. parse-torrent-title reads
+// these into its `languages` field; we only need the ones our catalogue serves.
+const ISO_TO_SCENE: Record<string, string> = {
+  fr: 'FRENCH', en: '', es: 'SPANISH', ko: 'KOREAN', ja: 'JAPANESE',
+  zh: 'CHINESE', de: 'GERMAN', it: 'ITALIAN', pt: 'PORTUGUESE', ru: 'RUSSIAN',
+  hi: 'HINDI', th: 'THAI', tr: 'TURKISH', ar: 'ARABIC',
+};
+
+// Map our internal language tag to a scene-style token.
+// `originalLanguage` (TMDB ISO 639-1) resolves the VO case: "VO" of a Korean
+// drama must read KOREAN, not vanish into the English default — otherwise
+// AIOStreams files every foreign original as English.
+function mapLang(lang: string, originalLanguage?: string): string {
   const l = (lang || '').toUpperCase();
   if (l.includes('MULTI')) return 'MULTI';
   if (l.includes('VOSTFR')) return 'VOSTFR';
   if (l === 'VF' || l.includes('FRENCH') || l === 'VFF' || l === 'VFQ' || l === 'FR') return 'FRENCH';
-  if (l === 'VO' || l.includes('ENGLISH') || l.includes('ORIGINAL') || l === 'EN') return '';
+  if (l === 'VO' || l.includes('ORIGINAL')) {
+    // Emit the real original language; empty (English) stays untagged.
+    return ISO_TO_SCENE[(originalLanguage || 'en').toLowerCase()] ?? '';
+  }
+  if (l.includes('ENGLISH') || l === 'EN') return '';
   return ''; // unknown -> no lang tag (safer for the parser than garbage)
 }
 
-// Map our quality tag to a resolution token.
+// Map our quality tag to a resolution token. Only real, parsable resolutions are
+// emitted: an unknown or ambiguous quality ("HD", "SD", "") returns '' so we
+// never inject a bogus token — buildFilename drops empty segments. In particular
+// we do NOT coerce "HD" to 720p: most FR sources label 1080p streams "HD", so
+// that coercion silently demoted them under every real 1080p in AIOStreams.
 function mapResolution(quality: string): string {
   const q = (quality || '').toLowerCase();
   if (q.includes('2160') || q.includes('4k')) return '2160p';
   if (q.includes('1080')) return '1080p';
   if (q.includes('720')) return '720p';
   if (q.includes('480')) return '480p';
-  if (q === 'hd' || q.includes('hd')) return '720p'; // HD is ambiguous; be conservative
-  return 'Unknown';
+  return '';
 }
 
 const PROVIDER_LABELS: Record<string, string> = {
@@ -91,6 +115,7 @@ const PROVIDER_LABELS: Record<string, string> = {
   frenchstream: 'FrenchStream',
   cinemaos: 'CinemaOS',
   wiflix: 'Wiflix',
+  voirdrama: 'VoirDrama',
 };
 
 export function providerLabel(source: string): string {
@@ -107,13 +132,18 @@ export interface FilenameParts {
   isSeries: boolean;
   season?: number;
   episode?: number;
-  lang: string;       // our internal tag (MULTI/VF/VOSTFR/VO/...)
-  resolution: string; // our internal quality tag (1080p/720p/HD/...)
-  provider: string;   // display label (Movix/Wiflix/...)
+  lang: string;              // our internal tag (MULTI/VF/VOSTFR/VO/...)
+  originalLanguage?: string; // TMDB ISO 639-1, resolves the VO token
+  resolution: string;        // our internal quality tag (1080p/720p/HD/...)
+  provider: string;          // display label (Movix/Wiflix/...)
 }
 
-// Films : {Title}.{Year}.{Lang}.{Resolution}.WEB-DL.x264-{Provider}.mkv
-// Séries : {Title}.S{NN}E{NN}.{Year}.{Lang}.{Resolution}.WEB-DL.x264-{Provider}.mkv
+// Films : {Title}.{Year}.{Lang}.{Resolution}-{Provider}.mkv
+// Séries : {Title}.S{NN}E{NN}.{Year}.{Lang}.{Resolution}-{Provider}.mkv
+// No source/codec tokens: injecting a hardcoded WEB-DL / x264 on every stream
+// made those AIOStreams filters and stats meaningless. The provider stays in the
+// release-group position (after the final "-"), which is all AIOStreams reads it
+// from. Empty language/resolution segments are dropped.
 export function buildFilename(p: FilenameParts): string {
   const segments: string[] = [normalizeForFilename(p.title)];
 
@@ -122,12 +152,11 @@ export function buildFilename(p: FilenameParts): string {
   }
   if (p.year) segments.push(p.year);
 
-  const langTok = mapLang(p.lang);
+  const langTok = mapLang(p.lang, p.originalLanguage);
   if (langTok) segments.push(langTok);
 
-  segments.push(mapResolution(p.resolution));
-  segments.push('WEB-DL');
-  segments.push(`x264-${p.provider}`);
+  const resTok = mapResolution(p.resolution);
+  if (resTok) segments.push(resTok);
 
-  return segments.filter(Boolean).join('.') + '.mkv';
+  return `${segments.filter(Boolean).join('.')}-${p.provider}.mkv`;
 }
