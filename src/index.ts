@@ -474,7 +474,7 @@ const DEFAULT_TMDB_KEY = process.env.TMDB_API_KEY || '';
 
 const TMDB_TTL_MS = 12 * 60 * 60 * 1000;
 
-async function getTmdbInfo(type: string, id: string, config?: UserConfig | null): Promise<{ title: string; year: string; tmdbId: string; imdbId: string } | null> {
+async function getTmdbInfo(type: string, id: string, config?: UserConfig | null): Promise<{ title: string; year: string; tmdbId: string; imdbId: string; originalLanguage: string } | null> {
   const tmdbKey = config?.tmdbKey || DEFAULT_TMDB_KEY;
 
   if (!tmdbKey) {
@@ -514,7 +514,9 @@ async function getTmdbInfo(type: string, id: string, config?: UserConfig | null)
           } catch { /* imdbId optional */ }
         }
 
-        return { title, year, tmdbId, imdbId };
+        const originalLanguage = String(resp.data.original_language || '').toLowerCase();
+
+        return { title, year, tmdbId, imdbId, originalLanguage };
       } catch (e) {
         console.error('[TMDB] Error:', e);
         return null;
@@ -572,7 +574,7 @@ async function handleStream(req: express.Request, res: express.Response, type: s
     };
 
     const [netmirrorResults, streamflixResults, movixResults, faklumResults, flemmixResults, frenchstreamResults, cinemaosResults] = await Promise.all([
-      getNetmirrorStreams(info.title, info.year, type as 'movie' | 'series', parsed.season, parsed.episode)
+      getNetmirrorStreams(info.title, info.year, type as 'movie' | 'series', parsed.season, parsed.episode, info.originalLanguage)
         .then(r => { trackSourceResult('netmirror', true, r.length); recordOutcome('netmirror', r.length > 0 ? 'success' : 'empty'); return r; })
         .catch(e => { console.log('[NetMirror] Error:', e); trackSourceResult('netmirror', false); recordOutcome('netmirror', 'error', e?.message); return []; }),
       getStreamFlixStreams(info.tmdbId, type as 'movie' | 'series', parsed.season, parsed.episode, config?.tmdbKey || DEFAULT_TMDB_KEY)

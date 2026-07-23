@@ -253,9 +253,40 @@ async function probeAudio(cdnHost: string, id: string, candidates: number[]):
   return info ? { tracks, ...info } : null;
 }
 
-// Pistes qu'on expose : VO + VF (+ non déterminée). Les autres langues et les
-// doublages indiens sont écartés (politique NetMirror habituelle).
-const KEEP_LANG = /^(fr|fre|fra|en|eng|und)/;
+// ISO 639-1 (TMDB) -> 639-2 (manifestes netfree), pour reconnaître la VO.
+const ISO1_TO_ISO2: Record<string, string> = {
+  en: 'eng', fr: 'fra', es: 'spa', ko: 'kor', ja: 'jpn', zh: 'zho', de: 'deu',
+  it: 'ita', pt: 'por', ru: 'rus', hi: 'hin', ar: 'ara', tr: 'tur', pl: 'pol',
+  nl: 'nld', sv: 'swe', da: 'dan', no: 'nor', fi: 'fin', cs: 'ces', hu: 'hun',
+  th: 'tha', vi: 'vie', id: 'ind', he: 'heb', uk: 'ukr', ro: 'ron', el: 'ell',
+  ta: 'tam', te: 'tel', bn: 'ben', ml: 'mal', mr: 'mar', pa: 'pan', fa: 'fas',
+};
+
+/**
+ * Faut-il exposer cette piste ?
+ * On garde : la VO (langue d'ORIGINE du titre selon TMDB — indispensable pour un
+ * film coréen/espagnol/japonais…), le FRANÇAIS (VF), l'anglais (utile et souvent
+ * la VO), et `und` (souvent la piste d'origine non étiquetée).
+ * Tout le reste (doublages) est écarté — y compris le hindi, SAUF si c'est la VO.
+ */
+function keepTrack(code: string, originalLanguage: string): boolean {
+  const c = (code || 'und').toLowerCase();
+  const orig = ISO1_TO_ISO2[(originalLanguage || '').toLowerCase()] || '';
+  if (orig && c.startsWith(orig.slice(0, 3))) return true;   // VO réelle
+  if (/^(fr|fre|fra)/.test(c)) return true;                  // VF
+  if (c === 'und' || c === '') return true;                  // non étiquetée
+  return /^(en|eng)/.test(c);                                // anglais
+}
+
+/** Libellé affiché, calculé par rapport à la VO du titre. */
+function labelFor(codes: string[], originalLanguage: string): string {
+  const orig = ISO1_TO_ISO2[(originalLanguage || '').toLowerCase()] || '';
+  const hasFr = codes.some(c => /^(fr|fre|fra)/.test(c));
+  const hasVo = codes.some(c => c === 'und' || (orig && c.startsWith(orig.slice(0, 3))) || (!orig && /^(en|eng)/.test(c)));
+  if (hasFr && hasVo) return 'MULTI (VF+VO)';
+  if (hasFr) return 'VF';
+  return codes.length > 1 ? 'MULTI' : 'VO';
+}
 
 const segUrl = (cdnHost: string, id: string, q: string, prefix: string, n: number) =>
   `https://${cdnHost}/files/${id}/${q}/${prefix}_${String(n).padStart(3, '0')}.jpg`;
@@ -343,18 +374,19 @@ export async function getNetmirrorStreams(
   year: string,
   mediaType: 'movie' | 'series',
   season?: number,
-  episode?: number
+  episode?: number,
+  originalLanguage = ''
 ): Promise<NetmirrorStream[]> {
   if (!title) return [];
   if (mediaType === 'series' && (!season || !episode)) return [];
 
   const key = mediaType === 'series'
-    ? `netmirror:series:${normalizeTitle(title)}:${season}:${episode}`
-    : `netmirror:movie:${normalizeTitle(title)}:${year}`;
+    ? `netmirror:series:${normalizeTitle(title)}:${season}:${episode}:${originalLanguage}`
+    : `netmirror:movie:${normalizeTitle(title)}:${year}:${originalLanguage}`;
   return cached(
     key,
     STREAMS_TTL_MS,
-    () => fetchNetmirrorStreams(title, year, mediaType, season, episode),
+    () => fetchNetmirrorStreams(title, year, mediaType, season, episode, originalLanguage),
     { scope: 'netmirror', shouldCache: r => r.length > 0, negativeTtlMs: EMPTY_TTL_MS }
   );
 }
@@ -364,7 +396,8 @@ async function fetchNetmirrorStreams(
   year: string,
   mediaType: 'movie' | 'series',
   season?: number,
-  episode?: number
+  episode?: number,
+  originalLanguage = ''
 ): Promise<NetmirrorStream[]> {
   const cookie = await getGuestCookie();
   if (!cookie) return [];
@@ -389,10 +422,7 @@ async function fetchNetmirrorStreams(
       // Pistes candidates = celles listées par le master, filtrées VO+VF.
       // (fallback: les 4 premières si le master n'a pas listé de langues)
       const listed = [...langs.keys()].sort((a, b) => a - b);
-      let candidates = listed.filter(i => {
-        const c = langs.get(i)?.code || 'und';
-        return KEEP_LANG.test(c) && !DROP_LANG.test(c);
-      });
+      let candidates = listed.filter(i => keepTrack(langs.get(i)?.code || 'und', originalLanguage));
       if (!candidates.length) candidates = listed.length ? listed.slice(0, 4) : [0, 1, 2, 3];
 
       // L'id RÉEL porte les vrais fichiers : l'audio nous donne préfixe/nb/durée.
@@ -423,7 +453,7 @@ async function fetchNetmirrorStreams(
         audioTracks: tracks,
         audioLangs: tracks.map(i => ({ index: i, code: langs.get(i)?.code || 'und', name: langs.get(i)?.name || `Audio ${i + 1}` })),
         referer: HLS_REFERER,
-        language: langLabel(codes),
+        language: labelFor(codes, originalLanguage),
         platform: p.label,
       };
       return s;
