@@ -654,6 +654,10 @@ async function handleStream(req: express.Request, res: express.Response, type: s
       mu.searchParams.set('d', r.avgDur.toFixed(3));
       mu.searchParams.set('q', r.qualities.join(','));
       mu.searchParams.set('a', r.audioLangs.map(a => `${a.index}:${a.code}:${encodeURIComponent(a.name)}`).join(','));
+      if (r.subtitles?.length) {
+        mu.searchParams.set('s', r.subtitles
+          .map(t => `${t.code}:${encodeURIComponent(t.name)}:${encodeURIComponent(t.uri)}`).join(','));
+      }
       const proxiedUrl = mu.toString();
 
       streams.push({
@@ -1045,11 +1049,14 @@ function nmSegBase(req: express.Request): string {
   return `${proto}://${host}`;
 }
 
-function nmProxy(base: string, target: string, kind: 'segment' | 'manifest'): string {
+// `ts` = appliquer le transformer MPEG-TS (.jpg -> video/mp2t). À NE PAS activer
+// pour les sous-titres : leurs segments sont du WebVTT, pas de la vidéo.
+function nmProxy(base: string, target: string, kind: 'segment' | 'manifest', ts = true): string {
   const u = new URL(`/proxy/${kind}`, base);
   u.searchParams.set('url', target);
   u.searchParams.set('h_referer', NM_REFERER);
   u.searchParams.set('h_user-agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36');
+  if (!ts) return u.toString();
   if (kind === 'segment') u.searchParams.set('transform', 'ts');
   else u.searchParams.set('transformer', 'ts_stream');
   return u.toString();
@@ -1077,10 +1084,20 @@ app.get('/netmirror/master.m3u8', (req, res) => {
     const url = nmProxy(base, `https://${h}/files/${id}/a/${idx}/${idx}.m3u8`, 'manifest');
     lines.push(`#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="aac",LANGUAGE="${code}",NAME="${name}",DEFAULT=${k === 0 ? 'YES' : 'NO'},AUTOSELECT=${k === 0 ? 'YES' : 'NO'},URI="${url}"`);
   });
+  // Sous-titres : `s` = "code:nom:uriEncodée" (listés par le master, sur subscdn.top).
+  const subs = String(req.query.s || '').split(',').filter(Boolean);
+  subs.forEach((spec, k) => {
+    const [code = 'und', nameEnc = '', uriEnc = ''] = spec.split(':');
+    if (!uriEnc) return;
+    const name = decodeURIComponent(nameEnc) || code;
+    const url = nmProxy(base, decodeURIComponent(uriEnc), 'manifest', false); // pas de transformer TS
+    lines.push(`#EXT-X-MEDIA:TYPE=SUBTITLES,GROUP-ID="subs",LANGUAGE="${code}",NAME="${name}",DEFAULT=NO,AUTOSELECT=${k === 0 ? 'YES' : 'NO'},FORCED=NO,URI="${url}"`);
+  });
+
   const BW: Record<string, [number, string]> = { '1080p': [3000000, '1920x1080'], '720p': [1500000, '1280x720'], '480p': [800000, '854x480'] };
   for (const q of qualities) {
     const [bw, resn] = BW[q] || [1000000, '1280x720'];
-    lines.push(`#EXT-X-STREAM-INF:BANDWIDTH=${bw},RESOLUTION=${resn}${audio.length ? ',AUDIO="aac"' : ''}`);
+    lines.push(`#EXT-X-STREAM-INF:BANDWIDTH=${bw},RESOLUTION=${resn}${audio.length ? ',AUDIO="aac"' : ''}${subs.length ? ',SUBTITLES="subs"' : ''}`);
     lines.push(self(q));
   }
   res.setHeader('Content-Type', 'application/vnd.apple.mpegurl');

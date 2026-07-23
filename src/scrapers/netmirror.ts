@@ -61,6 +61,8 @@ const PLATFORMS: { ott: string; prefix: string; label: string }[] = [
   { ott: 'pv', prefix: 'pv/', label: 'Prime Video' },
 ];
 
+export interface NetmirrorSub { code: string; name: string; uri: string; forced: boolean; }
+
 // Un flux NetMirror reconstruit. On ne renvoie PAS d'URL jouable directement :
 // l'addon génère le manifeste depuis ces paramètres (routes /netmirror/*).
 export interface NetmirrorStream {
@@ -73,6 +75,7 @@ export interface NetmirrorStream {
   avgDur: number;       // durée moyenne d'un segment (s)
   audioTracks: number[];// indices des pistes audio réelles (a/<i>/<i>.m3u8)
   audioLangs: { index: number; code: string; name: string }[]; // langue par piste
+  subtitles: NetmirrorSub[];  // sous-titres listés par le master (subscdn.top)
   referer: string;      // Referer exigé par le CDN
   language: string;
   platform: string;     // 'Netflix' | 'Prime Video' | 'Disney+'
@@ -194,8 +197,9 @@ const cdnHeaders = () => ({ 'User-Agent': UA, 'Referer': HLS_REFERER });
 // Le master placeholder est INUTILISABLE pour la vidéo, mais il porte l'hôte CDN
 // ET les MÉTADONNÉES DE LANGUE des pistes audio (LANGUAGE=/NAME= par index a/<i>).
 async function resolveMasterMeta(apiBase: string, ott: string, id: string):
-  Promise<{ cdnHost: string; langs: Map<number, { code: string; name: string }> }> {
+  Promise<{ cdnHost: string; langs: Map<number, { code: string; name: string }>; subs: NetmirrorSub[] }> {
   const langs = new Map<number, { code: string; name: string }>();
+  const subs: NetmirrorSub[] = [];
   try {
     const { data } = await axios.get<string>(`${apiBase}/newtv/hls/${ott}/${encodeURIComponent(id)}.m3u8`, {
       headers: { ...cdnHeaders(), Accept: '*/*' }, timeout: REQ_TIMEOUT_MS,
@@ -204,15 +208,25 @@ async function resolveMasterMeta(apiBase: string, ott: string, id: string):
     const txt = String(data || '');
     const m = txt.match(/https:\/\/([a-z0-9.-]+)\/files\//i);
     for (const line of txt.split('\n')) {
-      if (!/TYPE=AUDIO/.test(line)) continue;
-      const idx = line.match(/\/a\/(\d+)\/\1\.m3u8/);
-      if (!idx) continue;
-      const code = (line.match(/LANGUAGE="([^"]+)"/i)?.[1] || 'und').toLowerCase();
-      const name = (line.match(/NAME="([^"]+)"/i)?.[1] || code).replace(/^\d+\.\s*/, '');
-      langs.set(parseInt(idx[1], 10), { code, name });
+      if (/TYPE=AUDIO/.test(line)) {
+        const idx = line.match(/\/a\/(\d+)\/\1\.m3u8/);
+        if (!idx) continue;
+        const code = (line.match(/LANGUAGE="([^"]+)"/i)?.[1] || 'und').toLowerCase();
+        const name = (line.match(/NAME="([^"]+)"/i)?.[1] || code).replace(/^\d+\.\s*/, '');
+        langs.set(parseInt(idx[1], 10), { code, name });
+      } else if (/TYPE=SUBTITLES/.test(line)) {
+        // Sous-titres listés par le master : URI absolue sur subscdn.top, utilisable
+        // telle quelle (l'id du contenu est le VRAI id, pas le placeholder).
+        const uri = line.match(/URI="([^"]+)"/i)?.[1];
+        if (!uri) continue;
+        const code = (line.match(/LANGUAGE="([^"]+)"/i)?.[1] || 'und').toLowerCase();
+        const name = (line.match(/NAME="([^"]+)"/i)?.[1] || code).replace(/^\d+\.\s*/, '');
+        const forced = /FORCED=YES/i.test(line);
+        subs.push({ code, name, uri, forced });
+      }
     }
-    return { cdnHost: m ? m[1] : '', langs };
-  } catch { return { cdnHost: '', langs }; }
+    return { cdnHost: m ? m[1] : '', langs, subs };
+  } catch { return { cdnHost: '', langs, subs }; }
 }
 
 // Politique langue (comme avant) : on écarte les doublages indiens, on garde VO/VF.
@@ -416,7 +430,7 @@ async function fetchNetmirrorStreams(
       if (!contentId) return null;
 
       // Le master (placeholder) donne l'hôte CDN + les langues des pistes audio.
-      const { cdnHost, langs } = await resolveMasterMeta(apiBase, p.ott, contentId);
+      const { cdnHost, langs, subs } = await resolveMasterMeta(apiBase, p.ott, contentId);
       if (!cdnHost) return null;
 
       // Pistes candidates = celles listées par le master, filtrées VO+VF.
@@ -464,6 +478,7 @@ async function fetchNetmirrorStreams(
         avgDur: audio.avg,
         audioTracks: tracks,
         audioLangs: tracks.map(i => ({ index: i, code: langs.get(i)?.code || 'und', name: langs.get(i)?.name || `Audio ${i + 1}` })),
+        subtitles: subs,
         referer: HLS_REFERER,
         language: labelFor(codes, originalLanguage),
         platform: p.label,
