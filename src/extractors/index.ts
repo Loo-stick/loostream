@@ -21,12 +21,12 @@ export interface ExtractorConfig {
   mediaFlowPassword?: string;
 }
 
-export type ExtractorId ='voe' | 'uqload' | 'doodstream' | 'filemoon' | 'vidoza' | 'vidmoly' | 'streamtape' | 'mixdrop' | 'sharecloudy' | 'lulustream' | 'filelions' | 'streamwish' | 'fsvid' | 'vidzy';
+export type ExtractorId ='voe' | 'uqload' | 'doodstream' | 'filemoon' | 'vidoza' | 'vidmoly' | 'streamtape' | 'mixdrop' | 'sharecloudy' | 'lulustream' | 'filelions' | 'streamwish' | 'fsvid' | 'vidzy' | 'mailru';
 
 export const EXTRACTOR_IDS: ExtractorId[] = [
   'voe', 'uqload', 'doodstream', 'filemoon', 'vidoza', 'vidmoly',
   'streamtape', 'mixdrop', 'sharecloudy', 'lulustream', 'filelions',
-  'streamwish', 'fsvid', 'vidzy',
+  'streamwish', 'fsvid', 'vidzy', 'mailru',
 ];
 
 export const DEFAULT_EXTRACTOR_DOMAINS: Record<ExtractorId, string[]> = {
@@ -41,6 +41,7 @@ export const DEFAULT_EXTRACTOR_DOMAINS: Record<ExtractorId, string[]> = {
   doodstream: ['dood', 'doodstream', 'dsvplay', 'd0o0d', 'dooood', 'd0000d', 'ds2play', 'dood.re'],
   filemoon: ['filemoon', 'filmoon', 'moonlink', 'bysebuho', 'moonplayer'],
   vidoza: ['vidoza'],
+  mailru: ['my.mail.ru', 'mail.ru', 'ok.ru', 'odnoklassniki'],
   vidmoly: ['vidmoly', 'molystream', 'vidhide'],
   streamtape: ['streamtape', 'strcloud', 'shavetape', 'tapewithadblock'],
   mixdrop: ['mixdrop', 'mdrop', 'mdy48tn97'],
@@ -417,8 +418,63 @@ async function extractLocally(embedUrl: string, extractor: string): Promise<Extr
     case 'fsvid':
     case 'vidzy':
       return await extractPackedJs(embedUrl);
+    case 'mailru':
+      return await extractMailru(embedUrl);
     default:
       return null;
+  }
+}
+
+/**
+ * Mail.ru video (my.mail.ru/video/embed/{id}). VoirDrama l'étiquette « Ok.ru »
+ * mais sert bien des liens Mail.ru ; Onyx a les deux extracteurs, nous les
+ * jetions faute d'en avoir un — alors que c'est le plus simple du lot.
+ *
+ * La page d'embed expose un metadataUrl ; ce JSON liste les rendus MP4 :
+ *   { videos: [ { key: "1080p", url: "//cdn62.my.mail.ru/hv/….mp4?…" }, … ] }
+ * Le Referer de l'embed suffit — le cookie video_key déposé au passage n'est pas
+ * exigé par le CDN (vérifié : 206 avec et sans).
+ */
+async function extractMailru(embedUrl: string): Promise<ExtractedStream | null> {
+  try {
+    const { data: page } = await axios.get<string>(embedUrl, {
+      headers: { ...HEADERS, Referer: 'https://voirdrama.to/' },
+      timeout: 15000,
+      responseType: 'text',
+      transformResponse: v => v,
+    });
+
+    const meta = page.match(/metadataUrl["']?\s*[:=]\s*["']([^"']+)/);
+    if (!meta) {
+      console.log('[Extractor] Mail.ru: no metadataUrl');
+      return null;
+    }
+    const metaUrl = meta[1].startsWith('//') ? `https:${meta[1]}` : new URL(meta[1], embedUrl).toString();
+
+    const { data } = await axios.get(metaUrl, {
+      headers: { ...HEADERS, Referer: embedUrl },
+      timeout: 15000,
+    });
+    const videos: { key?: string; url?: string }[] = data?.videos || [];
+    if (videos.length === 0) {
+      console.log('[Extractor] Mail.ru: no videos in metadata');
+      return null;
+    }
+
+    // Meilleur rendu disponible.
+    const score = (k: string) => parseInt((k || '').replace(/\D/g, ''), 10) || 0;
+    const best = [...videos].sort((a, b) => score(b.key || '') - score(a.key || ''))[0];
+    if (!best?.url) return null;
+
+    return {
+      url: best.url.startsWith('//') ? `https:${best.url}` : best.url,
+      quality: best.key || 'HD',
+      format: 'mp4',
+      headers: { Referer: embedUrl },
+    };
+  } catch (e: any) {
+    console.log(`[Extractor] Mail.ru error: ${(e.message || '').slice(0, 80)}`);
+    return null;
   }
 }
 
@@ -442,7 +498,8 @@ export async function extractStream(
 
   // fsvid/vidzy : extracteurs locaux uniquement (MediaFlow ne les connaît pas) —
   // inutile de payer un aller-retour qui échouera.
-  const LOCAL_ONLY: string[] = ['fsvid', 'vidzy'];
+  // MediaFlow renvoie 502 sur ces hôtes ; notre extraction locale est fiable.
+  const LOCAL_ONLY: string[] = ['fsvid', 'vidzy', 'mailru'];
 
   // Try MediaFlow first if configured
   if (config?.useMediaFlow && config.mediaFlowUrl && !LOCAL_ONLY.includes(extractor)) {
