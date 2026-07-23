@@ -5,6 +5,7 @@ import { rateLimit } from 'express-rate-limit';
 import { getNetmirrorStreams } from './scrapers/netmirror';
 import { getCinemaosStreams, reloadCinemaosConfig, isCinemaosEnabled } from './scrapers/cinemaos';
 import { getWiflixStreams } from './scrapers/wiflix';
+import { getVoirDramaStreams } from './scrapers/voirdrama';
 import { getStreamFlixStreams } from './scrapers/streamflix';
 import { getMovixStreams, reloadMovixEndpoints, getMovixEndpoints } from './scrapers/movix';
 import { getFaklumStreams } from './scrapers/faklum';
@@ -39,6 +40,7 @@ interface Stats {
     frenchstream: { requests: number; success: number; errors: number; lastSuccess: number | null };
     cinemaos: { requests: number; success: number; errors: number; lastSuccess: number | null };
     wiflix: { requests: number; success: number; errors: number; lastSuccess: number | null };
+    voirdrama: { requests: number; success: number; errors: number; lastSuccess: number | null };
   };
   streamsServed: {
     movix: number;
@@ -48,6 +50,7 @@ interface Stats {
     frenchstream: number;
     cinemaos: number;
     wiflix: number;
+    voirdrama: number;
   };
 }
 
@@ -62,11 +65,12 @@ const stats: Stats = {
     frenchstream: { requests: 0, success: 0, errors: 0, lastSuccess: null },
     cinemaos: { requests: 0, success: 0, errors: 0, lastSuccess: null },
     wiflix: { requests: 0, success: 0, errors: 0, lastSuccess: null },
+    voirdrama: { requests: 0, success: 0, errors: 0, lastSuccess: null },
   },
-  streamsServed: { movix: 0, netmirror: 0, streamflix: 0, faklum: 0, frenchstream: 0, cinemaos: 0, wiflix: 0 },
+  streamsServed: { movix: 0, netmirror: 0, streamflix: 0, faklum: 0, frenchstream: 0, cinemaos: 0, wiflix: 0, voirdrama: 0 },
 };
 
-function trackSourceResult(source: 'movix' | 'netmirror' | 'streamflix' | 'faklum' | 'frenchstream' | 'cinemaos' | 'wiflix', success: boolean, streamCount: number = 0) {
+function trackSourceResult(source: 'movix' | 'netmirror' | 'streamflix' | 'faklum' | 'frenchstream' | 'cinemaos' | 'wiflix' | 'voirdrama', success: boolean, streamCount: number = 0) {
   stats.sources[source].requests++;
   if (success) {
     stats.sources[source].success++;
@@ -106,6 +110,7 @@ interface UserConfig {
   tmdbKey?: string;
   prefQuality?: string;  // "1080p", "4K", "720p", "480p"
   langOrder?: string[];  // ["MULTI", "VF", "VOSTFR", "VO"]
+  minStreams?: number;   // early exit: stop waiting once this many wanted streams are in (0 = wait for all)
 }
 
 // Stream with metadata for filtering/sorting
@@ -181,6 +186,12 @@ function parseConfig(configStr: string): UserConfig | null {
       langOrder = undefined;
     }
 
+    // 0 disables the early exit (wait for every source); cap it so a bogus value
+    // can't turn the fan-out into an unbounded wait.
+    let minStreams = Number(parsed.minStreams);
+    if (!Number.isFinite(minStreams) || minStreams < 0) minStreams = DEFAULT_MIN_STREAMS;
+    minStreams = Math.min(Math.round(minStreams), 30);
+
     // Sanitize strings
     return {
       proxy: parsed.proxy,
@@ -189,6 +200,7 @@ function parseConfig(configStr: string): UserConfig | null {
       tmdbKey: parsed.tmdbKey ? sanitizeString(parsed.tmdbKey, 64) : undefined,
       prefQuality,
       langOrder,
+      minStreams,
     };
   } catch {
     return null;
@@ -199,6 +211,117 @@ function parseConfig(configStr: string): UserConfig | null {
 // STREAM FILTERING AND SORTING
 // ============================================
 const DEFAULT_LANG_ORDER = ['MULTI', 'VF', 'VOSTFR', 'VO'];
+
+// ============================================
+// SOURCE FAN-OUT WITH EARLY EXIT
+// ============================================
+// Sources are queried in parallel, but the response used to wait for the very
+// last one — so a single slow source set the response time for everybody.
+// Instead we answer as soon as we hold enough streams in the languages the user
+// actually asked for. Sources still in flight are NOT cancelled: they keep
+// running and fill the cache, so the next request for the same title gets them
+// instantly.
+const DEFAULT_MIN_STREAMS = 5;
+const EARLY_EXIT_GRACE_MS = 2000;   // never answer before this — lets near-tied sources land
+const EARLY_EXIT_DEADLINE_MS = 20000; // hard ceiling, even if the target is never met
+
+interface SourceTask<T> {
+  name: string;
+  promise: Promise<T[]>;
+  /** How many of these results match the user's language preference. */
+  countWanted: (results: T[]) => number;
+}
+
+/**
+ * Resolves to one result array per task, in order. A task that hasn't settled
+ * when we stop waiting yields an empty array.
+ */
+function collectSources(
+  tasks: SourceTask<any>[],
+  minStreams: number,
+  onDone: (reason: string, elapsedMs: number) => void
+): Promise<any[][]> {
+  const results: any[][] = tasks.map(() => []);
+  // minStreams === 0 means the user opted out of the early exit.
+  if (minStreams <= 0) {
+    return Promise.all(tasks.map(t => t.promise)).then(all => {
+      onDone('toutes les sources', 0);
+      return all;
+    });
+  }
+
+  return new Promise<any[][]>(resolve => {
+    const started = Date.now();
+    let pending = tasks.length;
+    let wanted = 0;
+    let settled = false;
+
+    const finish = (reason: string) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(graceTimer);
+      clearTimeout(deadlineTimer);
+      onDone(reason, Date.now() - started);
+      // Shallow copy: each slot is replaced wholesale, so this is a true snapshot
+      // even though late tasks keep writing into `results`.
+      resolve(results.slice());
+    };
+
+    const check = () => {
+      if (settled) return;
+      if (pending === 0) return finish('toutes les sources');
+      if (wanted >= minStreams && Date.now() - started >= EARLY_EXIT_GRACE_MS) {
+        finish(`early exit (${wanted} streams voulus)`);
+      }
+    };
+
+    tasks.forEach((task, i) => {
+      task.promise
+        .then(r => {
+          results[i] = r;
+          wanted += task.countWanted(r);
+        })
+        .catch(() => { /* per-source catch already returns [] upstream */ })
+        .then(() => { pending--; check(); });
+    });
+
+    const graceTimer = setTimeout(check, EARLY_EXIT_GRACE_MS);
+    const deadlineTimer = setTimeout(() => finish('deadline atteinte'), EARLY_EXIT_DEADLINE_MS);
+  });
+}
+
+/**
+ * Would this stream survive the user's filters? Single source of truth, used
+ * both to decide when we have "enough" streams (early exit) and to do the final
+ * filtering — if the two ever disagreed we'd exit early on streams that then
+ * get dropped, and return fewer than the user asked for.
+ *
+ * Any accepted language and any accepted quality counts: 3 VF + 2 VOSTFR is
+ * five results, and so is 3×1080p + 2×720p.
+ */
+function passesPreferences(
+  meta: { quality: string; language: string; source: string },
+  langOrder: string[],
+  prefQualityScore: number
+): boolean {
+  // NetMirror ships multi-language HLS — exempt, as it always has been.
+  if (meta.source === 'netmirror') return true;
+  if (!langOrder.includes(normalizeLanguage(meta.language))) return false;
+  const streamQualityScore = QUALITY_SCORES[normalizeQuality(meta.quality)] || 2;
+  return streamQualityScore >= prefQualityScore - 1; // one step lower is still fine
+}
+
+/** Counts a source's results that pass the user's language AND quality prefs. */
+function wantedCounter(source: string, langOrder: string[], prefQualityScore: number) {
+  return (results: { language?: string; quality?: string }[]) =>
+    results.filter(r =>
+      passesPreferences(
+        { quality: r.quality || '', language: r.language || '', source },
+        langOrder,
+        prefQualityScore
+      )
+    ).length;
+}
 const QUALITY_SCORES: Record<string, number> = {
   '4K': 4,
   '1080p': 3,
@@ -233,23 +356,8 @@ function filterAndSortStreams(streams: StreamWithMeta[], config: UserConfig | nu
   const langOrder = config.langOrder || DEFAULT_LANG_ORDER;
   const prefQualityScore = QUALITY_SCORES[prefQuality] || 3;
 
-  // Filter streams based on preferences
-  let filtered = streams.filter(stream => {
-    const meta = stream._meta;
-
-    // NetMirror (Original) always passes - it's multi-language content
-    if (meta.source === 'netmirror') return true;
-
-    // Check if language is in user's preference list
-    const normalizedLang = normalizeLanguage(meta.language);
-    if (!langOrder.includes(normalizedLang)) return false;
-
-    // Check quality (allow preferred or higher)
-    const streamQualityScore = QUALITY_SCORES[normalizeQuality(meta.quality)] || 2;
-    if (streamQualityScore < prefQualityScore - 1) return false; // Allow one step lower
-
-    return true;
-  });
+  // Filter streams based on preferences (same predicate the early exit counts with)
+  let filtered = streams.filter(s => passesPreferences(s._meta, langOrder, prefQualityScore));
 
   // If filtering removed everything, return original streams sorted
   if (filtered.length === 0) {
@@ -573,7 +681,11 @@ async function handleStream(req: express.Request, res: express.Response, type: s
       mediaFlowPassword: config?.mfPass || DEFAULT_MEDIAFLOW_PASSWORD,
     };
 
-    const [netmirrorResults, streamflixResults, movixResults, faklumResults, frenchstreamResults, cinemaosResults, wiflixResults] = await Promise.all([
+    const langOrder = config?.langOrder || DEFAULT_LANG_ORDER;
+    const prefQualityScore = QUALITY_SCORES[config?.prefQuality || '1080p'] || 3;
+    const minStreams = config?.minStreams ?? DEFAULT_MIN_STREAMS;
+
+    const sourcePromises = [
       getNetmirrorStreams(info.title, info.year, type as 'movie' | 'series', parsed.season, parsed.episode, info.originalLanguage)
         .then(r => { trackSourceResult('netmirror', true, r.length); recordOutcome('netmirror', r.length > 0 ? 'success' : 'empty'); return r; })
         .catch(e => { console.log('[NetMirror] Error:', e); trackSourceResult('netmirror', false); recordOutcome('netmirror', 'error', e?.message); return []; }),
@@ -595,7 +707,32 @@ async function handleStream(req: express.Request, res: express.Response, type: s
       getWiflixStreams(info.tmdbId, type as 'movie' | 'series', extractorConfig, parsed.season, parsed.episode)
         .then(r => { trackSourceResult('wiflix', true, r.length); recordOutcome('wiflix', r.length > 0 ? 'success' : 'empty'); return r; })
         .catch(e => { console.log('[Wiflix] Error:', e); trackSourceResult('wiflix', false); recordOutcome('wiflix', 'error', e?.message); return []; }),
-    ]);
+      getVoirDramaStreams(info.tmdbId, type as 'movie' | 'series', extractorConfig, parsed.season, parsed.episode, info.title)
+        .then(r => { trackSourceResult('voirdrama', true, r.length); recordOutcome('voirdrama', r.length > 0 ? 'success' : 'empty'); return r; })
+        .catch(e => { console.log('[VoirDrama] Error:', e); trackSourceResult('voirdrama', false); recordOutcome('voirdrama', 'error', e?.message); return []; }),
+    ];
+
+    const SOURCE_NAMES = ['netmirror', 'streamflix', 'movix', 'faklum', 'frenchstream', 'cinemaos', 'wiflix', 'voirdrama'];
+    const collected = await collectSources(
+      sourcePromises.map((promise, i) => ({
+        name: SOURCE_NAMES[i],
+        promise,
+        countWanted: wantedCounter(SOURCE_NAMES[i], langOrder, prefQualityScore),
+      })),
+      minStreams,
+      (reason, ms) => console.log(`[Stream] Fan-out terminé: ${reason}${ms ? ` en ${(ms / 1000).toFixed(2)}s` : ''}`)
+    );
+
+    // collectSources is order-preserving but untyped (heterogeneous tuple), so
+    // restore each source's real element type here.
+    const netmirrorResults = collected[0] as Awaited<ReturnType<typeof getNetmirrorStreams>>;
+    const streamflixResults = collected[1] as Awaited<ReturnType<typeof getStreamFlixStreams>>;
+    const movixResults = collected[2] as Awaited<ReturnType<typeof getMovixStreams>>;
+    const faklumResults = collected[3] as Awaited<ReturnType<typeof getFaklumStreams>>;
+    const frenchstreamResults = collected[4] as Awaited<ReturnType<typeof getFrenchStreamStreams>>;
+    const cinemaosResults = collected[5] as Awaited<ReturnType<typeof getCinemaosStreams>>;
+    const wiflixResults = collected[6] as Awaited<ReturnType<typeof getWiflixStreams>>;
+    const voirdramaResults = collected[7] as Awaited<ReturnType<typeof getVoirDramaStreams>>;
 
     const streams: StreamWithMeta[] = [];
 
@@ -617,7 +754,14 @@ async function handleStream(req: express.Request, res: express.Response, type: s
           'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
           ...mv.headers, // Headers from extractor (e.g., Referer)
         };
-        const proxiedUrl = buildProxyUrl(mv.url, proxyHeaders, false, req, config);
+        // Purstream masters live at .../watch/hls/master?u=… — no .m3u8 extension,
+        // so URL sniffing routes them to the passthrough proxy, which does NOT
+        // rewrite the manifest. Their subtitle URIs are relative ("sub?u=…"), so
+        // the player resolves them against the proxy host and gets a 404: the
+        // stream plays but every subtitle track is silently missing. The API
+        // already tells us the format — trust it over the extension.
+        const isHls = mv.format === 'm3u8';
+        const proxiedUrl = buildProxyUrl(mv.url, proxyHeaders, false, req, config, false, isHls);
 
         if (!proxiedUrl) continue; // Skip blocked URLs
         finalUrl = proxiedUrl;
@@ -723,6 +867,31 @@ async function handleStream(req: express.Request, res: express.Response, type: s
           quality: wf.quality,
           language: wf.language,
           source: 'wiflix',
+        },
+      });
+    }
+
+    // Process VoirDrama results (dramas asiatiques, API Movix, séries seulement).
+    for (const vd of voirdramaResults) {
+      const proxiedUrl = buildProxyUrl(vd.url, {
+        ...(vd.headers || {}),
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+      }, false, req, config);
+
+      if (!proxiedUrl) continue; // Skip blocked URLs
+
+      streams.push({
+        name: `VoirDrama\n${vd.quality}`,
+        title: `${vd.language} [${vd.quality}] • ${vd.server}`,
+        url: proxiedUrl,
+        behaviorHints: {
+          notWebReady: false,
+          bingeGroup: `voirdrama-${vd.server}`,
+        },
+        _meta: {
+          quality: vd.quality,
+          language: vd.language,
+          source: 'voirdrama',
         },
       });
     }
@@ -846,6 +1015,7 @@ async function handleStream(req: express.Request, res: express.Response, type: s
         season: parsed.season,
         episode: parsed.episode,
         lang: s._meta.language,
+        originalLanguage: info.originalLanguage,
         resolution: s._meta.quality,
         provider: providerLabel(s._meta.source),
       });

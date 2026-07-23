@@ -314,6 +314,21 @@
             </div>
 
             <div class="input-group show" style="margin-top: 20px;">
+                <label>Nombre de résultats suffisant (réponse rapide)</label>
+                <select id="min-streams">
+                    <option value="3">3 — le plus rapide</option>
+                    <option value="5" selected>5 — recommandé</option>
+                    <option value="8">8 — plus de choix</option>
+                    <option value="0">Aucun — attendre toutes les sources (lent)</option>
+                </select>
+                <p style="color: #888; font-size: 0.82em; margin-top: 8px;">
+                    Dès qu'on a ce nombre de streams correspondant à vos préférences (langue <em>et</em> qualité,
+                    toutes langues acceptées confondues), la réponse part sans attendre les sources les plus lentes.
+                    Celles-ci continuent en arrière-plan et seront disponibles instantanément au prochain lancement.
+                </p>
+            </div>
+
+            <div class="input-group show" style="margin-top: 20px;">
                 <label>Ordre de préférence des langues (glisser pour réordonner)</label>
                 <ul class="lang-list" id="lang-list">
                     <li class="lang-item" draggable="true" data-lang="MULTI">
@@ -407,6 +422,7 @@
             // Add preferences
             config.prefQuality = document.getElementById('pref-quality').value;
             config.langOrder = getLangOrder();
+            config.minStreams = parseInt(document.getElementById('min-streams').value, 10);
 
             const configStr = btoa(JSON.stringify(config));
             const installUrl = `${baseUrl}/${configStr}/manifest.json`;
@@ -512,6 +528,9 @@
                     // Pre-fill preferences
                     if (config.prefQuality) {
                         document.getElementById('pref-quality').value = config.prefQuality;
+                    }
+                    if (config.minStreams !== undefined && config.minStreams !== null) {
+                        document.getElementById('min-streams').value = String(config.minStreams);
                     }
                     if (config.langOrder && Array.isArray(config.langOrder)) {
                         setLangOrder(config.langOrder);

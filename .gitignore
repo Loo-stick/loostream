@@ -34,3 +34,7 @@ config/cache.db-shm
 
 # Local Claude Code state
 .claude/
+
+# Reverse-engineering artifacts (androguard dumps, unlock tooling)
+androguard.db
+tools/unlock/
