@@ -1,7 +1,7 @@
 const WINDOW_SIZE = 20;
 const CONSECUTIVE_ERRORS_DOWN = 5;
 
-export type Scraper = 'netmirror' | 'streamflix' | 'movix' | 'faklum' | 'flemmix' | 'frenchstream' | 'cinemaos';
+export type Scraper = 'netmirror' | 'streamflix' | 'movix' | 'faklum' | 'flemmix' | 'frenchstream' | 'cinemaos' | 'wiflix';
 export type Outcome = 'success' | 'empty' | 'error';
 
 interface Entry {
@@ -18,6 +18,7 @@ const buffers: Record<Scraper, Entry[]> = {
   flemmix: [],
   frenchstream: [],
   cinemaos: [],
+  wiflix: [],
 };
 
 export function recordOutcome(scraper: Scraper, outcome: Outcome, error?: string): void {
@@ -118,5 +119,6 @@ export function getAllMetrics(): Record<Scraper, ScraperMetrics> {
     flemmix: getMetrics('flemmix'),
     frenchstream: getMetrics('frenchstream'),
     cinemaos: getMetrics('cinemaos'),
+    wiflix: getMetrics('wiflix'),
   };
 }

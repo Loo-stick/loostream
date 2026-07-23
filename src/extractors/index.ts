@@ -358,14 +358,16 @@ async function extractViaMediaFlow(
     // Stremio doesn't follow 302 redirects for HLS streams, so we need to resolve it
     const response = await axios.get(extractorUrl.toString(), {
       maxRedirects: 0,
-      validateStatus: (status) => status === 302 || status === 301 || status === 200,
+      // MediaFlow redirige en 301/302 MAIS AUSSI en 307/308 selon l'hébergeur
+      // (doodstream renvoie 307) : accepter toute la famille des redirections.
+      validateStatus: (status) => [200, 301, 302, 303, 307, 308].includes(status),
       timeout: 15000,
       headers: HEADERS,
     });
 
     let finalUrl: string;
 
-    if (response.status === 301 || response.status === 302) {
+    if ([301, 302, 303, 307, 308].includes(response.status)) {
       // Got redirect - use the Location header
       finalUrl = response.headers['location'];
       if (!finalUrl) {

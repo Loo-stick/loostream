@@ -91,6 +91,7 @@ const PROVIDER_LABELS: Record<string, string> = {
   flemmix: 'Flemmix',
   frenchstream: 'FrenchStream',
   cinemaos: 'CinemaOS',
+  wiflix: 'Wiflix',
 };
 
 export function providerLabel(source: string): string {

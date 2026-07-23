@@ -4,6 +4,7 @@ import path from 'path';
 import { rateLimit } from 'express-rate-limit';
 import { getNetmirrorStreams } from './scrapers/netmirror';
 import { getCinemaosStreams, reloadCinemaosConfig, isCinemaosEnabled } from './scrapers/cinemaos';
+import { getWiflixStreams } from './scrapers/wiflix';
 import { getStreamFlixStreams } from './scrapers/streamflix';
 import { getMovixStreams, reloadMovixEndpoints, getMovixEndpoints } from './scrapers/movix';
 import { getFaklumStreams } from './scrapers/faklum';
@@ -39,6 +40,7 @@ interface Stats {
     flemmix: { requests: number; success: number; errors: number; lastSuccess: number | null };
     frenchstream: { requests: number; success: number; errors: number; lastSuccess: number | null };
     cinemaos: { requests: number; success: number; errors: number; lastSuccess: number | null };
+    wiflix: { requests: number; success: number; errors: number; lastSuccess: number | null };
   };
   streamsServed: {
     movix: number;
@@ -48,6 +50,7 @@ interface Stats {
     flemmix: number;
     frenchstream: number;
     cinemaos: number;
+    wiflix: number;
   };
 }
 
@@ -62,11 +65,12 @@ const stats: Stats = {
     flemmix: { requests: 0, success: 0, errors: 0, lastSuccess: null },
     frenchstream: { requests: 0, success: 0, errors: 0, lastSuccess: null },
     cinemaos: { requests: 0, success: 0, errors: 0, lastSuccess: null },
+    wiflix: { requests: 0, success: 0, errors: 0, lastSuccess: null },
   },
-  streamsServed: { movix: 0, netmirror: 0, streamflix: 0, faklum: 0, flemmix: 0, frenchstream: 0, cinemaos: 0 },
+  streamsServed: { movix: 0, netmirror: 0, streamflix: 0, faklum: 0, flemmix: 0, frenchstream: 0, cinemaos: 0, wiflix: 0 },
 };
 
-function trackSourceResult(source: 'movix' | 'netmirror' | 'streamflix' | 'faklum' | 'flemmix' | 'frenchstream' | 'cinemaos', success: boolean, streamCount: number = 0) {
+function trackSourceResult(source: 'movix' | 'netmirror' | 'streamflix' | 'faklum' | 'flemmix' | 'frenchstream' | 'cinemaos' | 'wiflix', success: boolean, streamCount: number = 0) {
   stats.sources[source].requests++;
   if (success) {
     stats.sources[source].success++;
@@ -573,7 +577,7 @@ async function handleStream(req: express.Request, res: express.Response, type: s
       mediaFlowPassword: config?.mfPass || DEFAULT_MEDIAFLOW_PASSWORD,
     };
 
-    const [netmirrorResults, streamflixResults, movixResults, faklumResults, flemmixResults, frenchstreamResults, cinemaosResults] = await Promise.all([
+    const [netmirrorResults, streamflixResults, movixResults, faklumResults, flemmixResults, frenchstreamResults, cinemaosResults, wiflixResults] = await Promise.all([
       getNetmirrorStreams(info.title, info.year, type as 'movie' | 'series', parsed.season, parsed.episode, info.originalLanguage)
         .then(r => { trackSourceResult('netmirror', true, r.length); recordOutcome('netmirror', r.length > 0 ? 'success' : 'empty'); return r; })
         .catch(e => { console.log('[NetMirror] Error:', e); trackSourceResult('netmirror', false); recordOutcome('netmirror', 'error', e?.message); return []; }),
@@ -595,6 +599,9 @@ async function handleStream(req: express.Request, res: express.Response, type: s
       getCinemaosStreams(info.tmdbId, info.imdbId, type as 'movie' | 'series', info.title, info.year, parsed.season, parsed.episode)
         .then(r => { if (isCinemaosEnabled()) { trackSourceResult('cinemaos', true, r.length); recordOutcome('cinemaos', r.length > 0 ? 'success' : 'empty'); } return r; })
         .catch(e => { console.log('[CinemaOS] Error:', e); if (isCinemaosEnabled()) { trackSourceResult('cinemaos', false); recordOutcome('cinemaos', 'error', e?.message); } return []; }),
+      getWiflixStreams(info.tmdbId, type as 'movie' | 'series', extractorConfig, parsed.season, parsed.episode)
+        .then(r => { trackSourceResult('wiflix', true, r.length); recordOutcome('wiflix', r.length > 0 ? 'success' : 'empty'); return r; })
+        .catch(e => { console.log('[Wiflix] Error:', e); trackSourceResult('wiflix', false); recordOutcome('wiflix', 'error', e?.message); return []; }),
     ]);
 
     const streams: StreamWithMeta[] = [];
@@ -698,6 +705,31 @@ async function handleStream(req: express.Request, res: express.Response, type: s
           quality: sf.quality,
           language: sf.language,
           source: 'streamflix',
+        },
+      });
+    }
+
+    // Process Wiflix results (API Movix, tmdbId-keyed — pas de scraping).
+    for (const wf of wiflixResults) {
+      const proxiedUrl = buildProxyUrl(wf.url, {
+        ...(wf.headers || {}),
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+      }, false, req, config);
+
+      if (!proxiedUrl) continue; // Skip blocked URLs
+
+      streams.push({
+        name: `Wiflix\n${wf.quality}`,
+        title: `${wf.language} [${wf.quality}] • ${wf.server}`,
+        url: proxiedUrl,
+        behaviorHints: {
+          notWebReady: false,
+          bingeGroup: `wiflix-${wf.server}`,
+        },
+        _meta: {
+          quality: wf.quality,
+          language: wf.language,
+          source: 'wiflix',
         },
       });
     }
