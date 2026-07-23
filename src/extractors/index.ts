@@ -1,4 +1,5 @@
 import axios from 'axios';
+import { unpackFromHtml, findStreamUrl } from './unpack';
 import * as fs from 'fs';
 import * as path from 'path';
 
@@ -20,12 +21,12 @@ export interface ExtractorConfig {
   mediaFlowPassword?: string;
 }
 
-export type ExtractorId ='voe' | 'uqload' | 'doodstream' | 'filemoon' | 'vidoza' | 'vidmoly' | 'streamtape' | 'mixdrop' | 'sharecloudy' | 'lulustream' | 'filelions' | 'streamwish';
+export type ExtractorId ='voe' | 'uqload' | 'doodstream' | 'filemoon' | 'vidoza' | 'vidmoly' | 'streamtape' | 'mixdrop' | 'sharecloudy' | 'lulustream' | 'filelions' | 'streamwish' | 'fsvid' | 'vidzy';
 
 export const EXTRACTOR_IDS: ExtractorId[] = [
   'voe', 'uqload', 'doodstream', 'filemoon', 'vidoza', 'vidmoly',
   'streamtape', 'mixdrop', 'sharecloudy', 'lulustream', 'filelions',
-  'streamwish',
+  'streamwish', 'fsvid', 'vidzy',
 ];
 
 export const DEFAULT_EXTRACTOR_DOMAINS: Record<ExtractorId, string[]> = {
@@ -47,6 +48,9 @@ export const DEFAULT_EXTRACTOR_DOMAINS: Record<ExtractorId, string[]> = {
   lulustream: ['luluvdo', 'lulustream', 'lulu.st'],
   filelions: ['filelions', 'minochinos', 'javplaya', 'lionshare'],
   streamwish: ['streamwish', 'hgcloud', 'awish', 'embedwish', 'strwish'],
+  // Serveurs FrenchStream ("premium" et "vidzy") : page avec JS packé P.A.C.K.E.R.
+  fsvid: ['fsvid'],
+  vidzy: ['vidzy'],
 };
 
 /**
@@ -272,6 +276,43 @@ export async function extractSharecloudy(embedUrl: string): Promise<ExtractedStr
  * Calls the endpoint and follows the redirect to get the final proxy URL
  * (Stremio doesn't follow 302 redirects for HLS streams)
  */
+/**
+ * Hébergeurs dont la page cache l'URL du flux dans du JS packé P.A.C.K.E.R.
+ * (fsvid.lol = serveur « premium » de FrenchStream, vidzy.org). Logique reprise
+ * de l'app Onyx (FsvidExtractor/VidzyExtractor) : dépacker, puis chercher
+ * src / file / sources[0] / une URL .m3u8. Le CDN exige Referer + Origin.
+ */
+export async function extractPackedJs(embedUrl: string): Promise<ExtractedStream | null> {
+  try {
+    const origin = new URL(embedUrl).origin;
+    const { data } = await axios.get<string>(embedUrl, {
+      headers: { ...HEADERS, Referer: `${origin}/` },
+      timeout: 15000,
+      responseType: 'text',
+      transformResponse: r => r,
+    });
+    const js = unpackFromHtml(String(data || ''));
+    if (!js) {
+      console.log(`[Extractor] packed JS introuvable: ${embedUrl}`);
+      return null;
+    }
+    const url = findStreamUrl(js);
+    if (!url) {
+      console.log(`[Extractor] URL de flux introuvable après dépack: ${embedUrl}`);
+      return null;
+    }
+    return {
+      url,
+      quality: 'HD',
+      format: url.includes('.m3u8') ? 'hls' : 'mp4',
+      headers: { Referer: `${origin}/`, Origin: origin },
+    };
+  } catch (e: any) {
+    console.log(`[Extractor] packedJs failed (${embedUrl}): ${e.message}`);
+    return null;
+  }
+}
+
 async function extractViaMediaFlow(
   embedUrl: string,
   extractor: string,
@@ -371,6 +412,9 @@ async function extractLocally(embedUrl: string, extractor: string): Promise<Extr
       return await extractUqload(embedUrl);
     case 'sharecloudy':
       return await extractSharecloudy(embedUrl);
+    case 'fsvid':
+    case 'vidzy':
+      return await extractPackedJs(embedUrl);
     default:
       return null;
   }
@@ -394,8 +438,12 @@ export async function extractStream(
     return null;
   }
 
+  // fsvid/vidzy : extracteurs locaux uniquement (MediaFlow ne les connaît pas) —
+  // inutile de payer un aller-retour qui échouera.
+  const LOCAL_ONLY: string[] = ['fsvid', 'vidzy'];
+
   // Try MediaFlow first if configured
-  if (config?.useMediaFlow && config.mediaFlowUrl) {
+  if (config?.useMediaFlow && config.mediaFlowUrl && !LOCAL_ONLY.includes(extractor)) {
     const result = await extractViaMediaFlow(embedUrl, extractor, config);
     if (result) {
       return result;
