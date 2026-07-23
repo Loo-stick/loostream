@@ -121,6 +121,14 @@ function getBaseUrl(req: Request): string {
   return `${proto}://${host}`;
 }
 
+// Resolve a manifest-relative URL against the manifest's own URL. Uses the WHATWG
+// URL resolver (handles absolute, path-relative and query-relative "?x=y" forms);
+// falls back to the legacy base+concat only if that throws.
+function resolveUrl(ref: string, originalUrl: string, originalBase: string): string {
+  if (/^https?:\/\//i.test(ref)) return ref;
+  try { return new URL(ref, originalUrl).href; } catch { return `${originalBase}${ref}`; }
+}
+
 // Rewrite URLs in HLS manifest to go through our proxy
 function rewriteManifest(
   manifest: string,
@@ -164,7 +172,7 @@ function rewriteManifest(
     // Handle any tag with URI="..." (EXT-X-KEY, EXT-X-MEDIA, etc.)
     if (trimmed.includes('URI="')) {
       return line.replace(/URI="([^"]+)"/g, (match, uri) => {
-        const fullUrl = uri.startsWith('http') ? uri : `${originalBase}${uri}`;
+        const fullUrl = resolveUrl(uri, originalUrl, originalBase);
 
         // Check if it's a playlist (.m3u8) or a segment
         if (fullUrl.includes('.m3u8')) {
@@ -178,12 +186,9 @@ function rewriteManifest(
 
     // Handle URLs (not comments)
     if (!trimmed.startsWith('#')) {
-      let targetUrl = trimmed;
-
-      // Make absolute URL
-      if (!targetUrl.startsWith('http')) {
-        targetUrl = `${originalBase}${targetUrl}`;
-      }
+      // Resolve relative URLs correctly — including query-relative "?url=..."
+      // (cinemaos worker self-proxied segments) which naive concat would mangle.
+      const targetUrl = resolveUrl(trimmed, originalUrl, originalBase);
 
       // Check if it's a playlist (.m3u8) or a segment
       if (targetUrl.includes('.m3u8')) {

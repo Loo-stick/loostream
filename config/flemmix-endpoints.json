@@ -1,8 +1,8 @@
 {
   "_comment": "Endpoints Flemmix auto-mis à jour par telegram-bot.js depuis t.me/flemmixwiflix. Hot-reloadé par le scraper.",
-  "base": "https://flemmix.fast",
-  "origin": "https://flemmix.fast",
-  "referer": "https://flemmix.fast/",
-  "lastCheckedAt": "2026-07-02T14:57:53.208Z",
-  "lastUpdatedAt": "2026-06-26T00:00:00.000Z"
+  "base": "https://flemmix.voto",
+  "origin": "https://flemmix.voto",
+  "referer": "https://flemmix.voto/",
+  "lastCheckedAt": "2026-07-23T14:26:50.601Z",
+  "lastUpdatedAt": "2026-07-16T10:15:12.479Z"
 }
