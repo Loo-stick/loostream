@@ -11,7 +11,6 @@ dns.setDefaultResultOrder('ipv4first');
 const TELEGRAM_CONFIG_PATH = process.env.TELEGRAM_CONFIG || './config/telegram.json';
 const DOMAINS_CONFIG_PATH = process.env.DOMAINS_CONFIG || './config/allowed-domains.json';
 const MOVIX_ENDPOINTS_PATH = process.env.MOVIX_ENDPOINTS_CONFIG || './config/movix-endpoints.json';
-const FLEMMIX_ENDPOINTS_PATH = process.env.FLEMMIX_ENDPOINTS_CONFIG || './config/flemmix-endpoints.json';
 const EXTRACTOR_DOMAINS_PATH = process.env.EXTRACTOR_DOMAINS_CONFIG || './config/extractor-domains.json';
 const {
   deduceExtractor,
@@ -20,8 +19,6 @@ const {
 } = require('./telegram-bot-domains');
 const LOOSTREAM_CONTAINER = process.env.LOOSTREAM_CONTAINER || 'loostream';
 const MOVIX_CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000; // 6h
-const FLEMMIX_CHANNEL = process.env.FLEMMIX_CHANNEL || 'flemmixwiflix';
-const FLEMMIX_CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000; // 6h
 
 // Load Telegram config (from file or env)
 function loadTelegramConfig() {
@@ -605,15 +602,6 @@ async function pollUpdates() {
           await checkMovixEndpoints({ manual: true });
         }
 
-        // Handle /flemmix command (manual endpoint check)
-        if (update.message?.text === '/flemmix') {
-          await telegramRequest('sendMessage', {
-            chat_id: CHAT_ID,
-            text: '🔍 Vérification du domaine Flemmix...',
-            parse_mode: 'HTML'
-          });
-          await checkFlemmixEndpoints({ manual: true });
-        }
       }
     }
   } catch (e) {
@@ -747,8 +735,7 @@ telegramRequest('sendMessage', {
     '/domains - Liste des domaines\n' +
     '/stats - Statistiques détaillées\n' +
     '/health - État des sources\n' +
-    '/movix - Check endpoints Movix\n' +
-    '/flemmix - Check domaine Flemmix',
+    '/movix - Check endpoints Movix',
   parse_mode: 'HTML'
 }).then(() => {
   console.log('[Bot] Startup message sent');
@@ -907,136 +894,6 @@ async function checkMovixEndpoints(opts = {}) {
 setTimeout(checkMovixEndpoints, 60000);
 setInterval(checkMovixEndpoints, MOVIX_CHECK_INTERVAL_MS);
 
-// --- Flemmix endpoint watcher ---------------------------------------------
-// Flemmix tourne souvent de domaine (flemmix.<tld>). On lit le dernier domaine
-// annoncé sur le channel public, mais on NE LUI FAIT PAS confiance aveuglément :
-// flemmix.website répond 200 sans films (relais), flemmix.cafe est mort... donc
-// on valide chaque candidat par son contenu avant de basculer le config.
-async function flemmixServesFilms(domain) {
-  try {
-    const html = await httpGetText(`https://${domain}/`);
-    return /\/film-en-streaming\/\d+-/.test(html);
-  } catch {
-    return false;
-  }
-}
-
-async function detectFlemmixEndpoints() {
-  // 1. Scrape l'aperçu public du channel, découpé en blocs message (par id).
-  const html = await httpGetText(`https://t.me/s/${FLEMMIX_CHANNEL}`);
-  const blockRegex = /data-post="[^"/]+\/(\d+)"([\s\S]*?)(?=data-post="[^"/]+\/\d+"|$)/g;
-  const blocks = [];
-  let m;
-  while ((m = blockRegex.exec(html)) !== null) {
-    blocks.push({ id: parseInt(m[1], 10), html: m[2] });
-  }
-  blocks.sort((a, b) => b.id - a.id); // plus récent d'abord
-
-  // 2. Collecter les domaines flemmix.<tld>, du message le plus récent au plus
-  //    ancien. On lit d'abord les hrefs (propres), puis le texte avec une
-  //    frontière en lookahead pour éviter de coller "flemmix.fastGardez...".
-  const seen = new Set();
-  const candidates = [];
-  for (const b of blocks) {
-    let mm;
-    const hrefRe = /href="https?:\/\/(flemmix\.[a-z]{2,})/gi;
-    while ((mm = hrefRe.exec(b.html)) !== null) {
-      const d = mm[1].toLowerCase();
-      if (!seen.has(d)) { seen.add(d); candidates.push(d); }
-    }
-    const txtRe = /https?:\/\/(flemmix\.[a-z]{2,})(?=["'<\s/])/gi;
-    while ((mm = txtRe.exec(b.html)) !== null) {
-      const d = mm[1].toLowerCase();
-      if (!seen.has(d)) { seen.add(d); candidates.push(d); }
-    }
-  }
-  if (!candidates.length) throw new Error('No flemmix domain found in channel');
-
-  // 3. Prendre le premier candidat (le plus récent) qui sert réellement des films.
-  for (const domain of candidates) {
-    if (await flemmixServesFilms(domain)) {
-      return { base: `https://${domain}`, origin: `https://${domain}`, referer: `https://${domain}/` };
-    }
-  }
-  throw new Error(`No flemmix domain served film content (tried: ${candidates.join(', ')})`);
-}
-
-function readFlemmixConfig() {
-  try {
-    if (fs.existsSync(FLEMMIX_ENDPOINTS_PATH)) {
-      return JSON.parse(fs.readFileSync(FLEMMIX_ENDPOINTS_PATH, 'utf-8'));
-    }
-  } catch {}
-  return null;
-}
-
-async function triggerFlemmixReload() {
-  return new Promise((resolve) => {
-    const req = http.get(`http://${LOOSTREAM_CONTAINER}:7002/api/flemmix/endpoints?reload=true`, (res) => {
-      console.log(`[Flemmix] Reload triggered (status: ${res.statusCode})`);
-      resolve(true);
-    });
-    req.on('error', (e) => { console.error('[Flemmix] Reload failed:', e.message); resolve(false); });
-    req.setTimeout(5000, () => { req.destroy(); resolve(false); });
-  });
-}
-
-async function checkFlemmixEndpoints(opts = {}) {
-  const { manual = false } = opts;
-  try {
-    const detected = await detectFlemmixEndpoints();
-    const current = readFlemmixConfig() || {};
-
-    const now = new Date().toISOString();
-    const changed = current.base !== detected.base;
-
-    const next = {
-      _comment: 'Endpoints Flemmix auto-mis à jour par telegram-bot.js depuis t.me/' + FLEMMIX_CHANNEL + '. Hot-reloadé par le scraper.',
-      base: detected.base,
-      origin: detected.origin,
-      referer: detected.referer,
-      lastCheckedAt: now,
-      lastUpdatedAt: changed ? now : (current.lastUpdatedAt || null),
-    };
-    fs.writeFileSync(FLEMMIX_ENDPOINTS_PATH, JSON.stringify(next, null, 2));
-
-    if (changed) {
-      await triggerFlemmixReload();
-      const prevBase = current.base || '(none)';
-      await telegramRequest('sendMessage', {
-        chat_id: CHAT_ID,
-        text: `🔄 <b>Flemmix endpoint mis à jour</b>\n\n` +
-          `Domaine: <code>${prevBase}</code> → <code>${detected.base}</code>\n\n` +
-          `Source: t.me/${FLEMMIX_CHANNEL} — validé (films présents) et appliqué via hot-reload.`,
-        parse_mode: 'HTML'
-      });
-      console.log(`[Flemmix] Updated: ${prevBase} → ${detected.base}`);
-    } else {
-      console.log(`[Flemmix] No change (base=${detected.base})`);
-      if (manual) {
-        await telegramRequest('sendMessage', {
-          chat_id: CHAT_ID,
-          text: `✅ <b>Flemmix endpoint OK</b>\n\nDomaine: <code>${detected.base}</code>\n\nAucun changement.`,
-          parse_mode: 'HTML'
-        });
-      }
-    }
-  } catch (e) {
-    const detail = e && (e.message || e.code || String(e)) || 'unknown';
-    console.error('[Flemmix] Check failed:', detail, e && e.stack ? '\n' + e.stack : '');
-    if (manual) {
-      await telegramRequest('sendMessage', {
-        chat_id: CHAT_ID,
-        text: `❌ <b>Flemmix check échec</b>\n\n<code>${detail}</code>`,
-        parse_mode: 'HTML'
-      }).catch(() => {});
-    }
-  }
-}
-
-// First check after 90s (décalé de Movix), then every 6h
-setTimeout(checkFlemmixEndpoints, 90000);
-setInterval(checkFlemmixEndpoints, FLEMMIX_CHECK_INTERVAL_MS);
 
 // Start monitoring and polling
 monitorLogs();

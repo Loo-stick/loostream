@@ -8,7 +8,6 @@ import { getWiflixStreams } from './scrapers/wiflix';
 import { getStreamFlixStreams } from './scrapers/streamflix';
 import { getMovixStreams, reloadMovixEndpoints, getMovixEndpoints } from './scrapers/movix';
 import { getFaklumStreams } from './scrapers/faklum';
-import { getFlemmixStreams, reloadFlemmixEndpoints, getFlemmixEndpoints } from './scrapers/flemmix';
 import { getFrenchStreamStreams, reloadFrenchStreamEndpoints, getFrenchStreamEndpoints } from './scrapers/frenchstream';
 import { cached, getCacheStats } from './cache';
 import { recordOutcome, getAllMetrics } from './metrics';
@@ -37,7 +36,6 @@ interface Stats {
     netmirror: { requests: number; success: number; errors: number; lastSuccess: number | null };
     streamflix: { requests: number; success: number; errors: number; lastSuccess: number | null };
     faklum: { requests: number; success: number; errors: number; lastSuccess: number | null };
-    flemmix: { requests: number; success: number; errors: number; lastSuccess: number | null };
     frenchstream: { requests: number; success: number; errors: number; lastSuccess: number | null };
     cinemaos: { requests: number; success: number; errors: number; lastSuccess: number | null };
     wiflix: { requests: number; success: number; errors: number; lastSuccess: number | null };
@@ -47,7 +45,6 @@ interface Stats {
     netmirror: number;
     streamflix: number;
     faklum: number;
-    flemmix: number;
     frenchstream: number;
     cinemaos: number;
     wiflix: number;
@@ -62,15 +59,14 @@ const stats: Stats = {
     netmirror: { requests: 0, success: 0, errors: 0, lastSuccess: null },
     streamflix: { requests: 0, success: 0, errors: 0, lastSuccess: null },
     faklum: { requests: 0, success: 0, errors: 0, lastSuccess: null },
-    flemmix: { requests: 0, success: 0, errors: 0, lastSuccess: null },
     frenchstream: { requests: 0, success: 0, errors: 0, lastSuccess: null },
     cinemaos: { requests: 0, success: 0, errors: 0, lastSuccess: null },
     wiflix: { requests: 0, success: 0, errors: 0, lastSuccess: null },
   },
-  streamsServed: { movix: 0, netmirror: 0, streamflix: 0, faklum: 0, flemmix: 0, frenchstream: 0, cinemaos: 0, wiflix: 0 },
+  streamsServed: { movix: 0, netmirror: 0, streamflix: 0, faklum: 0, frenchstream: 0, cinemaos: 0, wiflix: 0 },
 };
 
-function trackSourceResult(source: 'movix' | 'netmirror' | 'streamflix' | 'faklum' | 'flemmix' | 'frenchstream' | 'cinemaos' | 'wiflix', success: boolean, streamCount: number = 0) {
+function trackSourceResult(source: 'movix' | 'netmirror' | 'streamflix' | 'faklum' | 'frenchstream' | 'cinemaos' | 'wiflix', success: boolean, streamCount: number = 0) {
   stats.sources[source].requests++;
   if (success) {
     stats.sources[source].success++;
@@ -577,7 +573,7 @@ async function handleStream(req: express.Request, res: express.Response, type: s
       mediaFlowPassword: config?.mfPass || DEFAULT_MEDIAFLOW_PASSWORD,
     };
 
-    const [netmirrorResults, streamflixResults, movixResults, faklumResults, flemmixResults, frenchstreamResults, cinemaosResults, wiflixResults] = await Promise.all([
+    const [netmirrorResults, streamflixResults, movixResults, faklumResults, frenchstreamResults, cinemaosResults, wiflixResults] = await Promise.all([
       getNetmirrorStreams(info.title, info.year, type as 'movie' | 'series', parsed.season, parsed.episode, info.originalLanguage)
         .then(r => { trackSourceResult('netmirror', true, r.length); recordOutcome('netmirror', r.length > 0 ? 'success' : 'empty'); return r; })
         .catch(e => { console.log('[NetMirror] Error:', e); trackSourceResult('netmirror', false); recordOutcome('netmirror', 'error', e?.message); return []; }),
@@ -590,9 +586,6 @@ async function handleStream(req: express.Request, res: express.Response, type: s
       getFaklumStreams(info.tmdbId, type as 'movie' | 'series', extractorConfig, config?.tmdbKey || DEFAULT_TMDB_KEY)
         .then(r => { trackSourceResult('faklum', true, r.length); recordOutcome('faklum', r.length > 0 ? 'success' : 'empty'); return r; })
         .catch(e => { console.log('[Faklum] Error:', e); trackSourceResult('faklum', false); recordOutcome('faklum', 'error', e?.message); return []; }),
-      getFlemmixStreams(info.tmdbId, type as 'movie' | 'series', extractorConfig, config?.tmdbKey || DEFAULT_TMDB_KEY, parsed.season, parsed.episode)
-        .then(r => { trackSourceResult('flemmix', true, r.length); recordOutcome('flemmix', r.length > 0 ? 'success' : 'empty'); return r; })
-        .catch(e => { console.log('[Flemmix] Error:', e); trackSourceResult('flemmix', false); recordOutcome('flemmix', 'error', e?.message); return []; }),
       getFrenchStreamStreams(info.tmdbId, type as 'movie' | 'series', extractorConfig, config?.tmdbKey || DEFAULT_TMDB_KEY, parsed.season, parsed.episode)
         .then(r => { trackSourceResult('frenchstream', true, r.length); recordOutcome('frenchstream', r.length > 0 ? 'success' : 'empty'); return r; })
         .catch(e => { console.log('[FrenchStream] Error:', e); trackSourceResult('frenchstream', false); recordOutcome('frenchstream', 'error', e?.message); return []; }),
@@ -761,40 +754,6 @@ async function handleStream(req: express.Request, res: express.Response, type: s
       });
     }
 
-    // Process Flemmix results
-    for (const fx of flemmixResults) {
-      let finalUrl: string;
-
-      const mfUrl = config?.mfUrl || DEFAULT_MEDIAFLOW_URL;
-      const isMediaFlowUrl = mfUrl && fx.url.includes(new URL(mfUrl).hostname);
-
-      if (isMediaFlowUrl) {
-        finalUrl = fx.url;
-      } else {
-        const proxyHeaders: Record<string, string> = {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-          ...fx.headers,
-        };
-        const proxiedUrl = buildProxyUrl(fx.url, proxyHeaders, false, req, config);
-        if (!proxiedUrl) continue;
-        finalUrl = proxiedUrl;
-      }
-
-      streams.push({
-        name: `Flemmix\n${fx.language}`,
-        title: `${fx.language} [${fx.quality}] • ${fx.server}`,
-        url: finalUrl,
-        behaviorHints: {
-          notWebReady: false,
-          bingeGroup: 'flemmix',
-        },
-        _meta: {
-          quality: fx.quality,
-          language: fx.language,
-          source: 'flemmix',
-        },
-      });
-    }
 
     // Process Faklum results
     for (const fk of faklumResults) {
@@ -1048,12 +1007,6 @@ app.get('/api/movix/endpoints', (req, res) => {
   res.json({ ...current, reloaded: reload });
 });
 
-// Flemmix endpoints admin (read + reload)
-app.get('/api/flemmix/endpoints', (req, res) => {
-  const reload = req.query.reload === 'true';
-  const current = reload ? reloadFlemmixEndpoints() : getFlemmixEndpoints();
-  res.json({ ...current, reloaded: reload });
-});
 
 // FrenchStream endpoints admin (read + reload)
 app.get('/api/frenchstream/endpoints', (req, res) => {
@@ -1280,22 +1233,6 @@ app.get('/api/health', async (_req, res) => {
     results.faklum = { status: 'down', error: e.message };
   }
 
-  // Test Flemmix (homepage should contain film links)
-  const flemmixEndpoints = getFlemmixEndpoints();
-  const flemmixStart = Date.now();
-  try {
-    const resp = await probeGet(flemmixEndpoints.base + '/', {
-      timeout: 10000,
-      validateStatus: (s: number) => s < 500,
-    });
-    const hasFilms = /\/film-en-streaming\/\d+-/.test(resp.data);
-    results.flemmix = {
-      status: hasFilms ? 'up' : 'degraded',
-      latency: Date.now() - flemmixStart,
-    };
-  } catch (e: any) {
-    results.flemmix = { status: 'down', error: e.message };
-  }
 
   const allUp = Object.values(results).every(r => r.status === 'up');
   const allDown = Object.values(results).every(r => r.status === 'down');

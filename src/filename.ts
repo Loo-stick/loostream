@@ -88,7 +88,6 @@ const PROVIDER_LABELS: Record<string, string> = {
   netmirror: 'NetMirror',
   streamflix: 'StreamFlix',
   faklum: 'Faklum',
-  flemmix: 'Flemmix',
   frenchstream: 'FrenchStream',
   cinemaos: 'CinemaOS',
   wiflix: 'Wiflix',
@@ -110,7 +109,7 @@ export interface FilenameParts {
   episode?: number;
   lang: string;       // our internal tag (MULTI/VF/VOSTFR/VO/...)
   resolution: string; // our internal quality tag (1080p/720p/HD/...)
-  provider: string;   // display label (Movix/Flemmix/...)
+  provider: string;   // display label (Movix/Wiflix/...)
 }
 
 // Films : {Title}.{Year}.{Lang}.{Resolution}.WEB-DL.x264-{Provider}.mkv
