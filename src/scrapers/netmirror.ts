@@ -429,7 +429,19 @@ async function fetchNetmirrorStreams(
       const audio = await probeAudio(cdnHost, contentId, candidates);
       if (!audio) return null;
 
-      const tracks = audio.tracks;
+      // Ordre d'exposition : VO d'abord (elle sera DEFAULT dans le manifeste),
+      // puis VF, puis le reste — sinon un film espagnol démarrerait en doublage
+      // anglais juste parce que sa piste a un index plus bas.
+      const origIso2 = ISO1_TO_ISO2[(originalLanguage || '').toLowerCase()] || '';
+      const rank = (i: number): number => {
+        const c = (langs.get(i)?.code || 'und').toLowerCase();
+        if (origIso2 && c.startsWith(origIso2.slice(0, 3))) return 0;      // VO
+        if (!origIso2 && (c === 'und' || /^(en|eng)/.test(c))) return 0;   // VO présumée
+        if (/^(fr|fre|fra)/.test(c)) return 1;                             // VF
+        if (c === 'und') return 2;
+        return 3;
+      };
+      const tracks = [...audio.tracks].sort((a, b) => rank(a) - rank(b) || a - b);
       const codes = tracks.map(i => langs.get(i)?.code || 'und');
 
       // Quelles qualités existent vraiment ?
