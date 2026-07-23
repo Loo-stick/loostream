@@ -643,12 +643,16 @@ async function handleStream(req: express.Request, res: express.Response, type: s
     // segments need the local transformer -> video/mp2t. One adaptive stream per
     // platform; the player picks the audio track (VO + VF when available).
     for (const r of netmirrorResults) {
-      const proxiedUrl = buildProxyUrl(r.url, {
-        'Referer': r.referer,
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-      }, true, req, config, true);
-
-      if (!proxiedUrl) continue; // Skip blocked URLs
+      // Master RECONSTRUIT servi par l'addon (le master d'origine = placeholder).
+      const mu = new URL('/netmirror/master.m3u8', nmSegBase(req));
+      mu.searchParams.set('h', r.cdnHost);
+      mu.searchParams.set('id', r.contentId);
+      mu.searchParams.set('p', r.prefix);
+      mu.searchParams.set('n', String(r.segments));
+      mu.searchParams.set('d', r.avgDur.toFixed(3));
+      mu.searchParams.set('q', r.qualities.join(','));
+      mu.searchParams.set('a', r.audioTracks.join(','));
+      const proxiedUrl = mu.toString();
 
       streams.push({
         name: `NetMirror ${r.platform}\n${r.quality}`,
@@ -1025,6 +1029,79 @@ app.get('/api/extractor-domains', (req, res) => {
   const reload = req.query.reload === 'true';
   const current = reload ? reloadExtractorDomains() : getExtractorDomains();
   res.json({ ...current, reloaded: reload });
+});
+
+// ── NetMirror : manifestes RECONSTRUITS (méthode Onyx) ─────────────────────────
+// Le master d'origine ne renvoie que le placeholder invité ; on génère nous-mêmes
+// le master (pistes audio réelles + variantes vidéo) et les playlists vidéo, en
+// pointant les segments .jpg (MPEG-TS déguisé) sur /proxy/segment?transform=ts.
+const NM_REFERER = 'https://net52.cc/';
+
+function nmSegBase(req: express.Request): string {
+  const proto = req.headers['x-forwarded-proto'] || req.protocol || 'http';
+  const host = req.headers['x-forwarded-host'] || req.headers.host;
+  return `${proto}://${host}`;
+}
+
+function nmProxy(base: string, target: string, kind: 'segment' | 'manifest'): string {
+  const u = new URL(`/proxy/${kind}`, base);
+  u.searchParams.set('url', target);
+  u.searchParams.set('h_referer', NM_REFERER);
+  u.searchParams.set('h_user-agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36');
+  if (kind === 'segment') u.searchParams.set('transform', 'ts');
+  else u.searchParams.set('transformer', 'ts_stream');
+  return u.toString();
+}
+
+// Master généré : /netmirror/master.m3u8?h&id&p&n&d&q=1080p,720p&a=0,1
+app.get('/netmirror/master.m3u8', (req, res) => {
+  const { h, id, p, n, d } = req.query as Record<string, string>;
+  const qualities = String(req.query.q || '').split(',').filter(Boolean);
+  const audio = String(req.query.a || '').split(',').filter(x => x !== '');
+  if (!h || !id || !p || !qualities.length) return res.status(400).send('paramètres manquants');
+
+  const base = nmSegBase(req);
+  const self = (q: string) => {
+    const u = new URL('/netmirror/video.m3u8', base);
+    u.searchParams.set('h', h); u.searchParams.set('id', id); u.searchParams.set('p', p);
+    u.searchParams.set('n', String(n || 0)); u.searchParams.set('d', String(d || 10)); u.searchParams.set('q', q);
+    return u.toString();
+  };
+  const lines = ['#EXTM3U', '#EXT-X-VERSION:3'];
+  audio.forEach((idx, k) => {
+    const url = nmProxy(base, `https://${h}/files/${id}/a/${idx}/${idx}.m3u8`, 'manifest');
+    lines.push(`#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="aac",NAME="Audio ${Number(idx) + 1}",DEFAULT=${k === 0 ? 'YES' : 'NO'},AUTOSELECT=${k === 0 ? 'YES' : 'NO'},URI="${url}"`);
+  });
+  const BW: Record<string, [number, string]> = { '1080p': [3000000, '1920x1080'], '720p': [1500000, '1280x720'], '480p': [800000, '854x480'] };
+  for (const q of qualities) {
+    const [bw, resn] = BW[q] || [1000000, '1280x720'];
+    lines.push(`#EXT-X-STREAM-INF:BANDWIDTH=${bw},RESOLUTION=${resn}${audio.length ? ',AUDIO="aac"' : ''}`);
+    lines.push(self(q));
+  }
+  res.setHeader('Content-Type', 'application/vnd.apple.mpegurl');
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.send(lines.join('\n') + '\n');
+});
+
+// Playlist vidéo générée : segments {prefix}_NNN.jpg proxifiés + transform ts.
+app.get('/netmirror/video.m3u8', (req, res) => {
+  const { h, id, p, q } = req.query as Record<string, string>;
+  const n = parseInt(String(req.query.n || '0'), 10);
+  const d = parseFloat(String(req.query.d || '10')) || 10;
+  if (!h || !id || !p || !q || !n) return res.status(400).send('paramètres manquants');
+
+  const base = nmSegBase(req);
+  const target = Math.max(12, Math.ceil(d));
+  const out = ['#EXTM3U', '#EXT-X-VERSION:3', '#EXT-X-PLAYLIST-TYPE:VOD',
+    `#EXT-X-TARGETDURATION:${target}`, '#EXT-X-MEDIA-SEQUENCE:0'];
+  for (let i = 0; i < n; i++) {
+    out.push(`#EXTINF:${d.toFixed(3)},`);
+    out.push(nmProxy(base, `https://${h}/files/${id}/${q}/${p}_${String(i).padStart(3, '0')}.jpg`, 'segment'));
+  }
+  out.push('#EXT-X-ENDLIST');
+  res.setHeader('Content-Type', 'application/vnd.apple.mpegurl');
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.send(out.join('\n') + '\n');
 });
 
 // CinemaOS config admin (reload keys/token/scrapers without a rebuild)
