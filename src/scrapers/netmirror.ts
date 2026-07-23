@@ -72,6 +72,7 @@ export interface NetmirrorStream {
   segments: number;     // nb de segments vidéo
   avgDur: number;       // durée moyenne d'un segment (s)
   audioTracks: number[];// indices des pistes audio réelles (a/<i>/<i>.m3u8)
+  audioLangs: { index: number; code: string; name: string }[]; // langue par piste
   referer: string;      // Referer exigé par le CDN
   language: string;
   platform: string;     // 'Netflix' | 'Prime Video' | 'Disney+'
@@ -190,24 +191,50 @@ function appHeaders(ott = 'nf'): Record<string, string> {
 
 const cdnHeaders = () => ({ 'User-Agent': UA, 'Referer': HLS_REFERER });
 
-// Le master ne sert QU'À lire l'hôte CDN (son contenu est le placeholder invité).
-async function resolveCdnHost(apiBase: string, ott: string, id: string): Promise<string> {
+// Le master placeholder est INUTILISABLE pour la vidéo, mais il porte l'hôte CDN
+// ET les MÉTADONNÉES DE LANGUE des pistes audio (LANGUAGE=/NAME= par index a/<i>).
+async function resolveMasterMeta(apiBase: string, ott: string, id: string):
+  Promise<{ cdnHost: string; langs: Map<number, { code: string; name: string }> }> {
+  const langs = new Map<number, { code: string; name: string }>();
   try {
     const { data } = await axios.get<string>(`${apiBase}/newtv/hls/${ott}/${encodeURIComponent(id)}.m3u8`, {
       headers: { ...cdnHeaders(), Accept: '*/*' }, timeout: REQ_TIMEOUT_MS,
       responseType: 'text', transformResponse: r => r,
     });
-    const m = String(data || '').match(/https:\/\/([a-z0-9.-]+)\/files\//i);
-    return m ? m[1] : '';
-  } catch { return ''; }
+    const txt = String(data || '');
+    const m = txt.match(/https:\/\/([a-z0-9.-]+)\/files\//i);
+    for (const line of txt.split('\n')) {
+      if (!/TYPE=AUDIO/.test(line)) continue;
+      const idx = line.match(/\/a\/(\d+)\/\1\.m3u8/);
+      if (!idx) continue;
+      const code = (line.match(/LANGUAGE="([^"]+)"/i)?.[1] || 'und').toLowerCase();
+      const name = (line.match(/NAME="([^"]+)"/i)?.[1] || code).replace(/^\d+\.\s*/, '');
+      langs.set(parseInt(idx[1], 10), { code, name });
+    }
+    return { cdnHost: m ? m[1] : '', langs };
+  } catch { return { cdnHost: '', langs }; }
+}
+
+// Politique langue (comme avant) : on écarte les doublages indiens, on garde VO/VF.
+const DROP_LANG = /^(hin|ben|tam|tel|kan|mal|mar|pan|guj|urd)/;
+function langLabel(codes: string[]): string {
+  const hasFr = codes.some(c => /^(fr|fre|fra)/.test(c));
+  const hasOther = codes.some(c => !/^(fr|fre|fra)/.test(c));
+  if (hasFr && hasOther) return 'MULTI (VF+VO)';
+  if (hasFr) return 'VF';
+  return codes.length > 1 ? 'MULTI' : 'VO';
 }
 
 // Les pistes audio sont servies telles quelles SOUS L'ID RÉEL -> elles donnent le
 // préfixe de segment, le nombre de segments et la durée moyenne.
-async function probeAudio(cdnHost: string, id: string): Promise<{ tracks: number[]; prefix: string; count: number; avg: number } | null> {
+// `candidates` = indices listés par le master (pas 0..3 : certains titres ont 20+
+// pistes et le français est souvent au-delà). On ne sonde que les pistes retenues.
+async function probeAudio(cdnHost: string, id: string, candidates: number[]):
+  Promise<{ tracks: number[]; prefix: string; count: number; avg: number } | null> {
   const tracks: number[] = [];
   let info: { prefix: string; count: number; avg: number } | null = null;
-  for (let i = 0; i < 4; i++) {
+  const list = candidates.length ? candidates : [0, 1, 2, 3];
+  for (const i of list) {
     try {
       const { data } = await axios.get<string>(`https://${cdnHost}/files/${id}/a/${i}/${i}.m3u8`, {
         headers: cdnHeaders(), timeout: REQ_TIMEOUT_MS, responseType: 'text', transformResponse: r => r,
@@ -225,6 +252,10 @@ async function probeAudio(cdnHost: string, id: string): Promise<{ tracks: number
   }
   return info ? { tracks, ...info } : null;
 }
+
+// Pistes qu'on expose : VO + VF (+ non déterminée). Les autres langues et les
+// doublages indiens sont écartés (politique NetMirror habituelle).
+const KEEP_LANG = /^(fr|fre|fra|en|eng|und)/;
 
 const segUrl = (cdnHost: string, id: string, q: string, prefix: string, n: number) =>
   `https://${cdnHost}/files/${id}/${q}/${prefix}_${String(n).padStart(3, '0')}.jpg`;
@@ -351,13 +382,25 @@ async function fetchNetmirrorStreams(
         : found;
       if (!contentId) return null;
 
-      // Le master ne donne que l'hôte CDN (son contenu est le placeholder).
-      const cdnHost = await resolveCdnHost(apiBase, p.ott, contentId);
+      // Le master (placeholder) donne l'hôte CDN + les langues des pistes audio.
+      const { cdnHost, langs } = await resolveMasterMeta(apiBase, p.ott, contentId);
       if (!cdnHost) return null;
 
+      // Pistes candidates = celles listées par le master, filtrées VO+VF.
+      // (fallback: les 4 premières si le master n'a pas listé de langues)
+      const listed = [...langs.keys()].sort((a, b) => a - b);
+      let candidates = listed.filter(i => {
+        const c = langs.get(i)?.code || 'und';
+        return KEEP_LANG.test(c) && !DROP_LANG.test(c);
+      });
+      if (!candidates.length) candidates = listed.length ? listed.slice(0, 4) : [0, 1, 2, 3];
+
       // L'id RÉEL porte les vrais fichiers : l'audio nous donne préfixe/nb/durée.
-      const audio = await probeAudio(cdnHost, contentId);
+      const audio = await probeAudio(cdnHost, contentId, candidates);
       if (!audio) return null;
+
+      const tracks = audio.tracks;
+      const codes = tracks.map(i => langs.get(i)?.code || 'und');
 
       // Quelles qualités existent vraiment ?
       const qualities: string[] = [];
@@ -377,9 +420,10 @@ async function fetchNetmirrorStreams(
         prefix: audio.prefix,
         segments,
         avgDur: audio.avg,
-        audioTracks: audio.tracks,
+        audioTracks: tracks,
+        audioLangs: tracks.map(i => ({ index: i, code: langs.get(i)?.code || 'und', name: langs.get(i)?.name || `Audio ${i + 1}` })),
         referer: HLS_REFERER,
-        language: audio.tracks.length > 1 ? 'MULTI' : 'VO',
+        language: langLabel(codes),
         platform: p.label,
       };
       return s;

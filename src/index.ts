@@ -651,7 +651,7 @@ async function handleStream(req: express.Request, res: express.Response, type: s
       mu.searchParams.set('n', String(r.segments));
       mu.searchParams.set('d', r.avgDur.toFixed(3));
       mu.searchParams.set('q', r.qualities.join(','));
-      mu.searchParams.set('a', r.audioTracks.join(','));
+      mu.searchParams.set('a', r.audioLangs.map(a => `${a.index}:${a.code}:${encodeURIComponent(a.name)}`).join(','));
       const proxiedUrl = mu.toString();
 
       streams.push({
@@ -1067,10 +1067,13 @@ app.get('/netmirror/master.m3u8', (req, res) => {
     u.searchParams.set('n', String(n || 0)); u.searchParams.set('d', String(d || 10)); u.searchParams.set('q', q);
     return u.toString();
   };
+  // `a` = "index:code:nom" par piste (langues issues du master d'origine).
   const lines = ['#EXTM3U', '#EXT-X-VERSION:3'];
-  audio.forEach((idx, k) => {
+  audio.forEach((spec, k) => {
+    const [idx, code = 'und', ...rest] = spec.split(':');
+    const name = decodeURIComponent(rest.join(':') || code);
     const url = nmProxy(base, `https://${h}/files/${id}/a/${idx}/${idx}.m3u8`, 'manifest');
-    lines.push(`#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="aac",NAME="Audio ${Number(idx) + 1}",DEFAULT=${k === 0 ? 'YES' : 'NO'},AUTOSELECT=${k === 0 ? 'YES' : 'NO'},URI="${url}"`);
+    lines.push(`#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="aac",LANGUAGE="${code}",NAME="${name}",DEFAULT=${k === 0 ? 'YES' : 'NO'},AUTOSELECT=${k === 0 ? 'YES' : 'NO'},URI="${url}"`);
   });
   const BW: Record<string, [number, string]> = { '1080p': [3000000, '1920x1080'], '720p': [1500000, '1280x720'], '480p': [800000, '854x480'] };
   for (const q of qualities) {
