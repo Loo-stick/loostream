@@ -3,6 +3,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { extractStream, detectExtractor, ExtractorConfig } from '../extractors';
 import { cached } from '../cache';
+import { isStreamLive } from '../live-check';
 
 const STREAMS_TTL_MS = 15 * 60 * 1000;
 
@@ -122,15 +123,35 @@ async function fetchPurstream(
       return [];
     }
 
-    return data.sources.map((source: any) => ({
-      name: 'Movix',
-      title: source.name || 'Movix VF',
-      url: source.url,
-      quality: extractQuality(source.name || ''),
-      language: extractLanguage(source.name || ''),
-      format: source.format || 'm3u8',
-      server: (source.name || '').split('|')[0].trim().toLowerCase() || 'purstream',
-    }));
+    const candidates: MovixStream[] = data.sources
+      .filter((source: any) => source?.url)
+      .map((source: any) => ({
+        name: 'Movix',
+        title: source.name || 'Movix VF',
+        url: source.url,
+        quality: extractQuality(source.name || ''),
+        language: extractLanguage(source.name || ''),
+        format: source.format || 'm3u8',
+        server: (source.name || '').split('|')[0].trim().toLowerCase() || 'purstream',
+      }));
+
+    // The API answering 200 does not mean the CDN still serves the file: it has
+    // returned URLs to a dead bucket (404 / 403 WAF) while reporting success.
+    // Those play as a black screen, and since Purstream is tagged MULTI/1080p it
+    // sorts first — so it is exactly the one the user clicks. Verify before
+    // offering it.
+    const liveness = await Promise.all(
+      candidates.map(c => isStreamLive(c.url, {
+        isHls: c.format === 'm3u8' || /\.m3u8(\?|$)/i.test(c.url),
+        headers: buildHeaders(),
+      }))
+    );
+    const live = candidates.filter((_, i) => liveness[i]);
+    const dropped = candidates.length - live.length;
+    if (dropped > 0) {
+      console.log(`[Movix] Purstream: ${dropped}/${candidates.length} source(s) morte(s), écartée(s)`);
+    }
+    return live;
   } catch (e) {
     console.log('[Movix] Purstream failed:', e);
     return [];

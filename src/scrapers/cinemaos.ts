@@ -3,6 +3,7 @@ import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
 import { cached } from '../cache';
+import { isStreamLive } from '../live-check';
 
 // CinemaOS (cinemaos.live) — TMDB-keyed meta-aggregator over ~20 upstream providers.
 // Reproduces its client protocol server-side (no Cloudflare block, no browser):
@@ -159,21 +160,10 @@ function toLang(language?: string, languageName?: string): string {
 }
 
 // Liveness: many CinemaOS sources return an empty/dead manifest (just "#EXTM3U",
-// or a 4xx) — playing them is a black screen. Fetch the master and confirm it
-// actually references variants/segments. mp4 sources are checked with a HEAD.
+// or a 4xx) — playing them is a black screen. Shared with Movix, whose Purstream
+// CDN fails the same way.
 async function isLive(s: CinemaosStream): Promise<boolean> {
-  const headers: Record<string, string> = { 'User-Agent': UA, ...s.headers };
-  try {
-    if (!s.isHls) {
-      const r = await axios.head(s.url, { headers, timeout: 8000, validateStatus: () => true, maxRedirects: 3 });
-      return r.status >= 200 && r.status < 400;
-    }
-    const r = await axios.get<string>(s.url, { headers, timeout: 8000, responseType: 'text', transformResponse: v => v, validateStatus: () => true, maxRedirects: 3 });
-    if (r.status < 200 || r.status >= 400 || typeof r.data !== 'string') return false;
-    return /#EXT-X-STREAM-INF|#EXTINF|\.m3u8|\.ts(\?|$|\n)|\.jpg/i.test(r.data);
-  } catch {
-    return false;
-  }
+  return isStreamLive(s.url, { isHls: s.isHls, headers: { 'User-Agent': UA, ...s.headers } });
 }
 
 interface DecodedSource { url?: string; type?: string; language?: string; bitrate?: string; headers?: Record<string, string>; server?: string; }
