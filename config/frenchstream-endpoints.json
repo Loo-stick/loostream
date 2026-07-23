@@ -1,6 +1,6 @@
 {
   "_comment": "Endpoints FrenchStream. Le domaine front tourne (fs03.lol -> fs21.lol -> ...). Resolu auto via le portail, override manuel possible ici. Hot-reload via GET /api/frenchstream/endpoints?reload=true",
   "portal": "http://fstream.info/",
-  "base": "https://fs21.lol",
-  "lastUpdatedAt": "2026-05-29T00:00:00.000Z"
+  "base": "https://fs25.lol",
+  "lastUpdatedAt": "2026-07-23T14:48:24.594428Z"
 }

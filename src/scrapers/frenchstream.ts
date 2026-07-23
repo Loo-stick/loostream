@@ -369,6 +369,93 @@ export async function getFrenchStreamStreams(
   );
 }
 
+// ── Repli API (découvert dans l'APK Onyx : fetchFsMovixBackup) ────────────────
+// Movix expose les lecteurs FrenchStream keyés par tmdbId :
+//   GET {movixApi}/api/fstream/movie/{tmdbId}
+//   GET {movixApi}/api/fstream/tv/{tmdbId}/season/{season}   -> episodes{"N":{languages}}
+// Réponse : {success, source:"FStream", players|episodes, ...} où chaque entrée est
+// {url, type:"embed", quality, player}. Avantage sur le scraping direct : keyé par
+// tmdbId (immunisé aux rotations de domaine fsNN.lol et aux erreurs de titre).
+// Exige les en-têtes Movix (Referer/Origin), sinon l'API renvoie {error}.
+const MOVIX_ENDPOINTS_PATH = process.env.MOVIX_ENDPOINTS_CONFIG ||
+  (fs.existsSync('/app/config/movix-endpoints.json')
+    ? '/app/config/movix-endpoints.json'
+    : path.join(process.cwd(), 'config', 'movix-endpoints.json'));
+
+function movixApiConfig(): { api: string; referer: string; origin: string } {
+  try {
+    const raw = JSON.parse(fs.readFileSync(MOVIX_ENDPOINTS_PATH, 'utf-8'));
+    return {
+      api: (raw.api || 'https://api.movix.show').replace(/\/+$/, ''),
+      referer: raw.referer || 'https://movix.cash/',
+      origin: raw.origin || 'https://movix.cash',
+    };
+  } catch {
+    return { api: 'https://api.movix.show', referer: 'https://movix.cash/', origin: 'https://movix.cash' };
+  }
+}
+
+/** Normalise un libellé de langue de l'API (VF/VFF/VFQ/VOSTFR/VO). */
+function normalizeApiLang(k: string): string {
+  const u = (k || '').toUpperCase();
+  if (u.includes('VOSTFR') || u.includes('VOST')) return 'VOSTFR';
+  if (u === 'VO' || u.includes('ORIGINAL')) return 'VO';
+  // "Default" = piste par défaut du site (français) ; VFF/VFQ = variantes FR.
+  if (u.startsWith('VF') || u === 'FRENCH' || u === 'DEFAULT') return 'VF';
+  return u || 'VF';
+}
+
+/** Lecteurs FrenchStream via l'API Movix. [] si indisponible. */
+async function fetchEmbedsFromApi(
+  tmdbId: string,
+  mediaType: 'movie' | 'series',
+  season?: number,
+  episode?: number
+): Promise<{ url: string; server: string; language: string; forced?: ExtractorId }[]> {
+  const { api, referer, origin } = movixApiConfig();
+  const url = mediaType === 'series'
+    ? `${api}/api/fstream/tv/${tmdbId}/season/${season}`
+    : `${api}/api/fstream/movie/${tmdbId}`;
+  try {
+    const { data } = await axios.get(url, {
+      headers: { ...HEADERS, Accept: 'application/json', Referer: referer, Origin: origin },
+      timeout: 12000,
+    });
+    if (!data?.success) return [];
+
+    // Films : players{LANG:[...]}. Séries : episodes{"N":{languages:{LANG:[...]}}}.
+    let byLang: Record<string, any[]> | undefined;
+    if (mediaType === 'series') {
+      const ep = data?.episodes?.[String(episode)];
+      byLang = ep?.languages;
+    } else {
+      byLang = data?.players;
+    }
+    if (!byLang || typeof byLang !== 'object') return [];
+
+    // "Default" duplique souvent VFF/VFQ : on dédoublonne par URL (première langue
+    // rencontrée gagne, en traitant les clés explicites avant "Default").
+    const entries = Object.entries(byLang).sort(
+      ([a], [b]) => (a.toUpperCase() === 'DEFAULT' ? 1 : 0) - (b.toUpperCase() === 'DEFAULT' ? 1 : 0)
+    );
+    const out: { url: string; server: string; language: string; forced?: ExtractorId }[] = [];
+    const seenUrl = new Set<string>();
+    for (const [lang, list] of entries) {
+      if (!Array.isArray(list)) continue;
+      for (const p of list) {
+        if (!p?.url || typeof p.url !== 'string' || seenUrl.has(p.url)) continue;
+        seenUrl.add(p.url);
+        const server = String(p.player || '').toLowerCase() || 'api';
+        out.push({ url: p.url, server, language: normalizeApiLang(lang), forced: forcedFor(server) });
+      }
+    }
+    return out;
+  } catch (e: any) {
+    console.log(`[FrenchStream] API fallback failed: ${(e.message || '').slice(0, 90)}`);
+    return [];
+  }
+}
+
 async function fetchFrenchStreamStreams(
   tmdbId: string,
   mediaType: 'movie' | 'series',
@@ -402,54 +489,63 @@ async function fetchFrenchStreamStreams(
 
     console.log(`[FrenchStream] TMDB: ${frTitle}${year ? ` (${year})` : ''} / orig: ${origTitle}`);
 
-    const base = await currentBase();
-    let results = await search(base, frTitle);
-    // Domain may have rotated since the config/last resolve: retry once on a
-    // freshly portal-resolved base.
-    if (results.length === 0) {
-      const fresh = await currentBase(true);
-      if (fresh !== base) results = await search(fresh, frTitle);
-    }
-    if (results.length === 0) {
-      console.log('[FrenchStream] No search results');
-      return [];
-    }
+    // ── 1) API Movix d'abord : keyée par tmdbId, donc pas de résolution de
+    //    domaine, pas de recherche, pas de correspondance de titre à rater.
+    //    (endpoint découvert dans l'APK Onyx : fetchFsMovixBackup)
+    let rawEmbeds: { url: string; server: string; language: string; forced?: ExtractorId }[] =
+      await fetchEmbedsFromApi(tmdbId, mediaType, season, episode);
+    if (rawEmbeds.length > 0) {
+      console.log(`[FrenchStream] API: ${rawEmbeds.length} lecteur(s) pour TMDB ${tmdbId}`);
+    } else {
+      // ── 2) Filet : scraping du site (si l'API Movix est HS ou n'a pas le titre)
+      console.log('[FrenchStream] API sans résultat — repli sur le scraping du site');
+      const base = await currentBase();
+      let results = await search(base, frTitle);
+      // Le domaine a pu tourner depuis la dernière résolution : on retente une fois.
+      if (results.length === 0) {
+        const fresh = await currentBase(true);
+        if (fresh !== base) results = await search(fresh, frTitle);
+      }
+      if (results.length === 0) {
+        console.log('[FrenchStream] No search results');
+        return [];
+      }
 
-    const liveBase = await currentBase();
-    const normFr = normalize(frTitle.replace(/\s*-\s*saison\s+\d+/i, ''));
-    const normOrig = origTitle ? normalize(origTitle) : '';
+      const liveBase = await currentBase();
+      const normFr = normalize(frTitle.replace(/\s*-\s*saison\s+\d+/i, ''));
+      const normOrig = origTitle ? normalize(origTitle) : '';
 
-    // Strip "(YYYY)" and "- Saison N" from the search title before fuzzy matching.
-    const ranked = results
-      .map(r => {
-        const cleanTitle = normalize(r.title.replace(/\(\d{4}\)/, '').replace(/\s*-\s*saison\s+\d+.*/i, ''));
-        const sim = Math.max(jaccard(normFr, cleanTitle), normOrig ? jaccard(normOrig, cleanTitle) : 0);
-        return { r, sim };
-      })
-      .filter(({ r, sim }) => {
-        if (sim < 0.7) return false;
-        if (mediaType === 'series') return r.season === season;
-        // Films: when both years are known, require an exact match.
-        if (year && r.year) return r.year === year;
-        return true;
-      })
-      .sort((a, b) => b.sim - a.sim);
+      // On retire "(YYYY)" et "- Saison N" du titre avant la comparaison floue.
+      const ranked = results
+        .map(r => {
+          const cleanTitle = normalize(r.title.replace(/\(\d{4}\)/, '').replace(/\s*-\s*saison\s+\d+.*/i, ''));
+          const sim = Math.max(jaccard(normFr, cleanTitle), normOrig ? jaccard(normOrig, cleanTitle) : 0);
+          return { r, sim };
+        })
+        .filter(({ r, sim }) => {
+          if (sim < 0.7) return false;
+          if (mediaType === 'series') return r.season === season;
+          // Films : si les deux années sont connues, exiger l'égalité.
+          if (year && r.year) return r.year === year;
+          return true;
+        })
+        .sort((a, b) => b.sim - a.sim);
 
-    if (ranked.length === 0) {
-      console.log(`[FrenchStream] No match above threshold${mediaType === 'series' ? ` for S${season}` : ''}`);
-      return [];
-    }
+      if (ranked.length === 0) {
+        console.log(`[FrenchStream] No match above threshold${mediaType === 'series' ? ` for S${season}` : ''}`);
+        return [];
+      }
 
-    const best = ranked[0].r;
-    console.log(`[FrenchStream] Match: ${best.title} (id=${best.newsId}, ${(ranked[0].sim * 100).toFixed(0)}%)`);
+      const best = ranked[0].r;
+      console.log(`[FrenchStream] Match: ${best.title} (id=${best.newsId}, ${(ranked[0].sim * 100).toFixed(0)}%)`);
+      rawEmbeds = mediaType === 'series'
+        ? await fetchEpisodeEmbeds(liveBase, best.newsId, episode!)
+        : await fetchMovieEmbeds(liveBase, best.newsId, tmdbId);
 
-    const rawEmbeds = mediaType === 'series'
-      ? await fetchEpisodeEmbeds(liveBase, best.newsId, episode!)
-      : await fetchMovieEmbeds(liveBase, best.newsId, tmdbId);
-
-    if (rawEmbeds.length === 0) {
-      console.log('[FrenchStream] No embeds found');
-      return [];
+      if (rawEmbeds.length === 0) {
+        console.log('[FrenchStream] No embeds found');
+        return [];
+      }
     }
 
     // Resolve redirect wrappers (kakaflix -> voe, kokoflix -> filemoon) so the
@@ -504,7 +600,7 @@ async function fetchFrenchStreamStreams(
       if (!item) continue;
       streams.push({
         name: 'FrenchStream',
-        title: best.title.replace(/\(\d{4}\)/, '').trim(),
+        title: frTitle.replace(/\(\d{4}\)/, '').trim(),
         url: item.r.url,
         quality: item.r.quality || 'HD',
         language: item.embed.language,
