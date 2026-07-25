@@ -305,12 +305,16 @@ async function loadEndpoints() {
             return { s, v: await r.json() };
         }));
         box.innerHTML = data.map(({ s, v }) => {
-            const inputs = s.fields.map(f =>
-                `<input id="ep-${s.path}-${f}" placeholder="${f}" value="${(v[f] || '').replace(/"/g, '&quot;')}">`
-            ).join('');
-            return `<div style="margin-bottom:14px;">
+            // Un label par champ (essentiel pour Movix : api / referer / origin).
+            const rows = s.fields.map(f => `
                 <div class="cfg-row">
-                    <label>${s.label}</label>${inputs}
+                    <label>${f}</label>
+                    <input id="ep-${s.path}-${f}" placeholder="${f}" value="${(v[f] || '').replace(/"/g, '&quot;')}">
+                </div>`).join('');
+            return `<div style="margin-bottom:16px;padding-bottom:12px;border-bottom:1px solid rgba(255,255,255,0.06);">
+                <div style="font-weight:600;margin-bottom:8px;">${s.label}</div>
+                ${rows}
+                <div class="cfg-row" style="margin-left:108px;">
                     <button class="btn cfg-save" onclick="saveEndpoint('${s.path}')">Enregistrer</button>
                     <span class="cfg-msg" id="msg-${s.path}"></span>
                 </div>
