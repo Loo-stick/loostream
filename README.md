@@ -86,6 +86,11 @@ MEDIAFLOW_PASSWORD=votre_mot_de_passe
 | `TMDB_API_KEY` | Clé API TMDB (fallback si non configuré via /configure) | Non |
 | `MEDIAFLOW_URL` | URL MediaFlow | Si USE_LOCAL_PROXY=false |
 | `MEDIAFLOW_PASSWORD` | Mot de passe MediaFlow | Si USE_LOCAL_PROXY=false |
+| `AUTO_WHITELIST` | `true` = whitelist auto des nouveaux domaines de sources (voir [Maintenance des sources](#maintenance-des-sources)) | Non (défaut: false) |
+| `ADMIN_USER` / `ADMIN_PASS` | Active le dashboard `/admin`. Vides = `/admin` renvoie 503 | Non |
+| `SESSION_SECRET` | Signe les sessions admin. Vide = clé aléatoire par démarrage | Non |
+
+> Voir `.env.example` pour la liste complète et commentée (dont les overrides avancés `NETMIRROR_API_BASE`, chemins de config…).
 
 ### Mode Proxy
 
@@ -95,6 +100,40 @@ MEDIAFLOW_PASSWORD=votre_mot_de_passe
 | **Proxy Local** | Flux via ce serveur | Élevée | Usage perso / 1-3 users / Apps natives |
 
 > **Note** : Le proxy local peut avoir des problèmes de décodage sur Stremio Web. Utilisez MediaFlow pour le web.
+
+## Maintenance des sources
+
+Les sources changent de domaine régulièrement. Selon la source, la mise à jour se fait de trois façons.
+
+### 1. Éditables à chaud (fichiers `config/*.json`) — sans rebuild
+
+Ces fichiers sont **bind-montés** (`./config:/app/config`) et **rechargés automatiquement** à la moindre modification (`fs.watch`). On édite, on sauvegarde, c'est appliqué — aucun rebuild ni redémarrage.
+
+| Fichier | Pilote |
+|---------|--------|
+| `config/movix-endpoints.json` | **Movix** — et aussi **Wiflix, VoirDrama et FrenchStream** (tous via l'API Movix) |
+| `config/frenchstream-endpoints.json` | domaine front de FrenchStream |
+| `config/streamflix-endpoints.json` | base de l'API StreamFlix |
+| `config/faklum-endpoints.json` | base du site Faklum |
+| `config/voirdrama-endpoints.json` | base du site VoirDrama (scraping) |
+| `config/extractor-domains.json` | domaines des hébergeurs (voe, vidmoly…) |
+| `config/allowed-domains.json` | whitelist du proxy (anti-SSRF) |
+
+Après édition manuelle, le rechargement est automatique. Pour forcer : `GET /api/<source>/endpoints?reload=true` (ex. `/api/movix/endpoints?reload=true`).
+
+### 2. Depuis le dashboard admin (recommandé)
+
+La page `/admin` a une carte **« URLs des sources »** : modifiez les bases directement dans l'interface, sauvegarde + rechargement à chaud en un clic (écriture protégée par l'auth admin). La carte **« Whitelist des domaines »** permet d'ajouter un domaine et d'afficher l'état de l'auto-whitelist.
+
+### 3. Auto-whitelist des domaines
+
+Sans le bot Telegram, mettez `AUTO_WHITELIST=true` dans le `.env` : tout nouveau domaine renvoyé par une source est ajouté automatiquement à la whitelist au lieu d'être bloqué.
+
+> ⚠️ Cette option relâche l'allowlist de domaines. Le blocage des **IP privées** (127.x, 10.x, 169.254.x…) reste **toujours actif** — la protection SSRF critique est préservée.
+
+### Sources codées en dur
+
+Le **pool de résolveurs mobidetect** de NetMirror est dans le code (`src/scrapers/netmirror.ts`) ; sa base est overridable via `NETMIRROR_API_BASE` / `NETMIRROR_HLS_BASE` (`.env`, restart requis). Tout le reste des bases de sources est désormais externalisé (voir tableau ci-dessus).
 
 ## Bot Telegram (Optionnel)
 
