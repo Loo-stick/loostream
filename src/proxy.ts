@@ -23,6 +23,43 @@ const DEFAULT_DOMAINS = [
 
 let ALLOWED_DOMAINS: string[] = [...DEFAULT_DOMAINS];
 
+// Opt-in : quand une source renvoie un domaine non whitelisté, l'ajouter tout
+// seul au lieu de bloquer le stream. Alternative au bot Telegram pour les
+// self-hosters. ⚠️ Ne relâche QUE l'allowlist de domaines — le blocage des IP
+// privées (protection SSRF critique) s'exécute avant et reste actif.
+const AUTO_WHITELIST = process.env.AUTO_WHITELIST === 'true';
+
+/** Domaine enregistrable approximatif (2 derniers labels) — couvre les subdomains. */
+function baseDomain(hostname: string): string {
+  const parts = hostname.split('.');
+  return parts.length <= 2 ? hostname : parts.slice(-2).join('.');
+}
+
+/** Ajoute un domaine à l'allowlist (fichier + mémoire). Renvoie true si ajouté. */
+export function addAllowedDomain(hostname: string): boolean {
+  const domain = baseDomain(hostname.replace(/^\[|\]$/g, ''));
+  if (ALLOWED_DOMAINS.some(d => hostname.includes(d) || hostname.endsWith(d))) return false;
+  try {
+    let config: any = { domains: [] };
+    if (fs.existsSync(CONFIG_PATH)) {
+      const raw = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf-8'));
+      config = { ...raw, domains: Array.isArray(raw.domains) ? raw.domains : [] };
+    }
+    if (!config.domains.includes(domain)) {
+      config.domains.push(domain);
+      fs.writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2));
+    }
+    if (!ALLOWED_DOMAINS.includes(domain)) ALLOWED_DOMAINS.push(domain);
+    console.log(`[Proxy] Auto-whitelisted ${domain} (depuis ${hostname})`);
+    return true;
+  } catch (e: any) {
+    console.error(`[Proxy] Auto-whitelist échoué pour ${domain}: ${e.message}`);
+    return false;
+  }
+}
+
+export function getAllowedDomains(): string[] { return [...ALLOWED_DOMAINS]; }
+
 function loadAllowedDomains(): void {
   try {
     if (fs.existsSync(CONFIG_PATH)) {
@@ -93,6 +130,11 @@ export function isAllowedUrl(url: string): { allowed: boolean; reason?: string }
     );
 
     if (!isWhitelisted) {
+      // Auto-whitelist opt-in : le domaine vient d'une source (les IP privées
+      // ont déjà été bloquées plus haut), on l'ajoute et on autorise.
+      if (AUTO_WHITELIST && addAllowedDomain(parsed.hostname)) {
+        return { allowed: true };
+      }
       return { allowed: false, reason: `Domain not whitelisted: ${parsed.hostname}` };
     }
 

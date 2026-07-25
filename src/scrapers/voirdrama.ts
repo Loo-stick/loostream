@@ -3,6 +3,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { extractStream, detectExtractor, ExtractorConfig } from '../extractors';
 import { cached } from '../cache';
+import { makeEndpointConfig } from '../endpoint-config';
 
 // VoirDrama — dramas asiatiques (K-drama, J-drama, C-drama), exposé par l'API
 // Movix et keyé par tmdbId. Endpoint découvert en sondant l'API : contrairement
@@ -44,13 +45,21 @@ const DRAMA_LANGUAGE = 'VOSTFR';
 // contenant "LECTEUR" :
 //   "☰ LECTEUR 4 VOE":"<iframe src=\"https://voe.sx/e/xxxx\" ...>"
 // Le motif ci-dessous vient du provider Onyx (fetchVoirDramaNative).
-const SITE_BASE = 'https://voirdrama.to';
+// Base du site éditable dans config/voirdrama-endpoints.json (hot-reload).
+const siteEndpoints = makeEndpointConfig('voirdrama-endpoints.json', 'VOIRDRAMA_ENDPOINTS_CONFIG', {
+  base: 'https://voirdrama.to',
+});
+export const reloadVoirDramaEndpoints = siteEndpoints.reload;
+export const getVoirDramaEndpoints = siteEndpoints.get;
+const SITE_BASE = () => siteEndpoints.get().base;
 const SCRAPE_TIMEOUT_MS = 15000;
 const MAX_VARIANTS = 2; // au plus une fiche VF + une fiche VOSTFR
 
 const PLAYER_RX = /"([^"]*LECTEUR[^"]*)"\s*:\s*"(?:[^"\\]|\\.)*?src=\\?["']?(https?:(?:[^"'\\\s]|\\\/)+)/g;
-const SEARCH_ITEM_RX = /<h3[^>]*>\s*<a\s+href="(https:\/\/voirdrama\.to\/drama\/[^"]+)"[^>]*>([^<]+)<\/a>/g;
-const CHAPTER_RX = /<li[^>]*class="[^"]*wp-manga-chapter[^"]*"[^>]*>[\s\S]{0,300}?<a\s+href="(https:\/\/voirdrama\.to\/drama\/[^"]+)"[^>]*>([\s\S]{0,120}?)<\/a>/g;
+// Host-agnostic (matchent /drama/ sur n'importe quel domaine) pour rester
+// valides si la base est changée dans config/voirdrama-endpoints.json.
+const SEARCH_ITEM_RX = /<h3[^>]*>\s*<a\s+href="(https?:\/\/[a-z0-9.-]+\/drama\/[^"]+)"[^>]*>([^<]+)<\/a>/g;
+const CHAPTER_RX = /<li[^>]*class="[^"]*wp-manga-chapter[^"]*"[^>]*>[\s\S]{0,300}?<a\s+href="(https?:\/\/[a-z0-9.-]+\/drama\/[^"]+)"[^>]*>([\s\S]{0,120}?)<\/a>/g;
 
 const BROWSER_HEADERS = {
   'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
@@ -103,7 +112,7 @@ function seasonOf(url: string, title: string): number {
 }
 
 async function searchSite(title: string, season?: number): Promise<Candidate[]> {
-  const html = await getHtml(`${SITE_BASE}/?s=${encodeURIComponent(title)}&post_type=wp-manga`);
+  const html = await getHtml(`${SITE_BASE()}/?s=${encodeURIComponent(title)}&post_type=wp-manga`);
   if (!html) return [];
   const target = normalizeTitle(title);
   const out: Candidate[] = [];

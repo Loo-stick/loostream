@@ -1,0 +1,4 @@
+{
+  "_comment": "Base du site VoirDrama (scraping). L'API dramas passe par movix-endpoints.json. Hot-reloadé.",
+  "base": "https://voirdrama.to"
+}

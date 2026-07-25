@@ -1,10 +1,17 @@
 import axios from 'axios';
 import { extractStream, ExtractorConfig } from '../extractors';
 import { cached } from '../cache';
+import { makeEndpointConfig } from '../endpoint-config';
 
 const STREAMS_TTL_MS = 15 * 60 * 1000;
 
-const FAKLUM_BASE = 'https://faklum.com';
+// Base URL is editable in config/faklum-endpoints.json (hot-reloaded).
+const endpoints = makeEndpointConfig('faklum-endpoints.json', 'FAKLUM_ENDPOINTS_CONFIG', {
+  base: 'https://faklum.com',
+});
+export const reloadFaklumEndpoints = endpoints.reload;
+export const getFaklumEndpoints = endpoints.get;
+const FAKLUM_BASE = () => endpoints.get().base;
 const DEFAULT_TMDB_API_KEY = process.env.TMDB_API_KEY || '';
 
 const HEADERS = {
@@ -47,7 +54,7 @@ async function getSessionToken(force = false): Promise<string | null> {
     return sessionToken;
   }
   try {
-    const { data: html } = await axios.get(`${FAKLUM_BASE}/`, { headers: HEADERS, timeout: 15000 });
+    const { data: html } = await axios.get(`${FAKLUM_BASE()}/`, { headers: HEADERS, timeout: 15000 });
     const match = html.match(/<a\s+id=["']faklumc["']\s+href=["']([a-z0-9]+)["']/i);
     if (!match) {
       console.log('[Faklum] Could not extract session token from homepage');
@@ -94,7 +101,7 @@ function parseFilm(raw: any): FaklumFilm | null {
 async function fetchPage(token: string, offset: number): Promise<FaklumFilm[]> {
   try {
     const { data } = await axios.get(
-      `${FAKLUM_BASE}/${token}/api_films.php?offset=${offset}`,
+      `${FAKLUM_BASE()}/${token}/api_films.php?offset=${offset}`,
       { headers: HEADERS, timeout: 10000 }
     );
     if (!Array.isArray(data?.films)) return [];
@@ -199,7 +206,7 @@ async function getIframeUrl(token: string, linkId: string): Promise<string | nul
     // Film pages set a cookie `g=true` on first visit then 302 to themselves.
     // Send it upfront to skip the redirect.
     const { data: html } = await axios.get(
-      `${FAKLUM_BASE}/${token}/b/faklum/${linkId}`,
+      `${FAKLUM_BASE()}/${token}/b/faklum/${linkId}`,
       { headers: { ...HEADERS, Cookie: 'g=true' }, timeout: 10000 }
     );
     const iframeMatch = html.match(/<iframe[^>]+src=["']([^"']+)["']/i);

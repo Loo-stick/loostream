@@ -1,12 +1,18 @@
 import axios from 'axios';
 import { cached } from '../cache';
+import { makeEndpointConfig } from '../endpoint-config';
 
 const STREAMS_TTL_MS = 15 * 60 * 1000;
 const DUMP_TTL_MS = 30 * 60 * 1000;
 
-const SF_BASE = 'https://api.streamflix.app';
-const CONFIG_URL = `${SF_BASE}/config/config-streamflixapp.json`;
-const DATA_URL = `${SF_BASE}/data.json`;
+// Base URL is editable in config/streamflix-endpoints.json (hot-reloaded).
+const endpoints = makeEndpointConfig('streamflix-endpoints.json', 'STREAMFLIX_ENDPOINTS_CONFIG', {
+  base: 'https://api.streamflix.app',
+});
+export const reloadStreamflixEndpoints = endpoints.reload;
+export const getStreamflixEndpoints = endpoints.get;
+const CONFIG_URL = () => `${endpoints.get().base}/config/config-streamflixapp.json`;
+const DATA_URL = () => `${endpoints.get().base}/data.json`;
 const DEFAULT_TMDB_API_KEY = process.env.TMDB_API_KEY || '';
 
 const HEADERS = {
@@ -36,7 +42,7 @@ async function getConfig(): Promise<any> {
   }
 
   try {
-    const { data } = await axios.get(CONFIG_URL, { headers: HEADERS, timeout: 15000 });
+    const { data } = await axios.get(CONFIG_URL(), { headers: HEADERS, timeout: 15000 });
     configCache = data;
     configCacheTime = Date.now();
     console.log('[StreamFlix] Config loaded');
@@ -57,7 +63,7 @@ async function getData(): Promise<any[]> {
     DUMP_TTL_MS,
     async () => {
       try {
-        const { data } = await axios.get(DATA_URL, { headers: HEADERS, timeout: 30000 });
+        const { data } = await axios.get(DATA_URL(), { headers: HEADERS, timeout: 30000 });
         if (Array.isArray(data)) return data;
         if (data.data && Array.isArray(data.data)) return data.data;
         if (data.movies && Array.isArray(data.movies)) return data.movies;

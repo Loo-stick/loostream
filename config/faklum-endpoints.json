@@ -1,0 +1,4 @@
+{
+  "_comment": "Base du site Faklum. Éditez si le domaine change ; hot-reloadé (aucun rebuild).",
+  "base": "https://faklum.com"
+}

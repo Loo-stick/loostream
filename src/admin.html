@@ -161,7 +161,30 @@
         <h2>Live health check</h2>
         <div id="health"><div class="loader">Clique "Health check" pour lancer une sonde</div></div>
     </div>
+
+    <div class="card">
+        <h2>URLs des sources <span style="font-size:0.7em;color:#a0a0b0;font-weight:normal;">— édition à chaud, sans rebuild</span></h2>
+        <div id="endpoints"><div class="loader">Chargement...</div></div>
+    </div>
+
+    <div class="card">
+        <h2>Whitelist des domaines</h2>
+        <div id="whitelist"><div class="loader">Chargement...</div></div>
+    </div>
 </div>
+
+<style>
+    .cfg-row { display:flex; gap:8px; align-items:center; margin-bottom:10px; flex-wrap:wrap; }
+    .cfg-row label { min-width:100px; color:#a0a0b0; font-size:0.9em; }
+    .cfg-row input { flex:1; min-width:180px; padding:8px 10px; border:1px solid rgba(255,255,255,0.15);
+        border-radius:8px; background:rgba(0,0,0,0.25); color:#fff; font-size:0.9em; }
+    .cfg-save { padding:8px 14px; }
+    .cfg-msg { font-size:0.82em; margin-left:6px; }
+    .cfg-msg.ok { color:#4ade80; } .cfg-msg.err { color:#f87171; }
+    .badge { font-size:0.72em; padding:3px 9px; border-radius:20px; }
+    .badge.on { background:rgba(74,222,128,0.2); color:#4ade80; }
+    .badge.off { background:rgba(160,160,176,0.2); color:#a0a0b0; }
+</style>
 
 <script>
 const fmtPct = n => (n * 100).toFixed(0) + '%';
@@ -260,9 +283,109 @@ async function checkHealth() {
 
 function refreshAll() {
     loadStats();
+    loadEndpoints();
+    loadWhitelist();
+}
+
+// --- URLs des sources (édition à chaud) ---
+// Movix a 3 champs (api/referer/origin) ; les autres une seule base.
+const SOURCES = [
+    { path: 'movix', label: 'Movix', fields: ['api', 'referer', 'origin'], note: 'pilote aussi Wiflix, VoirDrama (API) et FrenchStream (API)' },
+    { path: 'frenchstream', label: 'FrenchStream', fields: ['base'] },
+    { path: 'streamflix', label: 'StreamFlix', fields: ['base'] },
+    { path: 'faklum', label: 'Faklum', fields: ['base'] },
+    { path: 'voirdrama', label: 'VoirDrama', fields: ['base'], note: 'scraping du site ; les dramas passent par Movix' },
+];
+
+async function loadEndpoints() {
+    const box = document.getElementById('endpoints');
+    try {
+        const data = await Promise.all(SOURCES.map(async s => {
+            const r = await fetch('/api/' + s.path + '/endpoints');
+            return { s, v: await r.json() };
+        }));
+        box.innerHTML = data.map(({ s, v }) => {
+            const inputs = s.fields.map(f =>
+                `<input id="ep-${s.path}-${f}" placeholder="${f}" value="${(v[f] || '').replace(/"/g, '&quot;')}">`
+            ).join('');
+            return `<div style="margin-bottom:14px;">
+                <div class="cfg-row">
+                    <label>${s.label}</label>${inputs}
+                    <button class="btn cfg-save" onclick="saveEndpoint('${s.path}')">Enregistrer</button>
+                    <span class="cfg-msg" id="msg-${s.path}"></span>
+                </div>
+                ${s.note ? `<div style="font-size:0.78em;color:#7a7a8a;margin-left:108px;">${s.note}</div>` : ''}
+            </div>`;
+        }).join('');
+    } catch (e) {
+        box.innerHTML = `<div class="error">Erreur: ${e.message}</div>`;
+    }
+}
+
+async function saveEndpoint(path) {
+    const src = SOURCES.find(s => s.path === path);
+    const msg = document.getElementById('msg-' + path);
+    const body = {};
+    for (const f of src.fields) body[f] = document.getElementById('ep-' + path + '-' + f).value.trim();
+    msg.textContent = '…'; msg.className = 'cfg-msg';
+    try {
+        const r = await fetch('/api/' + path + '/endpoints', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+        });
+        const j = await r.json();
+        if (!r.ok || j.ok === false) throw new Error(j.error || ('HTTP ' + r.status));
+        msg.textContent = '✓ appliqué'; msg.className = 'cfg-msg ok';
+    } catch (e) {
+        msg.textContent = '✗ ' + e.message; msg.className = 'cfg-msg err';
+    }
+}
+
+// --- Whitelist ---
+async function loadWhitelist() {
+    const box = document.getElementById('whitelist');
+    try {
+        const r = await fetch('/api/whitelist');
+        const w = await r.json();
+        const badge = w.autoWhitelist
+            ? '<span class="badge on">AUTO_WHITELIST activé</span>'
+            : '<span class="badge off">AUTO_WHITELIST désactivé</span>';
+        box.innerHTML = `
+            <div style="margin-bottom:10px;">${badge}
+                <span style="color:#a0a0b0;font-size:0.85em;margin-left:8px;">${w.domains.length} domaines autorisés</span>
+            </div>
+            <div class="cfg-row">
+                <input id="wl-domain" placeholder="exemple.com (couvre les sous-domaines)">
+                <button class="btn cfg-save" onclick="addDomain()">Ajouter</button>
+                <span class="cfg-msg" id="msg-wl"></span>
+            </div>
+            <details style="margin-top:8px;"><summary style="cursor:pointer;color:#a0a0b0;font-size:0.85em;">Voir la liste</summary>
+                <div style="font-size:0.8em;color:#7a7a8a;margin-top:6px;word-break:break-all;">${w.domains.join(' · ')}</div>
+            </details>`;
+    } catch (e) {
+        box.innerHTML = `<div class="error">Erreur: ${e.message}</div>`;
+    }
+}
+
+async function addDomain() {
+    const msg = document.getElementById('msg-wl');
+    const domain = document.getElementById('wl-domain').value.trim();
+    msg.textContent = '…'; msg.className = 'cfg-msg';
+    try {
+        const r = await fetch('/api/whitelist', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ domain }),
+        });
+        const j = await r.json();
+        if (!r.ok || j.ok === false) throw new Error(j.error || ('HTTP ' + r.status));
+        msg.textContent = j.added ? '✓ ajouté' : '✓ déjà présent'; msg.className = 'cfg-msg ok';
+        loadWhitelist();
+    } catch (e) {
+        msg.textContent = '✗ ' + e.message; msg.className = 'cfg-msg err';
+    }
 }
 
 loadStats();
+loadEndpoints();
+loadWhitelist();
 setInterval(loadStats, 30000);
 </script>
 </body>

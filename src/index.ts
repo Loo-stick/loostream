@@ -4,15 +4,16 @@ import path from 'path';
 import { rateLimit } from 'express-rate-limit';
 import { getNetmirrorStreams } from './scrapers/netmirror';
 import { getWiflixStreams } from './scrapers/wiflix';
-import { getVoirDramaStreams } from './scrapers/voirdrama';
-import { getStreamFlixStreams } from './scrapers/streamflix';
+import { getVoirDramaStreams, reloadVoirDramaEndpoints, getVoirDramaEndpoints } from './scrapers/voirdrama';
+import { getStreamFlixStreams, reloadStreamflixEndpoints, getStreamflixEndpoints } from './scrapers/streamflix';
 import { getMovixStreams, reloadMovixEndpoints, getMovixEndpoints } from './scrapers/movix';
-import { getFaklumStreams } from './scrapers/faklum';
+import { getFaklumStreams, reloadFaklumEndpoints, getFaklumEndpoints } from './scrapers/faklum';
 import { getFrenchStreamStreams, reloadFrenchStreamEndpoints, getFrenchStreamEndpoints } from './scrapers/frenchstream';
 import { cached, getCacheStats } from './cache';
 import { recordOutcome, getAllMetrics } from './metrics';
 import crypto from 'crypto';
-import proxyRouter, { isAllowedUrl } from './proxy';
+import proxyRouter, { isAllowedUrl, addAllowedDomain, getAllowedDomains } from './proxy';
+import * as fsSync from 'fs';
 import { ExtractorConfig, reloadExtractorDomains, getExtractorDomains } from './extractors';
 import { getSceneMeta, buildFilename, providerLabel } from './filename';
 
@@ -1154,6 +1155,85 @@ app.get('/api/extractor-domains', (req, res) => {
   const reload = req.query.reload === 'true';
   const current = reload ? reloadExtractorDomains() : getExtractorDomains();
   res.json({ ...current, reloaded: reload });
+});
+
+// StreamFlix / Faklum / VoirDrama base URLs (read + reload). Files are
+// hot-reloaded on edit; this endpoint forces a reload on demand.
+app.get('/api/streamflix/endpoints', (req, res) => {
+  const reload = req.query.reload === 'true';
+  res.json({ ...(reload ? reloadStreamflixEndpoints() : getStreamflixEndpoints()), reloaded: reload });
+});
+app.get('/api/faklum/endpoints', (req, res) => {
+  const reload = req.query.reload === 'true';
+  res.json({ ...(reload ? reloadFaklumEndpoints() : getFaklumEndpoints()), reloaded: reload });
+});
+app.get('/api/voirdrama/endpoints', (req, res) => {
+  const reload = req.query.reload === 'true';
+  res.json({ ...(reload ? reloadVoirDramaEndpoints() : getVoirDramaEndpoints()), reloaded: reload });
+});
+
+// ── Écriture des endpoints depuis l'admin (authentifié) ────────────────────
+// Écrit un fichier config/<name> en préservant son _comment, puis appelle le
+// reload de la source pour appliquer à chaud.
+function configFilePath(fileName: string): string {
+  return fsSync.existsSync('/app/config')
+    ? `/app/config/${fileName}`
+    : path.join(process.cwd(), 'config', fileName);
+}
+function writeConfigFile(fileName: string, patch: Record<string, unknown>): Record<string, unknown> {
+  const p = configFilePath(fileName);
+  let current: Record<string, unknown> = {};
+  try { if (fsSync.existsSync(p)) current = JSON.parse(fsSync.readFileSync(p, 'utf-8')); } catch { /* start fresh */ }
+  const next = { ...current, ...patch };
+  fsSync.writeFileSync(p, JSON.stringify(next, null, 2));
+  return next;
+}
+// Valide et nettoie une base URL (http/https, sans slash final superflu).
+function cleanBaseUrl(v: unknown): string | null {
+  if (typeof v !== 'string' || !isValidUrl(v)) return null;
+  return v.trim().replace(/\/+$/, '');
+}
+
+const jsonBody = express.json({ limit: '8kb' });
+
+// Movix : {api, referer, origin}
+app.post('/api/movix/endpoints', requireAdminSession, jsonBody, (req, res) => {
+  const api = cleanBaseUrl(req.body?.api);
+  if (!api) return res.status(400).json({ ok: false, error: 'api URL invalide' });
+  const patch: Record<string, unknown> = { api };
+  if (typeof req.body?.referer === 'string' && isValidUrl(req.body.referer)) patch.referer = req.body.referer;
+  if (typeof req.body?.origin === 'string' && isValidUrl(req.body.origin)) patch.origin = req.body.origin;
+  writeConfigFile('movix-endpoints.json', patch);
+  return res.json({ ok: true, ...reloadMovixEndpoints() });
+});
+
+// Sources à base unique : {base}
+const singleBaseSources: Array<{ path: string; file: string; reload: () => unknown }> = [
+  { path: 'frenchstream', file: 'frenchstream-endpoints.json', reload: reloadFrenchStreamEndpoints },
+  { path: 'streamflix', file: 'streamflix-endpoints.json', reload: reloadStreamflixEndpoints },
+  { path: 'faklum', file: 'faklum-endpoints.json', reload: reloadFaklumEndpoints },
+  { path: 'voirdrama', file: 'voirdrama-endpoints.json', reload: reloadVoirDramaEndpoints },
+];
+for (const src of singleBaseSources) {
+  app.post(`/api/${src.path}/endpoints`, requireAdminSession, jsonBody, (req, res) => {
+    const base = cleanBaseUrl(req.body?.base);
+    if (!base) return res.status(400).json({ ok: false, error: 'base URL invalide' });
+    writeConfigFile(src.file, { base });
+    return res.json({ ok: true, ...(src.reload() as object) });
+  });
+}
+
+// Whitelist des domaines : lecture (+ statut auto), ajout manuel (authentifié).
+app.get('/api/whitelist', (_req, res) => {
+  res.json({ domains: getAllowedDomains(), autoWhitelist: process.env.AUTO_WHITELIST === 'true' });
+});
+app.post('/api/whitelist', requireAdminSession, jsonBody, (req, res) => {
+  const domain = typeof req.body?.domain === 'string' ? req.body.domain.trim().toLowerCase() : '';
+  if (!domain || !/^[a-z0-9.-]+\.[a-z]{2,}$/.test(domain)) {
+    return res.status(400).json({ ok: false, error: 'domaine invalide' });
+  }
+  const added = addAllowedDomain(domain);
+  return res.json({ ok: true, added, domains: getAllowedDomains() });
 });
 
 // ── NetMirror : manifestes RECONSTRUITS (méthode Onyx) ─────────────────────────
