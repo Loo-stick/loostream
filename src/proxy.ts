@@ -187,7 +187,7 @@ function rewriteManifest(
     // Handle URLs (not comments)
     if (!trimmed.startsWith('#')) {
       // Resolve relative URLs correctly — including query-relative "?url=..."
-      // (cinemaos worker self-proxied segments) which naive concat would mangle.
+      // (some workers self-proxy segments) which naive concat would mangle.
       const targetUrl = resolveUrl(trimmed, originalUrl, originalBase);
 
       // Check if it's a playlist (.m3u8) or a segment

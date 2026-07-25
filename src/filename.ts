@@ -113,7 +113,6 @@ const PROVIDER_LABELS: Record<string, string> = {
   streamflix: 'StreamFlix',
   faklum: 'Faklum',
   frenchstream: 'FrenchStream',
-  cinemaos: 'CinemaOS',
   wiflix: 'Wiflix',
   voirdrama: 'VoirDrama',
 };

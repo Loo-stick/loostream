@@ -3,7 +3,6 @@ import axios from 'axios';
 import path from 'path';
 import { rateLimit } from 'express-rate-limit';
 import { getNetmirrorStreams } from './scrapers/netmirror';
-import { getCinemaosStreams, reloadCinemaosConfig, isCinemaosEnabled } from './scrapers/cinemaos';
 import { getWiflixStreams } from './scrapers/wiflix';
 import { getVoirDramaStreams } from './scrapers/voirdrama';
 import { getStreamFlixStreams } from './scrapers/streamflix';
@@ -38,7 +37,6 @@ interface Stats {
     streamflix: { requests: number; success: number; errors: number; lastSuccess: number | null };
     faklum: { requests: number; success: number; errors: number; lastSuccess: number | null };
     frenchstream: { requests: number; success: number; errors: number; lastSuccess: number | null };
-    cinemaos: { requests: number; success: number; errors: number; lastSuccess: number | null };
     wiflix: { requests: number; success: number; errors: number; lastSuccess: number | null };
     voirdrama: { requests: number; success: number; errors: number; lastSuccess: number | null };
   };
@@ -48,7 +46,6 @@ interface Stats {
     streamflix: number;
     faklum: number;
     frenchstream: number;
-    cinemaos: number;
     wiflix: number;
     voirdrama: number;
   };
@@ -63,14 +60,13 @@ const stats: Stats = {
     streamflix: { requests: 0, success: 0, errors: 0, lastSuccess: null },
     faklum: { requests: 0, success: 0, errors: 0, lastSuccess: null },
     frenchstream: { requests: 0, success: 0, errors: 0, lastSuccess: null },
-    cinemaos: { requests: 0, success: 0, errors: 0, lastSuccess: null },
     wiflix: { requests: 0, success: 0, errors: 0, lastSuccess: null },
     voirdrama: { requests: 0, success: 0, errors: 0, lastSuccess: null },
   },
-  streamsServed: { movix: 0, netmirror: 0, streamflix: 0, faklum: 0, frenchstream: 0, cinemaos: 0, wiflix: 0, voirdrama: 0 },
+  streamsServed: { movix: 0, netmirror: 0, streamflix: 0, faklum: 0, frenchstream: 0, wiflix: 0, voirdrama: 0 },
 };
 
-function trackSourceResult(source: 'movix' | 'netmirror' | 'streamflix' | 'faklum' | 'frenchstream' | 'cinemaos' | 'wiflix' | 'voirdrama', success: boolean, streamCount: number = 0) {
+function trackSourceResult(source: 'movix' | 'netmirror' | 'streamflix' | 'faklum' | 'frenchstream' | 'wiflix' | 'voirdrama', success: boolean, streamCount: number = 0) {
   stats.sources[source].requests++;
   if (success) {
     stats.sources[source].success++;
@@ -701,9 +697,6 @@ async function handleStream(req: express.Request, res: express.Response, type: s
       getFrenchStreamStreams(info.tmdbId, type as 'movie' | 'series', extractorConfig, config?.tmdbKey || DEFAULT_TMDB_KEY, parsed.season, parsed.episode)
         .then(r => { trackSourceResult('frenchstream', true, r.length); recordOutcome('frenchstream', r.length > 0 ? 'success' : 'empty'); return r; })
         .catch(e => { console.log('[FrenchStream] Error:', e); trackSourceResult('frenchstream', false); recordOutcome('frenchstream', 'error', e?.message); return []; }),
-      getCinemaosStreams(info.tmdbId, info.imdbId, type as 'movie' | 'series', info.title, info.year, parsed.season, parsed.episode)
-        .then(r => { if (isCinemaosEnabled()) { trackSourceResult('cinemaos', true, r.length); recordOutcome('cinemaos', r.length > 0 ? 'success' : 'empty'); } return r; })
-        .catch(e => { console.log('[CinemaOS] Error:', e); if (isCinemaosEnabled()) { trackSourceResult('cinemaos', false); recordOutcome('cinemaos', 'error', e?.message); } return []; }),
       getWiflixStreams(info.tmdbId, type as 'movie' | 'series', extractorConfig, parsed.season, parsed.episode)
         .then(r => { trackSourceResult('wiflix', true, r.length); recordOutcome('wiflix', r.length > 0 ? 'success' : 'empty'); return r; })
         .catch(e => { console.log('[Wiflix] Error:', e); trackSourceResult('wiflix', false); recordOutcome('wiflix', 'error', e?.message); return []; }),
@@ -712,7 +705,7 @@ async function handleStream(req: express.Request, res: express.Response, type: s
         .catch(e => { console.log('[VoirDrama] Error:', e); trackSourceResult('voirdrama', false); recordOutcome('voirdrama', 'error', e?.message); return []; }),
     ];
 
-    const SOURCE_NAMES = ['netmirror', 'streamflix', 'movix', 'faklum', 'frenchstream', 'cinemaos', 'wiflix', 'voirdrama'];
+    const SOURCE_NAMES = ['netmirror', 'streamflix', 'movix', 'faklum', 'frenchstream', 'wiflix', 'voirdrama'];
     const collected = await collectSources(
       sourcePromises.map((promise, i) => ({
         name: SOURCE_NAMES[i],
@@ -730,9 +723,8 @@ async function handleStream(req: express.Request, res: express.Response, type: s
     const movixResults = collected[2] as Awaited<ReturnType<typeof getMovixStreams>>;
     const faklumResults = collected[3] as Awaited<ReturnType<typeof getFaklumStreams>>;
     const frenchstreamResults = collected[4] as Awaited<ReturnType<typeof getFrenchStreamStreams>>;
-    const cinemaosResults = collected[5] as Awaited<ReturnType<typeof getCinemaosStreams>>;
-    const wiflixResults = collected[6] as Awaited<ReturnType<typeof getWiflixStreams>>;
-    const voirdramaResults = collected[7] as Awaited<ReturnType<typeof getVoirDramaStreams>>;
+    const wiflixResults = collected[5] as Awaited<ReturnType<typeof getWiflixStreams>>;
+    const voirdramaResults = collected[6] as Awaited<ReturnType<typeof getVoirDramaStreams>>;
 
     const streams: StreamWithMeta[] = [];
 
@@ -896,33 +888,6 @@ async function handleStream(req: express.Request, res: express.Response, type: s
       });
     }
 
-    // Process CinemaOS results (aggregated HLS + per-source subtitles). Many HLS
-    // masters have a .txt extension, so force HLS routing based on the source type.
-    for (const cs of cinemaosResults) {
-      const proxiedUrl = buildProxyUrl(cs.url, {
-        ...cs.headers,
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-      }, false, req, config, false, cs.isHls);
-
-      if (!proxiedUrl) continue; // Skip blocked URLs
-
-      streams.push({
-        name: `CinemaOS ${cs.server}`,
-        title: `${cs.language} [${cs.quality}]`,
-        url: proxiedUrl,
-        behaviorHints: {
-          notWebReady: false,
-          bingeGroup: `cinemaos-${cs.server}`,
-        },
-        subtitles: cs.subtitles.map((s, i) => ({ id: `cinemaos-${i}-${s.lang}`, url: s.url, lang: s.lang })),
-        _meta: {
-          quality: cs.quality,
-          language: cs.language,
-          source: 'cinemaos',
-        },
-      });
-    }
-
 
     // Process Faklum results
     for (const fk of faklumResults) {
@@ -1031,9 +996,8 @@ async function handleStream(req: express.Request, res: express.Response, type: s
     const movixCount = streams.filter(s => s._meta?.source === 'movix').length;
     const netmirrorCount = streams.filter(s => s._meta?.source === 'netmirror').length;
     const streamflixCount = streams.filter(s => s._meta?.source === 'streamflix').length;
-    const cinemaosCount = streams.filter(s => s._meta?.source === 'cinemaos').length;
 
-    console.log(`[Stream] Returning ${cleanStreams.length} streams (Movix: ${movixCount}, NetMirror: ${netmirrorCount}, StreamFlix: ${streamflixCount}, CinemaOS: ${cinemaosCount})`);
+    console.log(`[Stream] Returning ${cleanStreams.length} streams (Movix: ${movixCount}, NetMirror: ${netmirrorCount}, StreamFlix: ${streamflixCount})`);
     res.json({ streams: cleanStreams });
   } catch (e) {
     console.error('[Stream] Error:', e);
@@ -1279,15 +1243,6 @@ app.get('/netmirror/video.m3u8', (req, res) => {
   res.setHeader('Content-Type', 'application/vnd.apple.mpegurl');
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.send(out.join('\n') + '\n');
-});
-
-// CinemaOS config admin (reload keys/token/scrapers without a rebuild)
-app.get('/api/cinemaos/config', (req, res) => {
-  if (req.query.reload === 'true') {
-    try { const c = reloadCinemaosConfig(); return res.json({ ok: true, scrapers: c.scrapers.length }); }
-    catch (e: any) { return res.status(500).json({ ok: false, error: e.message }); }
-  }
-  res.json({ ok: true });
 });
 
 // Stats endpoint
