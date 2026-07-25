@@ -1,0 +1,12 @@
+node_modules
+dist
+.git
+*.backup-*
+config/cache.db
+config/cache.db-wal
+config/cache.db-shm
+.env
+.env.*
+.claude
+tools
+androguard.db
