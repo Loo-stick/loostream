@@ -1294,16 +1294,25 @@ async function probeGet(url: string, opts: any, attempts = 3): Promise<any> {
 app.get('/api/health', async (_req, res) => {
   const results: Record<string, { status: 'up' | 'down' | 'degraded'; latency?: number; error?: string }> = {};
 
-  // Test NetMirror (tv/p.php returns JSON with "r":"n" when up)
+  // Test NetMirror. The scraper's front door is verify.php handing out a guest
+  // t_hash_t cookie (the old tv/p.php probe tested a pre-v3 endpoint that now
+  // 403s behind Cloudflare — a false "degraded"). Base is env-overridable, same
+  // as the scraper, so this follows a domain rotation.
+  const nmBase = process.env.NETMIRROR_API_BASE || 'https://net52.cc';
+  const nmUA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:136.0) Gecko/20100101 Firefox/136.0 /OS.GatuNewTV v1.0';
   const netmirrorStart = Date.now();
   try {
-    const resp = await axios.post('https://net52.cc/tv/p.php', null, {
+    const uuid = `${Math.random().toString(16).slice(2)}-${Date.now().toString(16)}`;
+    const resp = await axios.post(`${nmBase}/verify.php`, `g-recaptcha-response=${uuid}`, {
       timeout: 10000,
-      validateStatus: (s: number) => s < 500,
+      headers: { 'User-Agent': nmUA, 'Referer': `${nmBase}/`, 'Content-Type': 'application/x-www-form-urlencoded' },
+      maxRedirects: 0,
+      validateStatus: (s: number) => s < 400 || s === 301 || s === 302,
     });
-    const body = typeof resp.data === 'string' ? resp.data : JSON.stringify(resp.data);
+    const setCookie = (resp.headers['set-cookie'] as string[]) || [];
+    const hasCookie = setCookie.some(c => /t_hash_t=/.test(c));
     results.netmirror = {
-      status: body.includes('"r":"n"') ? 'up' : 'degraded',
+      status: hasCookie ? 'up' : 'degraded',
       latency: Date.now() - netmirrorStart,
     };
   } catch (e: any) {
@@ -1358,6 +1367,27 @@ app.get('/api/health', async (_req, res) => {
     results.faklum = { status: 'down', error: e.message };
   }
 
+  // FrenchStream, Wiflix and VoirDrama are all served by the Movix API — probe
+  // each endpoint against the hot-reloaded Movix base. 200 = the endpoint is
+  // alive (a title with no players still returns 200 {success:false}).
+  const movixApiProbe = async (name: string, path: string) => {
+    const start = Date.now();
+    try {
+      const resp = await probeGet(`${movixEndpoints.api}/api/${path}`, {
+        timeout: 10000,
+        headers: { 'Referer': movixEndpoints.referer, 'Origin': movixEndpoints.origin },
+        validateStatus: (s: number) => s < 500,
+      });
+      results[name] = { status: resp.status === 200 ? 'up' : 'degraded', latency: Date.now() - start };
+    } catch (e: any) {
+      results[name] = { status: 'down', error: e.message };
+    }
+  };
+  await Promise.all([
+    movixApiProbe('frenchstream', 'fstream/movie/155'),
+    movixApiProbe('wiflix', 'wiflix/movie/155'),
+    movixApiProbe('voirdrama', 'drama/tv/93405?season=1&episode=1'),
+  ]);
 
   const allUp = Object.values(results).every(r => r.status === 'up');
   const allDown = Object.values(results).every(r => r.status === 'down');
