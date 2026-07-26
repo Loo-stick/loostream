@@ -5,7 +5,7 @@ import { rateLimit } from 'express-rate-limit';
 import { getNetmirrorStreams } from './scrapers/netmirror';
 import { getWiflixStreams } from './scrapers/wiflix';
 import { getVoirDramaStreams, reloadVoirDramaEndpoints, getVoirDramaEndpoints } from './scrapers/voirdrama';
-import { getMovieboxStreams, movieboxProbe, resolveMovieboxUrl } from './scrapers/moviebox';
+import { getMovieboxStreams, movieboxProbe, resolveMovieboxUrl, resolveMovieboxSubtitle } from './scrapers/moviebox';
 import { getStreamFlixStreams, reloadStreamflixEndpoints, getStreamflixEndpoints } from './scrapers/streamflix';
 import { getMovixStreams, reloadMovixEndpoints, getMovixEndpoints } from './scrapers/movix';
 import { getFaklumStreams, reloadFaklumEndpoints, getFaklumEndpoints } from './scrapers/faklum';
@@ -911,11 +911,11 @@ async function handleStream(req: express.Request, res: express.Response, type: s
         u.searchParams.set('sid', mb.subjectId);
         u.searchParams.set('se', String(mb.se));
         u.searchParams.set('ep', String(mb.ep));
-        u.searchParams.set('i', String(mb.index));
+        u.searchParams.set('rid', mb.resourceId);
         const codec = mb.codec === 'hevc' ? 'H.265' : mb.codec === 'h264' ? 'H.264' : '';
         const gb = mb.sizeBytes ? `${(mb.sizeBytes / 1e9).toFixed(2)} Go` : '';
         const extras = [codec, gb].filter(Boolean).join(' • ');
-        const subCount = (mb.subtitles || []).length;
+        const subCount = (mb.subLangs || []).length;
         streams.push({
           name: `MovieBox\n${mb.quality}`,
           title: `${mb.language} [${mb.quality}]${extras ? ` • ${extras}` : ''}${subCount ? ` • ${subCount} sub` : ''}`,
@@ -925,7 +925,18 @@ async function handleStream(req: express.Request, res: express.Response, type: s
             bingeGroup: `moviebox-${mb.quality}`,
             ...(mb.sizeBytes ? { videoSize: mb.sizeBytes } : {}),
           },
-          subtitles: (mb.subtitles || []).map((s, i) => ({ id: `moviebox-${i}-${s.lang}`, url: s.url, lang: s.lang })),
+          // Subs resolved FRESH at load time, matched to this exact encode (same
+          // resourceId) so they stay in sync with the video.
+          subtitles: (mb.subLangs || []).map((lang, i) => {
+            const label = lang === 'fre' ? 'Français' : lang === 'eng' ? 'English' : lang;
+            const s = new URL(`/moviebox/subtitle/${encodeURIComponent(label)}.vtt`, baseUrl);
+            s.searchParams.set('sid', mb.subjectId);
+            s.searchParams.set('se', String(mb.se));
+            s.searchParams.set('ep', String(mb.ep));
+            s.searchParams.set('rid', mb.resourceId);
+            s.searchParams.set('lang', lang);
+            return { id: `moviebox-${i}-${lang}`, url: s.toString(), lang };
+          }),
           _meta: {
             quality: mb.quality,
             language: mb.language,
@@ -1536,16 +1547,45 @@ app.get('/api/health', async (_req, res) => {
   });
 });
 
-// MovieBox : résout un MP4 signé FRAIS et redirige (302). Appelé au moment de la
-// lecture, jamais mis en cache — l'URL signée (t=/sign=) est toujours valide.
+// MovieBox : sert un sous-titre CDN converti SRT->VTT avec le bon content-type.
+// Le CDN renvoie du SRT en application/octet-stream sans extension, que Stremio
+// ne reconnaît pas ; VTT + text/vtt marche partout (web + desktop).
+// MovieBox : sous-titre matché à l'encode (même resourceId), résolu FRAIS puis
+// converti SRT->VTT. Le CDN sert du SRT en octet-stream sans extension que
+// Stremio ignore ; VTT + text/vtt marche partout. :label est cosmétique.
+app.get('/moviebox/subtitle/:label', async (req, res) => {
+  const sid = String(req.query.sid || '');
+  const se = Number(req.query.se || 0);
+  const ep = Number(req.query.ep || 0);
+  const rid = String(req.query.rid || '');
+  const lang = String(req.query.lang || 'fre');
+  if (!sid || !rid) { res.status(400).end(); return; }
+  try {
+    const url = await resolveMovieboxSubtitle(sid, se, ep, rid, lang);
+    if (!url || !/^https:\/\/[a-z0-9.-]*hakunaymatata\.com\//i.test(url)) { res.status(404).end(); return; }
+    const resp = await axios.get(url, { responseType: 'text', timeout: 15000, transformResponse: v => v });
+    const srt = String(resp.data).replace(/\r+/g, '');
+    const vtt = 'WEBVTT\n\n' + srt
+      .replace(/(\d{2}:\d{2}:\d{2}),(\d{3})/g, '$1.$2')  // décimales SRT (virgule) -> VTT (point)
+      .replace(/[ \t]*-->[ \t]*/g, ' --> ');
+    res.setHeader('Content-Type', 'text/vtt; charset=utf-8');
+    res.setHeader('Cache-Control', 'public, max-age=3600');
+    res.send(vtt);
+  } catch {
+    res.status(502).end();
+  }
+});
+
+// MovieBox : résout le MP4 signé FRAIS (par resourceId) et redirige (302).
+// Appelé à la lecture — l'URL signée (t=/sign=) est toujours valide.
 app.get('/moviebox/stream', async (req, res) => {
   const sid = String(req.query.sid || '');
   const se = Number(req.query.se || 0);
   const ep = Number(req.query.ep || 0);
-  const i = Number(req.query.i || 0);
-  if (!sid) { res.status(400).send('missing sid'); return; }
+  const rid = String(req.query.rid || '');
+  if (!sid || !rid) { res.status(400).send('missing sid/rid'); return; }
   try {
-    const url = await resolveMovieboxUrl(sid, se, ep, i);
+    const url = await resolveMovieboxUrl(sid, se, ep, rid);
     if (!url) { res.status(502).send('MovieBox: resolve failed'); return; }
     res.redirect(302, url);
   } catch (e: any) {

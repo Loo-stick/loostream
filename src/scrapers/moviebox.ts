@@ -46,13 +46,13 @@ export interface MovieboxStream {
   subjectId: string;
   se: number;
   ep: number;
-  index: number;   // which stream in play-info's list
-  quality: string;
+  resourceId: string;  // pick this resource (encode) at play time
+  quality: string;     // real resolution, e.g. "1080p"
   language: string;
   server: string;
   codec?: string;      // h264 / hevc → H.264 / H.265
   sizeBytes?: number;
-  subtitles?: { url: string; lang: string }[];
+  subLangs: string[];  // ISO 639-2 of matched subs available (fre/eng)
 }
 
 /** Health probe: can we obtain a mobile Bearer? (signature + hosts OK). */
@@ -207,12 +207,20 @@ async function getLangVariants(bearer: string, baseSubjectId: string): Promise<L
     .sort((a, b) => (order[a.language] ?? 9) - (order[b.language] ?? 9));
 }
 
-// --- streams ---
-function qualityFromSize(size: number, all: number[]): string {
-  // No explicit resolution in play-info; rank by size (biggest = best).
-  if (all.length <= 1) return 'HD';
-  const rank = [...all].sort((a, b) => b - a).indexOf(size);
-  return ['1080p', '720p', '480p', '360p'][Math.min(rank, 3)] || 'SD';
+// --- streams (aligned with Onyx: everything from `resource`) ---
+// Onyx plays resource.list[] resourceLinks and pulls captions matched to the
+// same resource, keeping subtitles in sync with the video encode. We do the same:
+// resource gives real resolution + resourceId + codec + size + matched extCaptions.
+
+const FR_SUB = new Set(['fr', 'fre', 'fra']);
+
+/** Which of FR/EN subs are present on a resource item, as ISO 639-2. */
+function subLangsOf(item: any): string[] {
+  const caps: any[] = Array.isArray(item?.extCaptions) ? item.extCaptions : [];
+  const out: string[] = [];
+  if (caps.some(c => FR_SUB.has(String(c?.lan || '').toLowerCase()) && c?.url)) out.push('fre');
+  if (caps.some(c => String(c?.lan || '').toLowerCase() === 'en' && c?.url)) out.push('eng');
+  return out;
 }
 
 export async function getMovieboxStreams(
@@ -250,30 +258,30 @@ async function fetchMovieboxStreams(
   const se = mediaType === 'series' ? season! : 0;
   const ep = mediaType === 'series' ? episode! : 0;
 
-  // French + English subtitles (stable open URLs) — attached to every stream so
-  // a VO track is watchable in VOSTFR. Fetched once from resource.
-  const subtitles = await getSubtitles(bearer, baseSubjectId, se, ep);
-
-  // Each language (VO/VF/VOSTFR) is a separate subjectId — resolve play-info for
-  // each in parallel and label the streams accordingly.
+  // Each language (VO/VF/VOSTFR) is a separate subjectId — pull its resource list
+  // in parallel; one stream per real resolution, subs matched to that encode.
   const variants = await getLangVariants(bearer, baseSubjectId);
   const perVariant = await Promise.all(variants.map(async v => {
-    const r = await signedRequest('GET', '/wefeed-mobile-bff/subject-api/play-info',
-      { subjectId: v.subjectId, se, ep }, { bearer });
-    if (!r || r.data?.code !== 0) return [] as MovieboxStream[];
-    const raw: any[] = (r.data.data?.streams || []).filter((s: any) => s?.url && s?.format === 'MP4');
-    const sizes = raw.map(s => Number(s.size) || 0);
+    const list = await getResourceList(bearer, v.subjectId, se, ep);
     const out: MovieboxStream[] = [];
-    const seenQ = new Set<string>();
-    raw.forEach((s, index) => {
-      const quality = qualityFromSize(Number(s.size) || 0, sizes);
-      if (seenQ.has(quality)) return; // one entry per quality tier per language
-      seenQ.add(quality);
+    const seenRes = new Set<string>();
+    for (const item of list) {
+      const link = item.resourceLink || item.sourceUrl;
+      const resId = String(item.resourceId || '');
+      const res = Number(item.resolution) || 0;
+      if (!link || !resId || !res) continue;
+      const quality = `${res}p`;
+      if (seenRes.has(quality)) continue; // one per resolution per language
+      seenRes.add(quality);
+      const subLangs = subLangsOf(item);
+      // VO + sous-titres FR dispos = VOSTFR (Version Originale Sous-Titrée FR).
+      const language = (v.language === 'VO' && subLangs.includes('fre')) ? 'VOSTFR' : v.language;
       out.push({
-        subjectId: v.subjectId, se, ep, index, quality, language: v.language, server: 'moviebox',
-        codec: s.codecName, sizeBytes: Number(s.size) || 0, subtitles,
+        subjectId: v.subjectId, se, ep, resourceId: resId, quality, language,
+        server: 'moviebox', codec: item.codecName, sizeBytes: Number(item.size) || 0,
+        subLangs,
       });
-    });
+    }
     return out;
   }));
 
@@ -282,40 +290,41 @@ async function fetchMovieboxStreams(
   return streams;
 }
 
-// French + English external subtitles from resource.extCaptions (SRT, stable
-// open URLs). Foreign-language subs are dropped.
-async function getSubtitles(
-  bearer: string, subjectId: string, se: number, ep: number
-): Promise<{ url: string; lang: string }[]> {
-  try {
-    const r = await signedRequest('GET', '/wefeed-mobile-bff/subject-api/resource',
-      { subjectId, se, ep }, { bearer });
-    const list: any[] = (r?.data?.code === 0 && r.data.data?.list) || [];
-    const caps: any[] = list.find(x => Array.isArray(x?.extCaptions) && x.extCaptions.length)?.extCaptions || [];
-    const out: { url: string; lang: string }[] = [];
-    const seen = new Set<string>();
-    for (const c of caps) {
-      const lan = String(c?.lan || '').toLowerCase();
-      if ((lan !== 'fr' && lan !== 'en') || !c?.url || seen.has(lan)) continue;
-      seen.add(lan);
-      out.push({ url: c.url, lang: lan === 'fr' ? 'fre' : 'eng' });
-    }
-    return out;
-  } catch {
-    return [];
-  }
+/** resource.list[] for a subjectId (per-resolution encodes + matched captions). */
+async function getResourceList(bearer: string, subjectId: string, se: number, ep: number): Promise<any[]> {
+  const r = await signedRequest('GET', '/wefeed-mobile-bff/subject-api/resource',
+    { subjectId, se, ep }, { bearer });
+  return (r?.data?.code === 0 && Array.isArray(r.data.data?.list)) ? r.data.data.list : [];
 }
 
-// Resolve a fresh, playable MP4 URL for a given (subjectId, se, ep, index).
-// Called at play time by /moviebox/stream so the signed URL is never stale.
-export async function resolveMovieboxUrl(
-  subjectId: string, se: number, ep: number, index: number
-): Promise<string | null> {
+/** Find a resource item by resourceId (fresh call). */
+async function findResourceItem(
+  subjectId: string, se: number, ep: number, resourceId: string
+): Promise<any | null> {
   const bearer = await ensureBearer();
   if (!bearer) return null;
-  const r = await signedRequest('GET', '/wefeed-mobile-bff/subject-api/play-info',
-    { subjectId, se, ep }, { bearer });
-  if (!r || r.data?.code !== 0) return null;
-  const streams: any[] = (r.data.data?.streams || []).filter((s: any) => s?.url && s?.format === 'MP4');
-  return streams[index]?.url || streams[0]?.url || null;
+  const list = await getResourceList(bearer, subjectId, se, ep);
+  return list.find(x => String(x?.resourceId || '') === resourceId) || list[0] || null;
+}
+
+// Fresh, playable MP4 URL for a resource item — /moviebox/stream calls this at
+// play time so the signed link is never stale.
+export async function resolveMovieboxUrl(
+  subjectId: string, se: number, ep: number, resourceId: string
+): Promise<string | null> {
+  const item = await findResourceItem(subjectId, se, ep, resourceId);
+  return item?.resourceLink || item?.sourceUrl || null;
+}
+
+// Fresh subtitle CDN URL (SRT) for a resource item + language — matched to the
+// same encode as the video, resolved at load time (no stale signed URL).
+export async function resolveMovieboxSubtitle(
+  subjectId: string, se: number, ep: number, resourceId: string, lang: string
+): Promise<string | null> {
+  const item = await findResourceItem(subjectId, se, ep, resourceId);
+  const caps: any[] = Array.isArray(item?.extCaptions) ? item.extCaptions : [];
+  const match = lang === 'fre'
+    ? caps.find(c => FR_SUB.has(String(c?.lan || '').toLowerCase()))
+    : caps.find(c => String(c?.lan || '').toLowerCase() === 'en');
+  return match?.url || null;
 }
