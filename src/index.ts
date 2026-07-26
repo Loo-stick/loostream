@@ -5,6 +5,7 @@ import { rateLimit } from 'express-rate-limit';
 import { getNetmirrorStreams } from './scrapers/netmirror';
 import { getWiflixStreams } from './scrapers/wiflix';
 import { getVoirDramaStreams, reloadVoirDramaEndpoints, getVoirDramaEndpoints } from './scrapers/voirdrama';
+import { getMovieboxStreams, movieboxProbe, resolveMovieboxUrl } from './scrapers/moviebox';
 import { getStreamFlixStreams, reloadStreamflixEndpoints, getStreamflixEndpoints } from './scrapers/streamflix';
 import { getMovixStreams, reloadMovixEndpoints, getMovixEndpoints } from './scrapers/movix';
 import { getFaklumStreams, reloadFaklumEndpoints, getFaklumEndpoints } from './scrapers/faklum';
@@ -40,6 +41,7 @@ interface Stats {
     frenchstream: { requests: number; success: number; errors: number; lastSuccess: number | null };
     wiflix: { requests: number; success: number; errors: number; lastSuccess: number | null };
     voirdrama: { requests: number; success: number; errors: number; lastSuccess: number | null };
+    moviebox: { requests: number; success: number; errors: number; lastSuccess: number | null };
   };
   streamsServed: {
     movix: number;
@@ -49,6 +51,7 @@ interface Stats {
     frenchstream: number;
     wiflix: number;
     voirdrama: number;
+    moviebox: number;
   };
 }
 
@@ -63,11 +66,12 @@ const stats: Stats = {
     frenchstream: { requests: 0, success: 0, errors: 0, lastSuccess: null },
     wiflix: { requests: 0, success: 0, errors: 0, lastSuccess: null },
     voirdrama: { requests: 0, success: 0, errors: 0, lastSuccess: null },
+    moviebox: { requests: 0, success: 0, errors: 0, lastSuccess: null },
   },
-  streamsServed: { movix: 0, netmirror: 0, streamflix: 0, faklum: 0, frenchstream: 0, wiflix: 0, voirdrama: 0 },
+  streamsServed: { movix: 0, netmirror: 0, streamflix: 0, faklum: 0, frenchstream: 0, wiflix: 0, voirdrama: 0, moviebox: 0 },
 };
 
-function trackSourceResult(source: 'movix' | 'netmirror' | 'streamflix' | 'faklum' | 'frenchstream' | 'wiflix' | 'voirdrama', success: boolean, streamCount: number = 0) {
+function trackSourceResult(source: 'movix' | 'netmirror' | 'streamflix' | 'faklum' | 'frenchstream' | 'wiflix' | 'voirdrama' | 'moviebox', success: boolean, streamCount: number = 0) {
   stats.sources[source].requests++;
   if (success) {
     stats.sources[source].success++;
@@ -115,12 +119,13 @@ interface StreamWithMeta {
   name: string;
   title: string;
   url: string;
-  behaviorHints: { notWebReady: boolean; bingeGroup: string; filename?: string };
+  behaviorHints: { notWebReady: boolean; bingeGroup: string; filename?: string; videoSize?: number };
   subtitles?: { id: string; url: string; lang: string }[];
   _meta: {
     quality: string;
     language: string;
     source: string;
+    codec?: string;
   };
 }
 
@@ -704,9 +709,12 @@ async function handleStream(req: express.Request, res: express.Response, type: s
       getVoirDramaStreams(info.tmdbId, type as 'movie' | 'series', extractorConfig, parsed.season, parsed.episode, info.title)
         .then(r => { trackSourceResult('voirdrama', true, r.length); recordOutcome('voirdrama', r.length > 0 ? 'success' : 'empty'); return r; })
         .catch(e => { console.log('[VoirDrama] Error:', e); trackSourceResult('voirdrama', false); recordOutcome('voirdrama', 'error', e?.message); return []; }),
+      getMovieboxStreams(info.tmdbId, type as 'movie' | 'series', info.title, info.year, parsed.season, parsed.episode)
+        .then(r => { trackSourceResult('moviebox', true, r.length); recordOutcome('moviebox', r.length > 0 ? 'success' : 'empty'); return r; })
+        .catch(e => { console.log('[MovieBox] Error:', e); trackSourceResult('moviebox', false); recordOutcome('moviebox', 'error', e?.message); return []; }),
     ];
 
-    const SOURCE_NAMES = ['netmirror', 'streamflix', 'movix', 'faklum', 'frenchstream', 'wiflix', 'voirdrama'];
+    const SOURCE_NAMES = ['netmirror', 'streamflix', 'movix', 'faklum', 'frenchstream', 'wiflix', 'voirdrama', 'moviebox'];
     const collected = await collectSources(
       sourcePromises.map((promise, i) => ({
         name: SOURCE_NAMES[i],
@@ -726,6 +734,7 @@ async function handleStream(req: express.Request, res: express.Response, type: s
     const frenchstreamResults = collected[4] as Awaited<ReturnType<typeof getFrenchStreamStreams>>;
     const wiflixResults = collected[5] as Awaited<ReturnType<typeof getWiflixStreams>>;
     const voirdramaResults = collected[6] as Awaited<ReturnType<typeof getVoirDramaStreams>>;
+    const movieboxResults = collected[7] as Awaited<ReturnType<typeof getMovieboxStreams>>;
 
     const streams: StreamWithMeta[] = [];
 
@@ -889,6 +898,44 @@ async function handleStream(req: express.Request, res: express.Response, type: s
       });
     }
 
+    // Process MovieBox results (aoneroom mobile API — direct signed MP4s). The
+    // signed URL is time-limited, so instead of embedding it we point at our own
+    // /moviebox/stream endpoint which resolves a fresh URL and 302-redirects at
+    // play time. Direct MP4 → no proxy bandwidth, always fresh.
+    {
+      const proto = req.headers['x-forwarded-proto'] || req.protocol || 'http';
+      const host = req.headers['x-forwarded-host'] || req.headers.host;
+      const baseUrl = `${proto}://${host}`;
+      for (const mb of movieboxResults) {
+        const u = new URL('/moviebox/stream', baseUrl);
+        u.searchParams.set('sid', mb.subjectId);
+        u.searchParams.set('se', String(mb.se));
+        u.searchParams.set('ep', String(mb.ep));
+        u.searchParams.set('i', String(mb.index));
+        const codec = mb.codec === 'hevc' ? 'H.265' : mb.codec === 'h264' ? 'H.264' : '';
+        const gb = mb.sizeBytes ? `${(mb.sizeBytes / 1e9).toFixed(2)} Go` : '';
+        const extras = [codec, gb].filter(Boolean).join(' • ');
+        const subCount = (mb.subtitles || []).length;
+        streams.push({
+          name: `MovieBox\n${mb.quality}`,
+          title: `${mb.language} [${mb.quality}]${extras ? ` • ${extras}` : ''}${subCount ? ` • ${subCount} sub` : ''}`,
+          url: u.toString(),
+          behaviorHints: {
+            notWebReady: false,
+            bingeGroup: `moviebox-${mb.quality}`,
+            ...(mb.sizeBytes ? { videoSize: mb.sizeBytes } : {}),
+          },
+          subtitles: (mb.subtitles || []).map((s, i) => ({ id: `moviebox-${i}-${s.lang}`, url: s.url, lang: s.lang })),
+          _meta: {
+            quality: mb.quality,
+            language: mb.language,
+            source: 'moviebox',
+            codec: mb.codec,
+          },
+        });
+      }
+    }
+
 
     // Process Faklum results
     for (const fk of faklumResults) {
@@ -983,6 +1030,7 @@ async function handleStream(req: express.Request, res: express.Response, type: s
         lang: s._meta.language,
         originalLanguage: info.originalLanguage,
         resolution: s._meta.quality,
+        codec: s._meta.codec,
         provider: providerLabel(s._meta.source),
       });
     }
@@ -1469,6 +1517,15 @@ app.get('/api/health', async (_req, res) => {
     movixApiProbe('voirdrama', 'drama/tv/93405?season=1&episode=1'),
   ]);
 
+  // MovieBox : la santé = obtenir un Bearer (signature + hosts OK).
+  const mbStart = Date.now();
+  try {
+    const ok = await movieboxProbe();
+    results.moviebox = { status: ok ? 'up' : 'degraded', latency: Date.now() - mbStart };
+  } catch (e: any) {
+    results.moviebox = { status: 'down', error: e.message };
+  }
+
   const allUp = Object.values(results).every(r => r.status === 'up');
   const allDown = Object.values(results).every(r => r.status === 'down');
 
@@ -1477,6 +1534,23 @@ app.get('/api/health', async (_req, res) => {
     sources: results,
     timestamp: new Date().toISOString(),
   });
+});
+
+// MovieBox : résout un MP4 signé FRAIS et redirige (302). Appelé au moment de la
+// lecture, jamais mis en cache — l'URL signée (t=/sign=) est toujours valide.
+app.get('/moviebox/stream', async (req, res) => {
+  const sid = String(req.query.sid || '');
+  const se = Number(req.query.se || 0);
+  const ep = Number(req.query.ep || 0);
+  const i = Number(req.query.i || 0);
+  if (!sid) { res.status(400).send('missing sid'); return; }
+  try {
+    const url = await resolveMovieboxUrl(sid, se, ep, i);
+    if (!url) { res.status(502).send('MovieBox: resolve failed'); return; }
+    res.redirect(302, url);
+  } catch (e: any) {
+    res.status(502).send('MovieBox: ' + (e?.message || 'error'));
+  }
 });
 
 app.listen(PORT, () => {

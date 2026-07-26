@@ -115,6 +115,7 @@ const PROVIDER_LABELS: Record<string, string> = {
   frenchstream: 'FrenchStream',
   wiflix: 'Wiflix',
   voirdrama: 'VoirDrama',
+  moviebox: 'MovieBox',
 };
 
 export function providerLabel(source: string): string {
@@ -134,7 +135,17 @@ export interface FilenameParts {
   lang: string;              // our internal tag (MULTI/VF/VOSTFR/VO/...)
   originalLanguage?: string; // TMDB ISO 639-1, resolves the VO token
   resolution: string;        // our internal quality tag (1080p/720p/HD/...)
+  codec?: string;            // real codec when known (h264/hevc) — MovieBox
   provider: string;          // display label (Movix/Wiflix/...)
+}
+
+// Real codec → scene token. Only emitted when a source actually reports it (we
+// removed the old hardcoded x264 that was fake on every stream); MovieBox does.
+function mapCodec(codec?: string): string {
+  const c = (codec || '').toLowerCase();
+  if (c.includes('hevc') || c.includes('265') || c.includes('h265')) return 'x265';
+  if (c.includes('avc') || c.includes('264') || c.includes('h264')) return 'x264';
+  return '';
 }
 
 // Films : {Title}.{Year}.{Lang}.{Resolution}-{Provider}.mkv
@@ -156,6 +167,9 @@ export function buildFilename(p: FilenameParts): string {
 
   const resTok = mapResolution(p.resolution);
   if (resTok) segments.push(resTok);
+
+  const codecTok = mapCodec(p.codec);
+  if (codecTok) segments.push(codecTok);
 
   return `${segments.filter(Boolean).join('.')}-${p.provider}.mkv`;
 }
