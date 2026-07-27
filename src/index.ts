@@ -18,6 +18,7 @@ import proxyRouter, { isAllowedUrl, addAllowedDomain, getAllowedDomains } from '
 import * as fsSync from 'fs';
 import { ExtractorConfig, reloadExtractorDomains, getExtractorDomains } from './extractors';
 import { getSceneMeta, buildFilename, providerLabel } from './filename';
+import { buildStreamName, buildStreamTitle } from './display';
 
 const app = express();
 
@@ -130,6 +131,10 @@ interface StreamWithMeta {
     language: string;
     source: string;
     codec?: string;
+    server?: string;
+    platform?: string;
+    sizeBytes?: number;
+    subCount?: number;
   };
 }
 
@@ -751,7 +756,10 @@ async function handleStream(req: express.Request, res: express.Response, type: s
     const movieboxResults = collected[7] as Awaited<ReturnType<typeof getMovieboxStreams>>;
     const voiranimeResults = collected[8] as Awaited<ReturnType<typeof getVoirAnimeStreams>>;
 
-    const streams: StreamWithMeta[] = [];
+    // On accumule des "drafts" (streams sans name/title). name/title sont posés
+    // en UNE passe centralisée plus bas (src/display.ts), pour un rendu uniforme.
+    type StreamDraft = Omit<StreamWithMeta, 'name' | 'title'>;
+    const drafts: StreamDraft[] = [];
 
     // Process Movix results
     for (const mv of movixResults) {
@@ -784,10 +792,7 @@ async function handleStream(req: express.Request, res: express.Response, type: s
         finalUrl = proxiedUrl;
       }
 
-      const serverLabel = mv.server ? ` • ${mv.server}` : '';
-      streams.push({
-        name: `Movix\n${mv.language}`,
-        title: `${mv.language} [${mv.quality}]${serverLabel}`,
+      drafts.push({
         url: finalUrl,
         behaviorHints: {
           notWebReady: false,
@@ -797,6 +802,7 @@ async function handleStream(req: express.Request, res: express.Response, type: s
           quality: mv.quality,
           language: mv.language,
           source: 'movix',
+          server: mv.server,
         },
       });
     }
@@ -821,9 +827,7 @@ async function handleStream(req: express.Request, res: express.Response, type: s
       }
       const proxiedUrl = mu.toString();
 
-      streams.push({
-        name: `NetMirror ${r.platform}\n${r.quality}`,
-        title: `${r.language} [${r.quality}]`,
+      drafts.push({
         url: proxiedUrl,
         behaviorHints: {
           notWebReady: false,
@@ -833,6 +837,7 @@ async function handleStream(req: express.Request, res: express.Response, type: s
           quality: r.quality,
           language: r.language,
           source: 'netmirror',
+          platform: r.platform,
         },
       });
     }
@@ -847,9 +852,7 @@ async function handleStream(req: express.Request, res: express.Response, type: s
 
       if (!proxiedUrl) continue; // Skip blocked URLs
 
-      streams.push({
-        name: `StreamFlix\n${sf.quality}`,
-        title: `${sf.language} [${sf.quality}]`,
+      drafts.push({
         url: proxiedUrl,
         behaviorHints: {
           notWebReady: false,
@@ -872,9 +875,7 @@ async function handleStream(req: express.Request, res: express.Response, type: s
 
       if (!proxiedUrl) continue; // Skip blocked URLs
 
-      streams.push({
-        name: `Wiflix\n${wf.quality}`,
-        title: `${wf.language} [${wf.quality}] • ${wf.server}`,
+      drafts.push({
         url: proxiedUrl,
         behaviorHints: {
           notWebReady: false,
@@ -884,6 +885,7 @@ async function handleStream(req: express.Request, res: express.Response, type: s
           quality: wf.quality,
           language: wf.language,
           source: 'wiflix',
+          server: wf.server,
         },
       });
     }
@@ -897,9 +899,7 @@ async function handleStream(req: express.Request, res: express.Response, type: s
 
       if (!proxiedUrl) continue; // Skip blocked URLs
 
-      streams.push({
-        name: `VoirDrama\n${vd.quality}`,
-        title: `${vd.language} [${vd.quality}] • ${vd.server}`,
+      drafts.push({
         url: proxiedUrl,
         behaviorHints: {
           notWebReady: false,
@@ -909,6 +909,7 @@ async function handleStream(req: express.Request, res: express.Response, type: s
           quality: vd.quality,
           language: vd.language,
           source: 'voirdrama',
+          server: vd.server,
         },
       });
     }
@@ -922,9 +923,7 @@ async function handleStream(req: express.Request, res: express.Response, type: s
 
       if (!proxiedUrl) continue; // Skip blocked URLs
 
-      streams.push({
-        name: `VoirAnime\n${va.quality}`,
-        title: `${va.language} [${va.quality}] • ${va.server}`,
+      drafts.push({
         url: proxiedUrl,
         behaviorHints: {
           notWebReady: false,
@@ -934,6 +933,7 @@ async function handleStream(req: express.Request, res: express.Response, type: s
           quality: va.quality,
           language: va.language,
           source: 'voiranime',
+          server: va.server,
         },
       });
     }
@@ -952,13 +952,7 @@ async function handleStream(req: express.Request, res: express.Response, type: s
         u.searchParams.set('se', String(mb.se));
         u.searchParams.set('ep', String(mb.ep));
         u.searchParams.set('rid', mb.resourceId);
-        const codec = mb.codec === 'hevc' ? 'H.265' : mb.codec === 'h264' ? 'H.264' : '';
-        const gb = mb.sizeBytes ? `${(mb.sizeBytes / 1e9).toFixed(2)} Go` : '';
-        const extras = [codec, gb].filter(Boolean).join(' • ');
-        const subCount = (mb.subLangs || []).length;
-        streams.push({
-          name: `MovieBox\n${mb.quality}`,
-          title: `${mb.language} [${mb.quality}]${extras ? ` • ${extras}` : ''}${subCount ? ` • ${subCount} sub` : ''}`,
+        drafts.push({
           url: u.toString(),
           behaviorHints: {
             notWebReady: false,
@@ -982,6 +976,8 @@ async function handleStream(req: express.Request, res: express.Response, type: s
             language: mb.language,
             source: 'moviebox',
             codec: mb.codec,
+            sizeBytes: mb.sizeBytes,
+            subCount: (mb.subLangs || []).length,
           },
         });
       }
@@ -1007,9 +1003,7 @@ async function handleStream(req: express.Request, res: express.Response, type: s
         finalUrl = proxiedUrl;
       }
 
-      streams.push({
-        name: `Faklum\n${fk.language}`,
-        title: `${fk.language} [${fk.quality}]`,
+      drafts.push({
         url: finalUrl,
         behaviorHints: {
           notWebReady: false,
@@ -1042,9 +1036,7 @@ async function handleStream(req: express.Request, res: express.Response, type: s
         finalUrl = proxiedUrl;
       }
 
-      streams.push({
-        name: `FrenchStream\n${fr.language}`,
-        title: `${fr.language} [${fr.quality}] • ${fr.server}`,
+      drafts.push({
         url: finalUrl,
         behaviorHints: {
           notWebReady: false,
@@ -1054,37 +1046,48 @@ async function handleStream(req: express.Request, res: express.Response, type: s
           quality: fr.quality,
           language: fr.language,
           source: 'frenchstream',
+          server: fr.server,
         },
       });
     }
 
-    if (streams.length === 0) {
+    if (drafts.length === 0) {
       console.log('[Stream] No streams found');
       return res.json({ streams: [] });
     }
 
-    // Add scene-style behaviorHints.filename so meta-addons (AIOStreams) can
-    // parse title/year/S-E/resolution/lang. Title comes from Cinemeta (English/
-    // scene) rather than the source site (often FR/translated).
+    // Nom de fichier scène (AIOStreams parse title/year/S-E/resolution/lang).
+    // Titre depuis Cinemeta (anglais/scène) plutôt que le site source (souvent
+    // FR/traduit). Calculé AVANT la passe d'affichage pour l'afficher aussi
+    // (ligne 💾) dans Stremio direct.
     const sceneMeta = await getSceneMeta(
       type === 'series' ? 'series' : 'movie',
       parsed.baseId,
       { title: info.title, year: info.year }
     );
-    for (const s of streams) {
-      s.behaviorHints.filename = buildFilename({
+
+    // Passe centralisée : filename (AIOStreams) + name/title enrichis depuis
+    // _meta (src/display.ts). originalLanguage résout le cas "VO" (drapeau).
+    const streams: StreamWithMeta[] = drafts.map(d => {
+      const filename = buildFilename({
         title: sceneMeta.title,
         year: sceneMeta.year,
         isSeries: type === 'series',
         season: parsed.season,
         episode: parsed.episode,
-        lang: s._meta.language,
+        lang: d._meta.language,
         originalLanguage: info.originalLanguage,
-        resolution: s._meta.quality,
-        codec: s._meta.codec,
-        provider: providerLabel(s._meta.source),
+        resolution: d._meta.quality,
+        codec: d._meta.codec,
+        provider: providerLabel(d._meta.source),
       });
-    }
+      return {
+        ...d,
+        behaviorHints: { ...d.behaviorHints, filename },
+        name: buildStreamName(d._meta),
+        title: buildStreamTitle(d._meta, info.originalLanguage, filename),
+      };
+    });
 
     // Apply user preferences (filter + sort)
     const sortedStreams = filterAndSortStreams(streams, config);
