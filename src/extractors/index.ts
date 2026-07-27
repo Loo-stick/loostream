@@ -27,12 +27,12 @@ export interface ExtractorConfig {
   mediaFlowPassword?: string;
 }
 
-export type ExtractorId ='voe' | 'uqload' | 'doodstream' | 'filemoon' | 'vidoza' | 'vidmoly' | 'streamtape' | 'mixdrop' | 'sharecloudy' | 'lulustream' | 'filelions' | 'streamwish' | 'fsvid' | 'vidzy' | 'mailru' | 'sibnet';
+export type ExtractorId ='voe' | 'uqload' | 'doodstream' | 'filemoon' | 'vidoza' | 'vidmoly' | 'streamtape' | 'mixdrop' | 'sharecloudy' | 'lulustream' | 'filelions' | 'streamwish' | 'fsvid' | 'vidzy' | 'mailru' | 'sibnet' | 'livavid';
 
 export const EXTRACTOR_IDS: ExtractorId[] = [
   'voe', 'uqload', 'doodstream', 'filemoon', 'vidoza', 'vidmoly',
   'streamtape', 'mixdrop', 'sharecloudy', 'lulustream', 'filelions',
-  'streamwish', 'fsvid', 'vidzy', 'mailru', 'sibnet',
+  'streamwish', 'fsvid', 'vidzy', 'mailru', 'sibnet', 'livavid',
 ];
 
 export const DEFAULT_EXTRACTOR_DOMAINS: Record<ExtractorId, string[]> = {
@@ -49,6 +49,7 @@ export const DEFAULT_EXTRACTOR_DOMAINS: Record<ExtractorId, string[]> = {
   vidoza: ['vidoza'],
   mailru: ['my.mail.ru', 'mail.ru', 'ok.ru', 'odnoklassniki'],
   sibnet: ['sibnet.ru', 'video.sibnet'],
+  livavid: ['livavid'],
   vidmoly: ['vidmoly', 'molystream', 'vidhide'],
   streamtape: ['streamtape', 'strcloud', 'shavetape', 'tapewithadblock'],
   mixdrop: ['mixdrop', 'mdrop', 'mdy48tn97'],
@@ -424,6 +425,7 @@ async function extractLocally(embedUrl: string, extractor: string): Promise<Extr
       return await extractSharecloudy(embedUrl);
     case 'fsvid':
     case 'vidzy':
+    case 'livavid':
       return await extractPackedJs(embedUrl);
     case 'mailru':
       return await extractMailru(embedUrl);
