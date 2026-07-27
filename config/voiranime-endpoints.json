@@ -1,0 +1,4 @@
+{
+  "_comment": "Base du site VoirAnime (scraping). Éditez si le domaine change ; hot-reloadé.",
+  "base": "https://voir-anime.to"
+}

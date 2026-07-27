@@ -6,6 +6,7 @@ import { getNetmirrorStreams } from './scrapers/netmirror';
 import { getWiflixStreams } from './scrapers/wiflix';
 import { getVoirDramaStreams, reloadVoirDramaEndpoints, getVoirDramaEndpoints } from './scrapers/voirdrama';
 import { getMovieboxStreams, movieboxProbe, resolveMovieboxUrl, resolveMovieboxSubtitle } from './scrapers/moviebox';
+import { getVoirAnimeStreams, getVoirAnimeEndpoints, reloadVoirAnimeEndpoints } from './scrapers/voiranime';
 import { getStreamFlixStreams, reloadStreamflixEndpoints, getStreamflixEndpoints } from './scrapers/streamflix';
 import { getMovixStreams, reloadMovixEndpoints, getMovixEndpoints } from './scrapers/movix';
 import { getFaklumStreams, reloadFaklumEndpoints, getFaklumEndpoints } from './scrapers/faklum';
@@ -42,6 +43,7 @@ interface Stats {
     wiflix: { requests: number; success: number; errors: number; lastSuccess: number | null };
     voirdrama: { requests: number; success: number; errors: number; lastSuccess: number | null };
     moviebox: { requests: number; success: number; errors: number; lastSuccess: number | null };
+    voiranime: { requests: number; success: number; errors: number; lastSuccess: number | null };
   };
   streamsServed: {
     movix: number;
@@ -52,6 +54,7 @@ interface Stats {
     wiflix: number;
     voirdrama: number;
     moviebox: number;
+    voiranime: number;
   };
 }
 
@@ -67,11 +70,12 @@ const stats: Stats = {
     wiflix: { requests: 0, success: 0, errors: 0, lastSuccess: null },
     voirdrama: { requests: 0, success: 0, errors: 0, lastSuccess: null },
     moviebox: { requests: 0, success: 0, errors: 0, lastSuccess: null },
+    voiranime: { requests: 0, success: 0, errors: 0, lastSuccess: null },
   },
-  streamsServed: { movix: 0, netmirror: 0, streamflix: 0, faklum: 0, frenchstream: 0, wiflix: 0, voirdrama: 0, moviebox: 0 },
+  streamsServed: { movix: 0, netmirror: 0, streamflix: 0, faklum: 0, frenchstream: 0, wiflix: 0, voirdrama: 0, moviebox: 0, voiranime: 0 },
 };
 
-function trackSourceResult(source: 'movix' | 'netmirror' | 'streamflix' | 'faklum' | 'frenchstream' | 'wiflix' | 'voirdrama' | 'moviebox', success: boolean, streamCount: number = 0) {
+function trackSourceResult(source: 'movix' | 'netmirror' | 'streamflix' | 'faklum' | 'frenchstream' | 'wiflix' | 'voirdrama' | 'moviebox' | 'voiranime', success: boolean, streamCount: number = 0) {
   stats.sources[source].requests++;
   if (success) {
     stats.sources[source].success++;
@@ -584,7 +588,7 @@ const DEFAULT_TMDB_KEY = process.env.TMDB_API_KEY || '';
 
 const TMDB_TTL_MS = 12 * 60 * 60 * 1000;
 
-async function getTmdbInfo(type: string, id: string, config?: UserConfig | null): Promise<{ title: string; year: string; tmdbId: string; imdbId: string; originalLanguage: string } | null> {
+async function getTmdbInfo(type: string, id: string, config?: UserConfig | null): Promise<{ title: string; originalTitle: string; year: string; tmdbId: string; imdbId: string; originalLanguage: string } | null> {
   const tmdbKey = config?.tmdbKey || DEFAULT_TMDB_KEY;
 
   if (!tmdbKey) {
@@ -614,6 +618,9 @@ async function getTmdbInfo(type: string, id: string, config?: UserConfig | null)
         const resp = await axios.get(`https://api.themoviedb.org/3/${endpoint}/${tmdbId}?api_key=${tmdbKey}`);
 
         const title = resp.data.title || resp.data.name;
+        // Original (romaji) title — anime often lives under it on FR sites
+        // (jigokuraku, shingeki-no-kyojin) rather than the English title.
+        const originalTitle = resp.data.original_title || resp.data.original_name || '';
         const year = (resp.data.release_date || resp.data.first_air_date || '').split('-')[0];
 
         let imdbId = id.startsWith('tt') ? id : (resp.data.imdb_id || '');
@@ -626,7 +633,7 @@ async function getTmdbInfo(type: string, id: string, config?: UserConfig | null)
 
         const originalLanguage = String(resp.data.original_language || '').toLowerCase();
 
-        return { title, year, tmdbId, imdbId, originalLanguage };
+        return { title, originalTitle, year, tmdbId, imdbId, originalLanguage };
       } catch (e) {
         console.error('[TMDB] Error:', e);
         return null;
@@ -712,9 +719,16 @@ async function handleStream(req: express.Request, res: express.Response, type: s
       getMovieboxStreams(info.tmdbId, type as 'movie' | 'series', info.title, info.year, parsed.season, parsed.episode)
         .then(r => { trackSourceResult('moviebox', true, r.length); recordOutcome('moviebox', r.length > 0 ? 'success' : 'empty'); return r; })
         .catch(e => { console.log('[MovieBox] Error:', e); trackSourceResult('moviebox', false); recordOutcome('moviebox', 'error', e?.message); return []; }),
+      // VoirAnime : uniquement pour l'anime (originalLanguage japonais) — évite de
+      // scraper voir-anime.to pour chaque film/série occidental.
+      (info.originalLanguage === 'ja'
+        ? getVoirAnimeStreams(parsed.baseId, type as 'movie' | 'series', extractorConfig, parsed.season, parsed.episode, info.title, info.originalTitle)
+        : Promise.resolve([]))
+        .then(r => { if (info.originalLanguage === 'ja') { trackSourceResult('voiranime', true, r.length); recordOutcome('voiranime', r.length > 0 ? 'success' : 'empty'); } return r; })
+        .catch(e => { console.log('[VoirAnime] Error:', e); trackSourceResult('voiranime', false); recordOutcome('voiranime', 'error', e?.message); return []; }),
     ];
 
-    const SOURCE_NAMES = ['netmirror', 'streamflix', 'movix', 'faklum', 'frenchstream', 'wiflix', 'voirdrama', 'moviebox'];
+    const SOURCE_NAMES = ['netmirror', 'streamflix', 'movix', 'faklum', 'frenchstream', 'wiflix', 'voirdrama', 'moviebox', 'voiranime'];
     const collected = await collectSources(
       sourcePromises.map((promise, i) => ({
         name: SOURCE_NAMES[i],
@@ -735,6 +749,7 @@ async function handleStream(req: express.Request, res: express.Response, type: s
     const wiflixResults = collected[5] as Awaited<ReturnType<typeof getWiflixStreams>>;
     const voirdramaResults = collected[6] as Awaited<ReturnType<typeof getVoirDramaStreams>>;
     const movieboxResults = collected[7] as Awaited<ReturnType<typeof getMovieboxStreams>>;
+    const voiranimeResults = collected[8] as Awaited<ReturnType<typeof getVoirAnimeStreams>>;
 
     const streams: StreamWithMeta[] = [];
 
@@ -894,6 +909,31 @@ async function handleStream(req: express.Request, res: express.Response, type: s
           quality: vd.quality,
           language: vd.language,
           source: 'voirdrama',
+        },
+      });
+    }
+
+    // Process VoirAnime results (anime VF/VOSTFR, scraping voir-anime.to).
+    for (const va of voiranimeResults) {
+      const proxiedUrl = buildProxyUrl(va.url, {
+        ...(va.headers || {}),
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+      }, false, req, config);
+
+      if (!proxiedUrl) continue; // Skip blocked URLs
+
+      streams.push({
+        name: `VoirAnime\n${va.quality}`,
+        title: `${va.language} [${va.quality}] • ${va.server}`,
+        url: proxiedUrl,
+        behaviorHints: {
+          notWebReady: false,
+          bingeGroup: `voiranime-${va.server}`,
+        },
+        _meta: {
+          quality: va.quality,
+          language: va.language,
+          source: 'voiranime',
         },
       });
     }
@@ -1230,6 +1270,10 @@ app.get('/api/voirdrama/endpoints', (req, res) => {
   const reload = req.query.reload === 'true';
   res.json({ ...(reload ? reloadVoirDramaEndpoints() : getVoirDramaEndpoints()), reloaded: reload });
 });
+app.get('/api/voiranime/endpoints', (req, res) => {
+  const reload = req.query.reload === 'true';
+  res.json({ ...(reload ? reloadVoirAnimeEndpoints() : getVoirAnimeEndpoints()), reloaded: reload });
+});
 
 // ── Écriture des endpoints depuis l'admin (authentifié) ────────────────────
 // Écrit un fichier config/<name> en préservant son _comment, puis appelle le
@@ -1272,6 +1316,7 @@ const singleBaseSources: Array<{ path: string; file: string; reload: () => unkno
   { path: 'streamflix', file: 'streamflix-endpoints.json', reload: reloadStreamflixEndpoints },
   { path: 'faklum', file: 'faklum-endpoints.json', reload: reloadFaklumEndpoints },
   { path: 'voirdrama', file: 'voirdrama-endpoints.json', reload: reloadVoirDramaEndpoints },
+  { path: 'voiranime', file: 'voiranime-endpoints.json', reload: reloadVoirAnimeEndpoints },
 ];
 for (const src of singleBaseSources) {
   app.post(`/api/${src.path}/endpoints`, requireAdminSession, jsonBody, (req, res) => {
@@ -1535,6 +1580,17 @@ app.get('/api/health', async (_req, res) => {
     results.moviebox = { status: ok ? 'up' : 'degraded', latency: Date.now() - mbStart };
   } catch (e: any) {
     results.moviebox = { status: 'down', error: e.message };
+  }
+
+  // VoirAnime : le site répond et sert des fiches /anime/.
+  const vaStart = Date.now();
+  try {
+    const base = getVoirAnimeEndpoints().base;
+    const resp = await probeGet(`${base}/`, { timeout: 10000, validateStatus: (s: number) => s < 500 });
+    const ok = resp.status === 200 && /\/anime\//.test(String(resp.data || ''));
+    results.voiranime = { status: ok ? 'up' : 'degraded', latency: Date.now() - vaStart };
+  } catch (e: any) {
+    results.voiranime = { status: 'down', error: e.message };
   }
 
   const allUp = Object.values(results).every(r => r.status === 'up');

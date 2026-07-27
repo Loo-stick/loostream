@@ -116,6 +116,7 @@ const PROVIDER_LABELS: Record<string, string> = {
   wiflix: 'Wiflix',
   voirdrama: 'VoirDrama',
   moviebox: 'MovieBox',
+  voiranime: 'VoirAnime',
 };
 
 export function providerLabel(source: string): string {
