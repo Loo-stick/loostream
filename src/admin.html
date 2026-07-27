@@ -102,7 +102,7 @@
         .kv .k { color: #a0a0b0; }
         .kv .v { font-weight: 600; color: #fff; }
 
-        .health-box { margin-top: 20px; }
+        .health-box, .sources-box, .whitelist-box { margin-top: 20px; }
         .health-source {
             padding: 10px 14px;
             background: rgba(255, 255, 255, 0.04);
@@ -162,12 +162,12 @@
         <div id="health"><div class="loader">Clique "Health check" pour lancer une sonde</div></div>
     </div>
 
-    <div class="card">
+    <div class="card sources-box">
         <h2>URLs des sources <span style="font-size:0.7em;color:#a0a0b0;font-weight:normal;">— édition à chaud, sans rebuild</span></h2>
         <div id="endpoints"><div class="loader">Chargement...</div></div>
     </div>
 
-    <div class="card">
+    <div class="card whitelist-box">
         <h2>Whitelist des domaines</h2>
         <div id="whitelist"><div class="loader">Chargement...</div></div>
     </div>
