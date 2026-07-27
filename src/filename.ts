@@ -111,13 +111,13 @@ const PROVIDER_LABELS: Record<string, string> = {
   movix: 'Movix',
   netmirror: 'NetMirror',
   streamflix: 'StreamFlix',
-  faklum: 'Faklum',
   frenchstream: 'FrenchStream',
   wiflix: 'Wiflix',
   voirdrama: 'VoirDrama',
   moviebox: 'MovieBox',
   voiranime: 'VoirAnime',
   nabistream: 'Nabistream',
+  coflix: 'Coflix',
 };
 
 export function providerLabel(source: string): string {

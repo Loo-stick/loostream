@@ -8,9 +8,9 @@ import { getVoirDramaStreams, reloadVoirDramaEndpoints, getVoirDramaEndpoints } 
 import { getMovieboxStreams, movieboxProbe, resolveMovieboxUrl, resolveMovieboxSubtitle } from './scrapers/moviebox';
 import { getVoirAnimeStreams, getVoirAnimeEndpoints, reloadVoirAnimeEndpoints } from './scrapers/voiranime';
 import { getNabistreamStreams, getNabistreamEndpoints, reloadNabistreamEndpoints } from './scrapers/nabistream';
+import { getCoflixStreams, getCoflixEndpoints, reloadCoflixEndpoints } from './scrapers/coflix';
 import { getStreamFlixStreams, reloadStreamflixEndpoints, getStreamflixEndpoints } from './scrapers/streamflix';
 import { getMovixStreams, reloadMovixEndpoints, getMovixEndpoints } from './scrapers/movix';
-import { getFaklumStreams, reloadFaklumEndpoints, getFaklumEndpoints } from './scrapers/faklum';
 import { getFrenchStreamStreams, reloadFrenchStreamEndpoints, getFrenchStreamEndpoints } from './scrapers/frenchstream';
 import { cached, getCacheStats } from './cache';
 import { recordOutcome, getAllMetrics } from './metrics';
@@ -40,25 +40,25 @@ interface Stats {
     movix: { requests: number; success: number; errors: number; lastSuccess: number | null };
     netmirror: { requests: number; success: number; errors: number; lastSuccess: number | null };
     streamflix: { requests: number; success: number; errors: number; lastSuccess: number | null };
-    faklum: { requests: number; success: number; errors: number; lastSuccess: number | null };
     frenchstream: { requests: number; success: number; errors: number; lastSuccess: number | null };
     wiflix: { requests: number; success: number; errors: number; lastSuccess: number | null };
     voirdrama: { requests: number; success: number; errors: number; lastSuccess: number | null };
     moviebox: { requests: number; success: number; errors: number; lastSuccess: number | null };
     voiranime: { requests: number; success: number; errors: number; lastSuccess: number | null };
     nabistream: { requests: number; success: number; errors: number; lastSuccess: number | null };
+    coflix: { requests: number; success: number; errors: number; lastSuccess: number | null };
   };
   streamsServed: {
     movix: number;
     netmirror: number;
     streamflix: number;
-    faklum: number;
     frenchstream: number;
     wiflix: number;
     voirdrama: number;
     moviebox: number;
     voiranime: number;
     nabistream: number;
+    coflix: number;
   };
 }
 
@@ -69,18 +69,18 @@ const stats: Stats = {
     movix: { requests: 0, success: 0, errors: 0, lastSuccess: null },
     netmirror: { requests: 0, success: 0, errors: 0, lastSuccess: null },
     streamflix: { requests: 0, success: 0, errors: 0, lastSuccess: null },
-    faklum: { requests: 0, success: 0, errors: 0, lastSuccess: null },
     frenchstream: { requests: 0, success: 0, errors: 0, lastSuccess: null },
     wiflix: { requests: 0, success: 0, errors: 0, lastSuccess: null },
     voirdrama: { requests: 0, success: 0, errors: 0, lastSuccess: null },
     moviebox: { requests: 0, success: 0, errors: 0, lastSuccess: null },
     voiranime: { requests: 0, success: 0, errors: 0, lastSuccess: null },
     nabistream: { requests: 0, success: 0, errors: 0, lastSuccess: null },
+    coflix: { requests: 0, success: 0, errors: 0, lastSuccess: null },
   },
-  streamsServed: { movix: 0, netmirror: 0, streamflix: 0, faklum: 0, frenchstream: 0, wiflix: 0, voirdrama: 0, moviebox: 0, voiranime: 0, nabistream: 0 },
+  streamsServed: { movix: 0, netmirror: 0, streamflix: 0, frenchstream: 0, wiflix: 0, voirdrama: 0, moviebox: 0, voiranime: 0, nabistream: 0, coflix: 0 },
 };
 
-function trackSourceResult(source: 'movix' | 'netmirror' | 'streamflix' | 'faklum' | 'frenchstream' | 'wiflix' | 'voirdrama' | 'moviebox' | 'voiranime' | 'nabistream', success: boolean, streamCount: number = 0) {
+function trackSourceResult(source: 'movix' | 'netmirror' | 'streamflix' | 'frenchstream' | 'wiflix' | 'voirdrama' | 'moviebox' | 'voiranime' | 'nabistream' | 'coflix', success: boolean, streamCount: number = 0) {
   stats.sources[source].requests++;
   if (success) {
     stats.sources[source].success++;
@@ -597,7 +597,7 @@ const DEFAULT_TMDB_KEY = process.env.TMDB_API_KEY || '';
 
 const TMDB_TTL_MS = 12 * 60 * 60 * 1000;
 
-async function getTmdbInfo(type: string, id: string, config?: UserConfig | null): Promise<{ title: string; originalTitle: string; year: string; tmdbId: string; imdbId: string; originalLanguage: string } | null> {
+async function getTmdbInfo(type: string, id: string, config?: UserConfig | null): Promise<{ title: string; originalTitle: string; frenchTitle: string; year: string; tmdbId: string; imdbId: string; originalLanguage: string } | null> {
   const tmdbKey = config?.tmdbKey || DEFAULT_TMDB_KEY;
 
   if (!tmdbKey) {
@@ -642,7 +642,15 @@ async function getTmdbInfo(type: string, id: string, config?: UserConfig | null)
 
         const originalLanguage = String(resp.data.original_language || '').toLowerCase();
 
-        return { title, originalTitle, year, tmdbId, imdbId, originalLanguage };
+        // Titre FR : les sites FR (Coflix…) indexent par le titre français, pas
+        // l'anglais/original. Appel fr-FR séparé (mis en cache avec le reste).
+        let frenchTitle = '';
+        try {
+          const frResp = await axios.get(`https://api.themoviedb.org/3/${endpoint}/${tmdbId}?api_key=${tmdbKey}&language=fr-FR`);
+          frenchTitle = frResp.data.title || frResp.data.name || '';
+        } catch { /* frenchTitle optionnel */ }
+
+        return { title, originalTitle, frenchTitle, year, tmdbId, imdbId, originalLanguage };
       } catch (e) {
         console.error('[TMDB] Error:', e);
         return null;
@@ -713,9 +721,6 @@ async function handleStream(req: express.Request, res: express.Response, type: s
       getMovixStreams(info.tmdbId, type as 'movie' | 'series', parsed.season, parsed.episode, extractorConfig)
         .then(r => { trackSourceResult('movix', true, r.length); recordOutcome('movix', r.length > 0 ? 'success' : 'empty'); return r; })
         .catch(e => { console.log('[Movix] Error:', e); trackSourceResult('movix', false); recordOutcome('movix', 'error', e?.message); return []; }),
-      getFaklumStreams(info.tmdbId, type as 'movie' | 'series', extractorConfig, config?.tmdbKey || DEFAULT_TMDB_KEY)
-        .then(r => { trackSourceResult('faklum', true, r.length); recordOutcome('faklum', r.length > 0 ? 'success' : 'empty'); return r; })
-        .catch(e => { console.log('[Faklum] Error:', e); trackSourceResult('faklum', false); recordOutcome('faklum', 'error', e?.message); return []; }),
       getFrenchStreamStreams(info.tmdbId, type as 'movie' | 'series', extractorConfig, config?.tmdbKey || DEFAULT_TMDB_KEY, parsed.season, parsed.episode)
         .then(r => { trackSourceResult('frenchstream', true, r.length); recordOutcome('frenchstream', r.length > 0 ? 'success' : 'empty'); return r; })
         .catch(e => { console.log('[FrenchStream] Error:', e); trackSourceResult('frenchstream', false); recordOutcome('frenchstream', 'error', e?.message); return []; }),
@@ -740,9 +745,14 @@ async function handleStream(req: express.Request, res: express.Response, type: s
       getNabistreamStreams(info.tmdbId, type as 'movie' | 'series', parsed.season, parsed.episode)
         .then(r => { trackSourceResult('nabistream', true, r.length); recordOutcome('nabistream', r.length > 0 ? 'success' : 'empty'); return r; })
         .catch(e => { console.log('[Nabistream] Error:', e); trackSourceResult('nabistream', false); recordOutcome('nabistream', 'error', e?.message); return []; }),
+      // Coflix : films/séries FR généralistes, VF ET VOSTFR (scraping titre-keyé).
+      // Site FR -> chercher d'abord le titre FRANÇAIS, puis l'anglais en repli.
+      getCoflixStreams(type as 'movie' | 'series', extractorConfig, parsed.season, parsed.episode, info.frenchTitle || info.title, info.title)
+        .then(r => { trackSourceResult('coflix', true, r.length); recordOutcome('coflix', r.length > 0 ? 'success' : 'empty'); return r; })
+        .catch(e => { console.log('[Coflix] Error:', e); trackSourceResult('coflix', false); recordOutcome('coflix', 'error', e?.message); return []; }),
     ];
 
-    const SOURCE_NAMES = ['netmirror', 'streamflix', 'movix', 'faklum', 'frenchstream', 'wiflix', 'voirdrama', 'moviebox', 'voiranime', 'nabistream'];
+    const SOURCE_NAMES = ['netmirror', 'streamflix', 'movix', 'frenchstream', 'wiflix', 'voirdrama', 'moviebox', 'voiranime', 'nabistream', 'coflix'];
     const collected = await collectSources(
       sourcePromises.map((promise, i) => ({
         name: SOURCE_NAMES[i],
@@ -758,13 +768,13 @@ async function handleStream(req: express.Request, res: express.Response, type: s
     const netmirrorResults = collected[0] as Awaited<ReturnType<typeof getNetmirrorStreams>>;
     const streamflixResults = collected[1] as Awaited<ReturnType<typeof getStreamFlixStreams>>;
     const movixResults = collected[2] as Awaited<ReturnType<typeof getMovixStreams>>;
-    const faklumResults = collected[3] as Awaited<ReturnType<typeof getFaklumStreams>>;
-    const frenchstreamResults = collected[4] as Awaited<ReturnType<typeof getFrenchStreamStreams>>;
-    const wiflixResults = collected[5] as Awaited<ReturnType<typeof getWiflixStreams>>;
-    const voirdramaResults = collected[6] as Awaited<ReturnType<typeof getVoirDramaStreams>>;
-    const movieboxResults = collected[7] as Awaited<ReturnType<typeof getMovieboxStreams>>;
-    const voiranimeResults = collected[8] as Awaited<ReturnType<typeof getVoirAnimeStreams>>;
-    const nabistreamResults = collected[9] as Awaited<ReturnType<typeof getNabistreamStreams>>;
+    const frenchstreamResults = collected[3] as Awaited<ReturnType<typeof getFrenchStreamStreams>>;
+    const wiflixResults = collected[4] as Awaited<ReturnType<typeof getWiflixStreams>>;
+    const voirdramaResults = collected[5] as Awaited<ReturnType<typeof getVoirDramaStreams>>;
+    const movieboxResults = collected[6] as Awaited<ReturnType<typeof getMovieboxStreams>>;
+    const voiranimeResults = collected[7] as Awaited<ReturnType<typeof getVoirAnimeStreams>>;
+    const nabistreamResults = collected[8] as Awaited<ReturnType<typeof getNabistreamStreams>>;
+    const coflixResults = collected[9] as Awaited<ReturnType<typeof getCoflixStreams>>;
 
     // On accumule des "drafts" (streams sans name/title). name/title sont posés
     // en UNE passe centralisée plus bas (src/display.ts), pour un rendu uniforme.
@@ -974,6 +984,30 @@ async function handleStream(req: express.Request, res: express.Response, type: s
       });
     }
 
+    // Process Coflix results (films/séries FR VF+VOSTFR, HLS extrait des hôtes).
+    for (const cf of coflixResults) {
+      const proxiedUrl = buildProxyUrl(cf.url, {
+        ...(cf.headers || {}),
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+      }, false, req, config, false, true);
+
+      if (!proxiedUrl) continue; // Skip blocked URLs
+
+      drafts.push({
+        url: proxiedUrl,
+        behaviorHints: {
+          notWebReady: false,
+          bingeGroup: `coflix-${cf.server}`,
+        },
+        _meta: {
+          quality: cf.quality,
+          language: cf.language,
+          source: 'coflix',
+          server: cf.server,
+        },
+      });
+    }
+
     // Process MovieBox results (aoneroom mobile API — direct signed MP4s). The
     // signed URL is time-limited, so instead of embedding it we point at our own
     // /moviebox/stream endpoint which resolves a fresh URL and 302-redirects at
@@ -1009,39 +1043,6 @@ async function handleStream(req: express.Request, res: express.Response, type: s
       }
     }
 
-
-    // Process Faklum results
-    for (const fk of faklumResults) {
-      let finalUrl: string;
-
-      const mfUrl = config?.mfUrl || DEFAULT_MEDIAFLOW_URL;
-      const isMediaFlowUrl = mfUrl && fk.url.includes(new URL(mfUrl).hostname);
-
-      if (isMediaFlowUrl) {
-        finalUrl = fk.url;
-      } else {
-        const proxyHeaders: Record<string, string> = {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-          ...fk.headers,
-        };
-        const proxiedUrl = buildProxyUrl(fk.url, proxyHeaders, false, req, config);
-        if (!proxiedUrl) continue;
-        finalUrl = proxiedUrl;
-      }
-
-      drafts.push({
-        url: finalUrl,
-        behaviorHints: {
-          notWebReady: false,
-          bingeGroup: 'faklum',
-        },
-        _meta: {
-          quality: fk.quality,
-          language: fk.language,
-          source: 'faklum',
-        },
-      });
-    }
 
     // Process FrenchStream results
     for (const fr of frenchstreamResults) {
@@ -1357,15 +1358,11 @@ app.get('/api/extractor-domains', (req, res) => {
   res.json({ ...current, reloaded: reload });
 });
 
-// StreamFlix / Faklum / VoirDrama base URLs (read + reload). Files are
+// StreamFlix / VoirDrama base URLs (read + reload). Files are
 // hot-reloaded on edit; this endpoint forces a reload on demand.
 app.get('/api/streamflix/endpoints', (req, res) => {
   const reload = req.query.reload === 'true';
   res.json({ ...(reload ? reloadStreamflixEndpoints() : getStreamflixEndpoints()), reloaded: reload });
-});
-app.get('/api/faklum/endpoints', (req, res) => {
-  const reload = req.query.reload === 'true';
-  res.json({ ...(reload ? reloadFaklumEndpoints() : getFaklumEndpoints()), reloaded: reload });
 });
 app.get('/api/voirdrama/endpoints', (req, res) => {
   const reload = req.query.reload === 'true';
@@ -1378,6 +1375,10 @@ app.get('/api/voiranime/endpoints', (req, res) => {
 app.get('/api/nabistream/endpoints', (req, res) => {
   const reload = req.query.reload === 'true';
   res.json({ ...(reload ? reloadNabistreamEndpoints() : getNabistreamEndpoints()), reloaded: reload });
+});
+app.get('/api/coflix/endpoints', (req, res) => {
+  const reload = req.query.reload === 'true';
+  res.json({ ...(reload ? reloadCoflixEndpoints() : getCoflixEndpoints()), reloaded: reload });
 });
 
 // ── Écriture des endpoints depuis l'admin (authentifié) ────────────────────
@@ -1419,10 +1420,10 @@ app.post('/api/movix/endpoints', requireAdminSession, jsonBody, (req, res) => {
 const singleBaseSources: Array<{ path: string; file: string; reload: () => unknown }> = [
   { path: 'frenchstream', file: 'frenchstream-endpoints.json', reload: reloadFrenchStreamEndpoints },
   { path: 'streamflix', file: 'streamflix-endpoints.json', reload: reloadStreamflixEndpoints },
-  { path: 'faklum', file: 'faklum-endpoints.json', reload: reloadFaklumEndpoints },
   { path: 'voirdrama', file: 'voirdrama-endpoints.json', reload: reloadVoirDramaEndpoints },
   { path: 'voiranime', file: 'voiranime-endpoints.json', reload: reloadVoirAnimeEndpoints },
   { path: 'nabistream', file: 'nabistream-endpoints.json', reload: reloadNabistreamEndpoints },
+  { path: 'coflix', file: 'coflix-endpoints.json', reload: reloadCoflixEndpoints },
 ];
 for (const src of singleBaseSources) {
   app.post(`/api/${src.path}/endpoints`, requireAdminSession, jsonBody, (req, res) => {
@@ -1641,21 +1642,6 @@ app.get('/api/health', async (_req, res) => {
     results.streamflix = { status: 'down', error: e.message };
   }
 
-  // Test Faklum (homepage returns token link)
-  const faklumStart = Date.now();
-  try {
-    const resp = await probeGet('https://faklum.com/', {
-      timeout: 10000,
-      validateStatus: (s: number) => s < 500,
-    });
-    const hasToken = /<a\s+id=["']faklumc["']\s+href=["'][a-z0-9]+["']/i.test(resp.data);
-    results.faklum = {
-      status: hasToken ? 'up' : 'degraded',
-      latency: Date.now() - faklumStart,
-    };
-  } catch (e: any) {
-    results.faklum = { status: 'down', error: e.message };
-  }
 
   // FrenchStream, Wiflix and VoirDrama are all served by the Movix API — probe
   // each endpoint against the hot-reloaded Movix base. 200 = the endpoint is
@@ -1708,6 +1694,19 @@ app.get('/api/health', async (_req, res) => {
     results.nabistream = { status: ok ? 'up' : 'degraded', latency: Date.now() - nbStart };
   } catch (e: any) {
     results.nabistream = { status: 'down', error: e.message };
+  }
+
+  // Coflix : l'ajax suggest répond avec du JSON {html}.
+  const cofStart = Date.now();
+  try {
+    const base = getCoflixEndpoints().base;
+    const resp = await probeGet(`${base}/ajax/search/suggest?keyword=film`, {
+      timeout: 10000, headers: { 'X-Requested-With': 'XMLHttpRequest' }, validateStatus: (s: number) => s < 500,
+    });
+    const ok = resp.status === 200 && typeof (resp.data as any)?.html === 'string';
+    results.coflix = { status: ok ? 'up' : 'degraded', latency: Date.now() - cofStart };
+  } catch (e: any) {
+    results.coflix = { status: 'down', error: e.message };
   }
 
   const allUp = Object.values(results).every(r => r.status === 'up');

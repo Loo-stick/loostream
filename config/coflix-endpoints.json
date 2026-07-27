@@ -1,0 +1,4 @@
+{
+  "_comment": "Base Coflix (scraping FR VF+VOSTFR). Domaine tournant : fallbacks coflix.wiki/.cloud/.domains intégrés au scraper. Éditez si tout tombe ; hot-reloadé.",
+  "base": "https://coflix.wiki"
+}
