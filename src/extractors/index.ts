@@ -1,7 +1,13 @@
 import axios from 'axios';
+import * as https from 'https';
 import { unpackFromHtml, findStreamUrl } from './unpack';
 import * as fs from 'fs';
 import * as path from 'path';
+
+// Certains hôtes FR (uqload.bz, mirrors) tournent avec un certificat TLS expiré.
+// Agent permissif réservé à ces extracteurs — on ne relaie que du média public,
+// pas de secret, donc tolérer un cert périmé est acceptable ici.
+const INSECURE_AGENT = new https.Agent({ rejectUnauthorized: false });
 
 const HEADERS = {
   'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
@@ -21,12 +27,12 @@ export interface ExtractorConfig {
   mediaFlowPassword?: string;
 }
 
-export type ExtractorId ='voe' | 'uqload' | 'doodstream' | 'filemoon' | 'vidoza' | 'vidmoly' | 'streamtape' | 'mixdrop' | 'sharecloudy' | 'lulustream' | 'filelions' | 'streamwish' | 'fsvid' | 'vidzy' | 'mailru';
+export type ExtractorId ='voe' | 'uqload' | 'doodstream' | 'filemoon' | 'vidoza' | 'vidmoly' | 'streamtape' | 'mixdrop' | 'sharecloudy' | 'lulustream' | 'filelions' | 'streamwish' | 'fsvid' | 'vidzy' | 'mailru' | 'sibnet';
 
 export const EXTRACTOR_IDS: ExtractorId[] = [
   'voe', 'uqload', 'doodstream', 'filemoon', 'vidoza', 'vidmoly',
   'streamtape', 'mixdrop', 'sharecloudy', 'lulustream', 'filelions',
-  'streamwish', 'fsvid', 'vidzy', 'mailru',
+  'streamwish', 'fsvid', 'vidzy', 'mailru', 'sibnet',
 ];
 
 export const DEFAULT_EXTRACTOR_DOMAINS: Record<ExtractorId, string[]> = {
@@ -42,6 +48,7 @@ export const DEFAULT_EXTRACTOR_DOMAINS: Record<ExtractorId, string[]> = {
   filemoon: ['filemoon', 'filmoon', 'moonlink', 'bysebuho', 'moonplayer'],
   vidoza: ['vidoza'],
   mailru: ['my.mail.ru', 'mail.ru', 'ok.ru', 'odnoklassniki'],
+  sibnet: ['sibnet.ru', 'video.sibnet'],
   vidmoly: ['vidmoly', 'molystream', 'vidhide'],
   streamtape: ['streamtape', 'strcloud', 'shavetape', 'tapewithadblock'],
   mixdrop: ['mixdrop', 'mdrop', 'mdy48tn97'],
@@ -201,7 +208,7 @@ export async function extractUqload(embedUrl: string): Promise<ExtractedStream |
     // Normalize URL (remove embed- prefix if present)
     const normalizedUrl = embedUrl.replace('/embed-', '/');
 
-    const { data: html } = await axios.get(normalizedUrl, { headers: HEADERS, timeout: 10000 });
+    const { data: html } = await axios.get(normalizedUrl, { headers: HEADERS, timeout: 10000, httpsAgent: INSECURE_AGENT });
 
     if (html.includes('File Not Found')) {
       console.log('[Extractor] Uqload: File not found');
@@ -420,8 +427,38 @@ async function extractLocally(embedUrl: string, extractor: string): Promise<Extr
       return await extractPackedJs(embedUrl);
     case 'mailru':
       return await extractMailru(embedUrl);
+    case 'sibnet':
+      return await extractSibnet(embedUrl);
     default:
       return null;
+  }
+}
+
+/**
+ * Sibnet (video.sibnet.ru/shell.php?videoid=X) — host russe simple, non obfusqué.
+ * La page expose directement le MP4 : `player.src([{src: "/v/{hash}/{id}.mp4" …`.
+ * Le CDN exige un Referer (403 sinon) → on renvoie l'embed en Referer.
+ */
+async function extractSibnet(embedUrl: string): Promise<ExtractedStream | null> {
+  try {
+    const { data: page } = await axios.get<string>(embedUrl, {
+      headers: { ...HEADERS, Referer: 'https://video.sibnet.ru/' },
+      timeout: 15000,
+      responseType: 'text',
+      transformResponse: v => v,
+    });
+    const m = page.match(/player\.src\(\s*\[\s*\{\s*src:\s*["']([^"']+\.mp4[^"']*)["']/i)
+      || page.match(/["'](\/v\/[a-z0-9]+\/\d+\.mp4[^"']*)["']/i);
+    if (!m) {
+      console.log('[Extractor] Sibnet: no mp4 in page');
+      return null;
+    }
+    const rel = m[1];
+    const url = rel.startsWith('http') ? rel : `https://video.sibnet.ru${rel.startsWith('/') ? '' : '/'}${rel}`;
+    return { url, quality: 'HD', format: 'mp4', headers: { Referer: embedUrl } };
+  } catch (e: any) {
+    console.log(`[Extractor] Sibnet error: ${(e.message || '').slice(0, 80)}`);
+    return null;
   }
 }
 
@@ -499,7 +536,7 @@ export async function extractStream(
   // fsvid/vidzy : extracteurs locaux uniquement (MediaFlow ne les connaît pas) —
   // inutile de payer un aller-retour qui échouera.
   // MediaFlow renvoie 502 sur ces hôtes ; notre extraction locale est fiable.
-  const LOCAL_ONLY: string[] = ['fsvid', 'vidzy', 'mailru'];
+  const LOCAL_ONLY: string[] = ['fsvid', 'vidzy', 'mailru', 'sibnet'];
 
   // Try MediaFlow first if configured
   if (config?.useMediaFlow && config.mediaFlowUrl && !LOCAL_ONLY.includes(extractor)) {
