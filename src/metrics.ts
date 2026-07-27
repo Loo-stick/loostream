@@ -1,7 +1,7 @@
 const WINDOW_SIZE = 20;
 const CONSECUTIVE_ERRORS_DOWN = 5;
 
-export type Scraper = 'netmirror' | 'streamflix' | 'movix' | 'faklum' | 'frenchstream' | 'wiflix' | 'voirdrama' | 'moviebox' | 'voiranime';
+export type Scraper = 'netmirror' | 'streamflix' | 'movix' | 'faklum' | 'frenchstream' | 'wiflix' | 'voirdrama' | 'moviebox' | 'voiranime' | 'nabistream';
 export type Outcome = 'success' | 'empty' | 'error';
 
 interface Entry {
@@ -20,6 +20,7 @@ const buffers: Record<Scraper, Entry[]> = {
   voirdrama: [],
   moviebox: [],
   voiranime: [],
+  nabistream: [],
 };
 
 export function recordOutcome(scraper: Scraper, outcome: Outcome, error?: string): void {
@@ -122,5 +123,6 @@ export function getAllMetrics(): Record<Scraper, ScraperMetrics> {
     voirdrama: getMetrics('voirdrama'),
     moviebox: getMetrics('moviebox'),
     voiranime: getMetrics('voiranime'),
+    nabistream: getMetrics('nabistream'),
   };
 }

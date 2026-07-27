@@ -7,6 +7,7 @@ import { getWiflixStreams } from './scrapers/wiflix';
 import { getVoirDramaStreams, reloadVoirDramaEndpoints, getVoirDramaEndpoints } from './scrapers/voirdrama';
 import { getMovieboxStreams, movieboxProbe, resolveMovieboxUrl, resolveMovieboxSubtitle } from './scrapers/moviebox';
 import { getVoirAnimeStreams, getVoirAnimeEndpoints, reloadVoirAnimeEndpoints } from './scrapers/voiranime';
+import { getNabistreamStreams, getNabistreamEndpoints, reloadNabistreamEndpoints } from './scrapers/nabistream';
 import { getStreamFlixStreams, reloadStreamflixEndpoints, getStreamflixEndpoints } from './scrapers/streamflix';
 import { getMovixStreams, reloadMovixEndpoints, getMovixEndpoints } from './scrapers/movix';
 import { getFaklumStreams, reloadFaklumEndpoints, getFaklumEndpoints } from './scrapers/faklum';
@@ -45,6 +46,7 @@ interface Stats {
     voirdrama: { requests: number; success: number; errors: number; lastSuccess: number | null };
     moviebox: { requests: number; success: number; errors: number; lastSuccess: number | null };
     voiranime: { requests: number; success: number; errors: number; lastSuccess: number | null };
+    nabistream: { requests: number; success: number; errors: number; lastSuccess: number | null };
   };
   streamsServed: {
     movix: number;
@@ -56,6 +58,7 @@ interface Stats {
     voirdrama: number;
     moviebox: number;
     voiranime: number;
+    nabistream: number;
   };
 }
 
@@ -72,11 +75,12 @@ const stats: Stats = {
     voirdrama: { requests: 0, success: 0, errors: 0, lastSuccess: null },
     moviebox: { requests: 0, success: 0, errors: 0, lastSuccess: null },
     voiranime: { requests: 0, success: 0, errors: 0, lastSuccess: null },
+    nabistream: { requests: 0, success: 0, errors: 0, lastSuccess: null },
   },
-  streamsServed: { movix: 0, netmirror: 0, streamflix: 0, faklum: 0, frenchstream: 0, wiflix: 0, voirdrama: 0, moviebox: 0, voiranime: 0 },
+  streamsServed: { movix: 0, netmirror: 0, streamflix: 0, faklum: 0, frenchstream: 0, wiflix: 0, voirdrama: 0, moviebox: 0, voiranime: 0, nabistream: 0 },
 };
 
-function trackSourceResult(source: 'movix' | 'netmirror' | 'streamflix' | 'faklum' | 'frenchstream' | 'wiflix' | 'voirdrama' | 'moviebox' | 'voiranime', success: boolean, streamCount: number = 0) {
+function trackSourceResult(source: 'movix' | 'netmirror' | 'streamflix' | 'faklum' | 'frenchstream' | 'wiflix' | 'voirdrama' | 'moviebox' | 'voiranime' | 'nabistream', success: boolean, streamCount: number = 0) {
   stats.sources[source].requests++;
   if (success) {
     stats.sources[source].success++;
@@ -553,7 +557,7 @@ function getManifest(req: express.Request) {
     name: 'LooStream',
     logo: `${baseUrl}/logo.png`,
     description: 'Netflix, Prime, Disney+ mirrors + StreamFlix + Movix VF/VOSTFR',
-    resources: ['stream'],
+    resources: ['stream', 'subtitles'],
     types: ['movie', 'series'],
     catalogs: [],
     idPrefixes: ['tt', 'tmdb:'],
@@ -731,9 +735,14 @@ async function handleStream(req: express.Request, res: express.Response, type: s
         : Promise.resolve([]))
         .then(r => { if (info.originalLanguage === 'ja') { trackSourceResult('voiranime', true, r.length); recordOutcome('voiranime', r.length > 0 ? 'success' : 'empty'); } return r; })
         .catch(e => { console.log('[VoirAnime] Error:', e); trackSourceResult('voiranime', false); recordOutcome('voiranime', 'error', e?.message); return []; }),
+      // Nabistream : dramas coréens/asiatiques VOSTFR (API keyée TMDB). Non gaté —
+      // une seule requête API, renvoie [] hors catalogue.
+      getNabistreamStreams(info.tmdbId, type as 'movie' | 'series', parsed.season, parsed.episode)
+        .then(r => { trackSourceResult('nabistream', true, r.length); recordOutcome('nabistream', r.length > 0 ? 'success' : 'empty'); return r; })
+        .catch(e => { console.log('[Nabistream] Error:', e); trackSourceResult('nabistream', false); recordOutcome('nabistream', 'error', e?.message); return []; }),
     ];
 
-    const SOURCE_NAMES = ['netmirror', 'streamflix', 'movix', 'faklum', 'frenchstream', 'wiflix', 'voirdrama', 'moviebox', 'voiranime'];
+    const SOURCE_NAMES = ['netmirror', 'streamflix', 'movix', 'faklum', 'frenchstream', 'wiflix', 'voirdrama', 'moviebox', 'voiranime', 'nabistream'];
     const collected = await collectSources(
       sourcePromises.map((promise, i) => ({
         name: SOURCE_NAMES[i],
@@ -755,6 +764,7 @@ async function handleStream(req: express.Request, res: express.Response, type: s
     const voirdramaResults = collected[6] as Awaited<ReturnType<typeof getVoirDramaStreams>>;
     const movieboxResults = collected[7] as Awaited<ReturnType<typeof getMovieboxStreams>>;
     const voiranimeResults = collected[8] as Awaited<ReturnType<typeof getVoirAnimeStreams>>;
+    const nabistreamResults = collected[9] as Awaited<ReturnType<typeof getNabistreamStreams>>;
 
     // On accumule des "drafts" (streams sans name/title). name/title sont posés
     // en UNE passe centralisée plus bas (src/display.ts), pour un rendu uniforme.
@@ -938,6 +948,32 @@ async function handleStream(req: express.Request, res: express.Response, type: s
       });
     }
 
+    // Process Nabistream results (dramas asiatiques VOSTFR — HLS master direct).
+    // Les sous-titres NE sont PAS attachés au stream : ils sont servis via la
+    // ressource /subtitles (handleSubtitles), seul mécanisme que Nuvio consomme.
+    // Un double-listage (stream + ressource) faisait empiler les pistes.
+    for (const nb of nabistreamResults) {
+      const proxiedUrl = buildProxyUrl(nb.url, {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+      }, false, req, config, false, true);
+
+      if (!proxiedUrl) continue; // Skip blocked URLs
+
+      drafts.push({
+        url: proxiedUrl,
+        behaviorHints: {
+          notWebReady: false,
+          bingeGroup: 'nabistream',
+        },
+        _meta: {
+          quality: nb.quality,
+          language: nb.language,
+          source: 'nabistream',
+          subCount: nb.subtitles.length,
+        },
+      });
+    }
+
     // Process MovieBox results (aoneroom mobile API — direct signed MP4s). The
     // signed URL is time-limited, so instead of embedding it we point at our own
     // /moviebox/stream endpoint which resolves a fresh URL and 302-redirects at
@@ -959,18 +995,8 @@ async function handleStream(req: express.Request, res: express.Response, type: s
             bingeGroup: `moviebox-${mb.quality}`,
             ...(mb.sizeBytes ? { videoSize: mb.sizeBytes } : {}),
           },
-          // Subs resolved FRESH at load time, matched to this exact encode (same
-          // resourceId) so they stay in sync with the video.
-          subtitles: (mb.subLangs || []).map((lang, i) => {
-            const label = lang === 'fre' ? 'Français' : lang === 'eng' ? 'English' : lang;
-            const s = new URL(`/moviebox/subtitle/${encodeURIComponent(label)}.vtt`, baseUrl);
-            s.searchParams.set('sid', mb.subjectId);
-            s.searchParams.set('se', String(mb.se));
-            s.searchParams.set('ep', String(mb.ep));
-            s.searchParams.set('rid', mb.resourceId);
-            s.searchParams.set('lang', lang);
-            return { id: `moviebox-${i}-${lang}`, url: s.toString(), lang };
-          }),
+          // Sous-titres servis via la ressource /subtitles (handleSubtitles), pas
+          // au niveau du stream — évite le double-listage dans Nuvio.
           _meta: {
             quality: mb.quality,
             language: mb.language,
@@ -1122,6 +1148,78 @@ app.get('/:config/stream/:type/:id.json', async (req, res) => {
     return res.status(400).json({ error: 'Invalid configuration' });
   }
   await handleStream(req, res, type, id, userConfig);
+});
+
+// Subtitles resource — mécanisme canonique Stremio/Nuvio (les subs de niveau-stream
+// ne s'affichent pas dans tous les clients). Résout l'id TMDB puis renvoie les
+// sous-titres des sources qui en fournissent (Nabistream), servis par nos propres
+// endpoints en text/vtt.
+async function handleSubtitles(req: express.Request, res: express.Response, type: string, id: string, config: UserConfig | null) {
+  try {
+    const parsed = parseStremioId(decodeURIComponent(id));
+    const info = await getTmdbInfo(type, parsed.baseId, config);
+    if (!info) { res.json({ subtitles: [] }); return; }
+
+    const proto = req.headers['x-forwarded-proto'] || req.protocol || 'http';
+    const host = req.headers['x-forwarded-host'] || req.headers.host;
+    const baseUrl = `${proto}://${host}`;
+    const subtitles: { id: string; url: string; lang: string }[] = [];
+
+    // Nabistream : dramas asiatiques VOSTFR, sous-titres FR/EN.
+    try {
+      const nbs = await getNabistreamStreams(info.tmdbId, type as 'movie' | 'series', parsed.season, parsed.episode);
+      (nbs[0]?.subtitles || []).forEach((s, i) => {
+        const label = s.lang === 'fre' ? 'Français' : s.lang === 'eng' ? 'English' : s.lang;
+        const su = new URL(`/nabistream/subtitle/${encodeURIComponent(label)}.vtt`, baseUrl);
+        su.searchParams.set('u', s.url);
+        subtitles.push({ id: `nabistream-${i}-${s.lang}`, url: su.toString(), lang: s.lang });
+      });
+    } catch (e: any) {
+      console.log('[Subtitles] Nabistream:', (e?.message || '').slice(0, 80));
+    }
+
+    // MovieBox : films/séries, sous-titres multi-langues résolus FRAIS à la lecture
+    // (endpoint /moviebox/subtitle, SRT->VTT). Dédoublonné par langue.
+    try {
+      const mbs = await getMovieboxStreams(info.tmdbId, type as 'movie' | 'series', info.title, info.year, parsed.season, parsed.episode);
+      const seenLang = new Set<string>();
+      for (const mb of mbs) {
+        for (const lang of (mb.subLangs || [])) {
+          if (seenLang.has(lang)) continue;
+          seenLang.add(lang);
+          const label = lang === 'fre' ? 'Français' : lang === 'eng' ? 'English' : lang;
+          const s = new URL(`/moviebox/subtitle/${encodeURIComponent(label)}.vtt`, baseUrl);
+          s.searchParams.set('sid', mb.subjectId);
+          s.searchParams.set('se', String(mb.se));
+          s.searchParams.set('ep', String(mb.ep));
+          s.searchParams.set('rid', mb.resourceId);
+          s.searchParams.set('lang', lang);
+          subtitles.push({ id: `moviebox-${lang}`, url: s.toString(), lang });
+        }
+      }
+    } catch (e: any) {
+      console.log('[Subtitles] MovieBox:', (e?.message || '').slice(0, 80));
+    }
+
+    console.log(`[Subtitles] ${type}/${id} -> ${subtitles.length} piste(s)`);
+    res.json({ subtitles });
+  } catch (e) {
+    console.error('[Subtitles] Error:', e);
+    res.json({ subtitles: [] });
+  }
+}
+
+// Stremio peut appendre un segment "extra" (videoHash/videoSize) avant .json :
+//   /subtitles/{type}/{id}.json   ou   /subtitles/{type}/{id}/{extra}.json
+app.get('/subtitles/:type/:id.json', (req, res) => handleSubtitles(req, res, req.params.type, req.params.id, null));
+app.get('/subtitles/:type/:id/:extra.json', (req, res) => handleSubtitles(req, res, req.params.type, req.params.id, null));
+app.get('/:config/subtitles/:type/:id.json', (req, res) => {
+  const cfg = parseConfig(req.params.config);
+  handleSubtitles(req, res, req.params.type, req.params.id, cfg || null);
+});
+app.get('/:config/subtitles/:type/:id/:extra.json', (req, res) => {
+  const cfg = parseConfig(req.params.config);
+  handleSubtitles(req, res, req.params.type, req.params.id, cfg || null);
 });
 
 // Logo
@@ -1277,6 +1375,10 @@ app.get('/api/voiranime/endpoints', (req, res) => {
   const reload = req.query.reload === 'true';
   res.json({ ...(reload ? reloadVoirAnimeEndpoints() : getVoirAnimeEndpoints()), reloaded: reload });
 });
+app.get('/api/nabistream/endpoints', (req, res) => {
+  const reload = req.query.reload === 'true';
+  res.json({ ...(reload ? reloadNabistreamEndpoints() : getNabistreamEndpoints()), reloaded: reload });
+});
 
 // ── Écriture des endpoints depuis l'admin (authentifié) ────────────────────
 // Écrit un fichier config/<name> en préservant son _comment, puis appelle le
@@ -1320,6 +1422,7 @@ const singleBaseSources: Array<{ path: string; file: string; reload: () => unkno
   { path: 'faklum', file: 'faklum-endpoints.json', reload: reloadFaklumEndpoints },
   { path: 'voirdrama', file: 'voirdrama-endpoints.json', reload: reloadVoirDramaEndpoints },
   { path: 'voiranime', file: 'voiranime-endpoints.json', reload: reloadVoirAnimeEndpoints },
+  { path: 'nabistream', file: 'nabistream-endpoints.json', reload: reloadNabistreamEndpoints },
 ];
 for (const src of singleBaseSources) {
   app.post(`/api/${src.path}/endpoints`, requireAdminSession, jsonBody, (req, res) => {
@@ -1596,6 +1699,17 @@ app.get('/api/health', async (_req, res) => {
     results.voiranime = { status: 'down', error: e.message };
   }
 
+  // Nabistream : l'API publique répond avec du JSON (collection movies).
+  const nbStart = Date.now();
+  try {
+    const base = getNabistreamEndpoints().base;
+    const resp = await probeGet(`${base}/proxy/api/movies?limit=1`, { timeout: 10000, validateStatus: (s: number) => s < 500 });
+    const ok = resp.status === 200 && Array.isArray((resp.data as any)?.docs);
+    results.nabistream = { status: ok ? 'up' : 'degraded', latency: Date.now() - nbStart };
+  } catch (e: any) {
+    results.nabistream = { status: 'down', error: e.message };
+  }
+
   const allUp = Object.values(results).every(r => r.status === 'up');
   const allDown = Object.values(results).every(r => r.status === 'down');
 
@@ -1612,6 +1726,28 @@ app.get('/api/health', async (_req, res) => {
 // MovieBox : sous-titre matché à l'encode (même resourceId), résolu FRAIS puis
 // converti SRT->VTT. Le CDN sert du SRT en octet-stream sans extension que
 // Stremio ignore ; VTT + text/vtt marche partout. :label est cosmétique.
+// Nabistream : re-sert le .vtt (déjà en VTT chez tanastream) depuis notre origine,
+// en text/vtt — Nuvio n'affiche pas les sous-titres d'un host tiers direct.
+app.get('/nabistream/subtitle/:label', async (req, res) => {
+  const u = String(req.query.u || '');
+  try {
+    const parsed = new URL(u);
+    // Anti-SSRF : uniquement le CDN de sous-titres de Nabistream.
+    if (parsed.protocol !== 'https:' || !/(^|\.)tanastream\.space$/i.test(parsed.hostname)) {
+      res.status(404).end();
+      return;
+    }
+    const resp = await axios.get(u, { responseType: 'text', timeout: 15000, transformResponse: v => v });
+    let vtt = String(resp.data).replace(/\r+/g, '');
+    if (!/^﻿?WEBVTT/.test(vtt)) vtt = 'WEBVTT\n\n' + vtt; // filet de sécurité
+    res.setHeader('Content-Type', 'text/vtt; charset=utf-8');
+    res.setHeader('Cache-Control', 'public, max-age=3600');
+    res.send(vtt);
+  } catch {
+    res.status(502).end();
+  }
+});
+
 app.get('/moviebox/subtitle/:label', async (req, res) => {
   const sid = String(req.query.sid || '');
   const se = Number(req.query.se || 0);

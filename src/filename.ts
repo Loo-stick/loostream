@@ -117,6 +117,7 @@ const PROVIDER_LABELS: Record<string, string> = {
   voirdrama: 'VoirDrama',
   moviebox: 'MovieBox',
   voiranime: 'VoirAnime',
+  nabistream: 'Nabistream',
 };
 
 export function providerLabel(source: string): string {
