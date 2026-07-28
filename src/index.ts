@@ -624,7 +624,12 @@ async function getTmdbInfo(type: string, id: string, config?: UserConfig | null)
         }
 
         const endpoint = type === 'movie' ? 'movie' : 'tv';
-        const resp = await axios.get(`https://api.themoviedb.org/3/${endpoint}/${tmdbId}?api_key=${tmdbKey}`);
+        // Détails EN + FR en parallèle : les sites FR indexent par titre français,
+        // mais on ne veut pas payer un aller-retour TMDB séquentiel de plus.
+        const [resp, frResp] = await Promise.all([
+          axios.get(`https://api.themoviedb.org/3/${endpoint}/${tmdbId}?api_key=${tmdbKey}`),
+          axios.get(`https://api.themoviedb.org/3/${endpoint}/${tmdbId}?api_key=${tmdbKey}&language=fr-FR`).catch(() => null),
+        ]);
 
         const title = resp.data.title || resp.data.name;
         // Original (romaji) title — anime often lives under it on FR sites
@@ -642,13 +647,9 @@ async function getTmdbInfo(type: string, id: string, config?: UserConfig | null)
 
         const originalLanguage = String(resp.data.original_language || '').toLowerCase();
 
-        // Titre FR : les sites FR (Coflix…) indexent par le titre français, pas
-        // l'anglais/original. Appel fr-FR séparé (mis en cache avec le reste).
-        let frenchTitle = '';
-        try {
-          const frResp = await axios.get(`https://api.themoviedb.org/3/${endpoint}/${tmdbId}?api_key=${tmdbKey}&language=fr-FR`);
-          frenchTitle = frResp.data.title || frResp.data.name || '';
-        } catch { /* frenchTitle optionnel */ }
+        // Titre FR (récupéré en parallèle plus haut) : les sites FR indexent
+        // par le titre français, pas l'anglais/original.
+        const frenchTitle = frResp?.data?.title || frResp?.data?.name || '';
 
         return { title, originalTitle, frenchTitle, year, tmdbId, imdbId, originalLanguage };
       } catch (e) {
