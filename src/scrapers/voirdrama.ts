@@ -264,15 +264,28 @@ function serverName(url: string, fallback: string): string {
 
 interface DramaEmbed { url: string; server: string; }
 
-async function fetchEmbeds(tmdbId: string, season: number, episode: number): Promise<DramaEmbed[]> {
+// `definitive` = l'API a répondu de façon autoritaire (trouvé, ou 404 "pas un
+// drama") -> inutile de retomber sur le scraping. false = vraie panne (réseau /
+// 5xx) -> le scraping en repli a du sens.
+async function fetchEmbeds(tmdbId: string, season: number, episode: number): Promise<{ embeds: DramaEmbed[]; definitive: boolean }> {
   const { api, referer, origin } = movixApiConfig();
   const url = `${api}/api/drama/tv/${tmdbId}?season=${season}&episode=${episode}`;
   try {
-    const { data } = await axios.get(url, {
+    const { data, status } = await axios.get(url, {
       headers: { ...HEADERS, Referer: referer, Origin: origin },
       timeout: REQ_TIMEOUT_MS,
+      validateStatus: () => true,
     });
-    if (!data?.success || !Array.isArray(data.data)) return [];
+    // 404 / success:false = pas trouvé (souvent : pas un drama). Réponse claire,
+    // pas une panne : on ne scrape pas derrière.
+    if (status === 404 || data?.success === false) {
+      console.log(`[VoirDrama] Pas de drama pour TMDB ${tmdbId} (API: pas trouvé)`);
+      return { embeds: [], definitive: true };
+    }
+    if (status < 200 || status >= 300 || !data?.success || !Array.isArray(data.data)) {
+      console.log(`[VoirDrama] Réponse API inattendue (HTTP ${status})`);
+      return { embeds: [], definitive: false };
+    }
 
     const out: DramaEmbed[] = [];
     const seen = new Set<string>();
@@ -283,10 +296,10 @@ async function fetchEmbeds(tmdbId: string, season: number, episode: number): Pro
       seen.add(link);
       out.push({ url: link, server: serverName(link, String(p.name || 'voirdrama')) });
     }
-    return out;
+    return { embeds: out, definitive: true };
   } catch (e: any) {
-    console.log(`[VoirDrama] API failed: ${(e.message || '').slice(0, 90)}`);
-    return [];
+    console.log(`[VoirDrama] Erreur réseau API: ${(e.message || '').slice(0, 90)}`);
+    return { embeds: [], definitive: false };
   }
 }
 
@@ -373,7 +386,7 @@ async function fetchVoirDramaStreams(
   // mauvaise correspondance de titre. On ne scrape qu'en cas de trou (l'API rate
   // une partie du catalogue) ou pour un film, qu'elle refuse de servir.
   if (mediaType === 'series') {
-    const embeds = await fetchEmbeds(tmdbId, season!, episode!);
+    const { embeds, definitive } = await fetchEmbeds(tmdbId, season!, episode!);
     if (embeds.length > 0) {
       const streams = await extractAll(embeds, DRAMA_LANGUAGE, extractorConfig);
       if (streams.length > 0) {
@@ -381,7 +394,10 @@ async function fetchVoirDramaStreams(
         return streams;
       }
     }
-    console.log(`[VoirDrama] API vide pour TMDB ${tmdbId} S${season}E${episode}, repli sur le scraping`);
+    // 404 "pas trouvé" = définitif -> on n'appelle pas le scraping (temps perdu).
+    // Le repli scraping ne sert qu'en cas de vraie panne API.
+    if (definitive) return [];
+    console.log(`[VoirDrama] API indispo pour TMDB ${tmdbId} S${season}E${episode}, repli sur le scraping`);
   }
 
   if (!title) return [];
