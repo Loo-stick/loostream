@@ -18,6 +18,30 @@ services:
       retries: 3
       start_period: 40s
 
+  # MediaFlow (proxy d'extraction/lecture) — optionnel mais RECOMMANDÉ.
+  # Sans lui, seuls les extracteurs locaux marchent (couverture réduite).
+  # Lancer avec: docker compose --profile mediaflow up -d
+  #
+  # IMPORTANT — MediaFlow construit ses URLs de lecture depuis le host de la
+  # requête (pas de var d'URL publique). Pour que les flux SE LISENT sur le
+  # client (téléphone/PC distant), l'addon doit l'appeler par son URL PUBLIQUE :
+  #   1) reverse-proxy: mediaflow.votredomaine -> http://127.0.0.1:${MEDIAFLOW_PORT:-8888}
+  #   2) .env: MEDIAFLOW_URL=https://mediaflow.votredomaine (+ MEDIAFLOW_PASSWORD)
+  # (En test 100% local, MEDIAFLOW_URL=http://127.0.0.1:8888 suffit si le client
+  #  est sur la même machine.)
+  mediaflow:
+    image: ghcr.io/mhdzumair/mediaflow-proxy-light:latest
+    container_name: loostream-mediaflow
+    restart: unless-stopped
+    profiles:
+      - mediaflow
+    environment:
+      APP__SERVER__HOST: 0.0.0.0
+      APP__SERVER__PORT: "8888"
+      APP__AUTH__API_PASSWORD: ${MEDIAFLOW_PASSWORD}
+    ports:
+      - "${MEDIAFLOW_PORT:-8888}:8888"
+
   # Bot Telegram (optionnel)
   # Lancer avec: docker compose --profile telegram up -d
   # Ou: COMPOSE_PROFILES=telegram docker compose up -d

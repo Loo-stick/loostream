@@ -35,6 +35,9 @@ cd loostream
 cp .env.example .env
 docker compose up -d
 
+# Avec MediaFlow bundlé (recommandé — voir "Obtenir MediaFlow Proxy")
+docker compose --profile mediaflow up -d
+
 # Avec le bot Telegram (optionnel)
 docker compose --profile telegram up -d
 ```
@@ -84,8 +87,9 @@ MEDIAFLOW_PASSWORD=votre_mot_de_passe
 | `PORT` | Port du serveur | Non (défaut: 7002) |
 | `USE_LOCAL_PROXY` | `true` = proxy local, `false` = MediaFlow | Non (défaut: false) |
 | `TMDB_API_KEY` | Clé API TMDB (fallback si non configuré via /configure) | Non |
-| `MEDIAFLOW_URL` | URL MediaFlow | Si USE_LOCAL_PROXY=false |
-| `MEDIAFLOW_PASSWORD` | Mot de passe MediaFlow | Si USE_LOCAL_PROXY=false |
+| `MEDIAFLOW_URL` | URL MediaFlow (publique) | Si USE_LOCAL_PROXY=false |
+| `MEDIAFLOW_PASSWORD` | Mot de passe MediaFlow (partagé avec le conteneur bundlé) | Si USE_LOCAL_PROXY=false |
+| `MEDIAFLOW_PORT` | Port hôte du MediaFlow bundlé (profil `mediaflow`) | Non (défaut: 8888) |
 | `AUTO_WHITELIST` | `true` = whitelist auto des nouveaux domaines de sources (voir [Maintenance des sources](#maintenance-des-sources)) | Non (défaut: false) |
 | `ADMIN_USER` / `ADMIN_PASS` | Active le dashboard `/admin`. Vides = `/admin` renvoie 503 | Non |
 | `SESSION_SECRET` | Signe les sessions admin. Vide = clé aléatoire par démarrage | Non |
@@ -216,10 +220,38 @@ Ajoutez l'addon via l'URL : `http://localhost:7002/manifest.json`
 
 ## Obtenir MediaFlow Proxy
 
-MediaFlow est un proxy HLS qui permet de streamer les vidéos sans surcharger votre serveur.
+MediaFlow est un proxy HLS qui résout les hôtes (voe, doodstream…) et streame les
+vidéos sans surcharger votre serveur. **Fortement recommandé** : sans lui, seuls
+les extracteurs locaux fonctionnent (couverture réduite).
 
-1. Installez [MediaFlow Proxy](https://github.com/mhdzumair/mediaflow-proxy)
-2. Configurez l'URL et le mot de passe dans `/configure`
+### Option 1 — MediaFlow bundlé (le plus simple)
+
+Un service MediaFlow est fourni dans le `docker-compose.yml` (profil `mediaflow`) :
+
+```bash
+docker compose --profile mediaflow up -d
+# + Telegram : docker compose --profile mediaflow --profile telegram up -d
+```
+
+Ça démarre un conteneur `loostream-mediaflow` exposé sur le port `MEDIAFLOW_PORT`
+(défaut 8888). **Ensuite, deux étapes obligatoires** (MediaFlow forge ses URLs de
+lecture depuis le host de la requête : l'addon doit l'appeler par son URL publique) :
+
+1. **Reverse-proxy** : `mediaflow.votredomaine` → `http://127.0.0.1:8888`
+   (exemple Apache : `ProxyPass / http://127.0.0.1:8888/` sur un vhost HTTPS)
+2. **`.env`** :
+   ```env
+   MEDIAFLOW_URL=https://mediaflow.votredomaine
+   MEDIAFLOW_PASSWORD=un-secret-au-hasard
+   ```
+   Le même `MEDIAFLOW_PASSWORD` est injecté dans le conteneur MediaFlow.
+
+> Test 100% local (client sur la même machine) : `MEDIAFLOW_URL=http://127.0.0.1:8888` suffit.
+
+### Option 2 — Instance MediaFlow externe
+
+1. Installez [MediaFlow Proxy](https://github.com/mhdzumair/mediaflow-proxy) ailleurs
+2. Renseignez son URL publique + mot de passe dans `.env` ou `/configure`
 
 ## Sécurité
 
