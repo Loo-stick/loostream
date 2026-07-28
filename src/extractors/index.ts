@@ -370,7 +370,9 @@ async function extractViaMediaFlow(
       // MediaFlow redirige en 301/302 MAIS AUSSI en 307/308 selon l'hébergeur
       // (doodstream renvoie 307) : accepter toute la famille des redirections.
       validateStatus: (status) => [200, 301, 302, 303, 307, 308].includes(status),
-      timeout: 15000,
+      // Résolution rapide (renvoi d'un 302) : 8s max. Au-delà, MediaFlow pend/
+      // rame — l'attendre 15s poussait le fan-out vers la deadline de 20s.
+      timeout: 8000,
       headers: HEADERS,
     });
 
