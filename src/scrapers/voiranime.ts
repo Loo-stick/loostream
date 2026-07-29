@@ -1,6 +1,7 @@
 import axios from 'axios';
 import { extractStream, detectExtractor, ExtractorConfig } from '../extractors';
 import { cached } from '../cache';
+import { applyMultiAudio } from '../multiaudio';
 import { makeEndpointConfig } from '../endpoint-config';
 
 // VoirAnime — anime VOSTFR/VF (voir-anime.to). Provider Onyx VoirAnimeProvider.
@@ -233,14 +234,15 @@ export async function getVoirAnimeStreams(
 ): Promise<VoirAnimeStream[]> {
   if (!title) return [];
   if (mediaType === 'series' && !episode) return [];
+  const mode = extractorConfig.useMediaFlow ? 'mf' : 'loc';
   const key = mediaType === 'series'
-    ? `voiranime:series:${id}:${season || 1}:${episode}`
-    : `voiranime:movie:${id || normalizeTitle(title)}`;
+    ? `voiranime:${mode}:series:${id}:${season || 1}:${episode}`
+    : `voiranime:${mode}:movie:${id || normalizeTitle(title)}`;
   // Titre original (romaji) en priorité, puis affiché.
   const titles = [...new Set([originalTitle, title].filter(Boolean) as string[])];
   return cached(
     key, STREAMS_TTL_MS,
-    () => fetchVoirAnimeStreams(mediaType, titles, season, episode, extractorConfig),
+    async () => { const s = await fetchVoirAnimeStreams(mediaType, titles, season, episode, extractorConfig); return applyMultiAudio(s); },
     { scope: 'voiranime', shouldCache: r => r.length > 0, negativeTtlMs: EMPTY_TTL_MS }
   );
 }

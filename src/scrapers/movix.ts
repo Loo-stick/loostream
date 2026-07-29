@@ -3,6 +3,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { extractStream, detectExtractor, ExtractorConfig } from '../extractors';
 import { cached } from '../cache';
+import { applyMultiAudio } from '../multiaudio';
 import { isStreamLive } from '../live-check';
 
 const STREAMS_TTL_MS = 15 * 60 * 1000;
@@ -255,11 +256,12 @@ export async function getMovixStreams(
   episode?: number,
   extractorConfig?: ExtractorConfig
 ): Promise<MovixStream[]> {
-  const key = `movix:${mediaType}:${tmdbId}:${season || ''}:${episode || ''}`;
+  const mode = extractorConfig?.useMediaFlow ? 'mf' : 'loc';
+  const key = `movix:${mode}:${mediaType}:${tmdbId}:${season || ''}:${episode || ''}`;
   return cached(
     key,
     STREAMS_TTL_MS,
-    () => fetchMovixStreams(tmdbId, mediaType, season, episode, extractorConfig),
+    async () => { const s = await fetchMovixStreams(tmdbId, mediaType, season, episode, extractorConfig); return applyMultiAudio(s); },
     { scope: 'movix', shouldCache: r => r.length > 0 }
   );
 }

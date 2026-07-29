@@ -1,6 +1,7 @@
 import axios from 'axios';
 import { extractStream, ExtractorConfig } from '../extractors';
 import { cached } from '../cache';
+import { applyMultiAudio } from '../multiaudio';
 import { makeEndpointConfig } from '../endpoint-config';
 
 // Coflix — films & séries FR généralistes, VF ET VOSTFR (versions séparées).
@@ -187,13 +188,16 @@ export async function getCoflixStreams(
 ): Promise<CoflixStream[]> {
   if (!title) return [];
   if (mediaType === 'series' && (!season || !episode)) return [];
+  // Clé keyée sur le mode de proxy : l'extraction résout des URLs différentes
+  // (MediaFlow vs CDN brut) — sans ça, un mode contamine l'autre via le cache.
+  const mode = extractorConfig.useMediaFlow ? 'mf' : 'loc';
   const key = mediaType === 'series'
-    ? `coflix:series:${normalize(title)}:${season}:${episode}`
-    : `coflix:movie:${normalize(title)}`;
+    ? `coflix:${mode}:series:${normalize(title)}:${season}:${episode}`
+    : `coflix:${mode}:movie:${normalize(title)}`;
   const titles = [...new Set([title, originalTitle].filter(Boolean) as string[])];
   return cached(
     key, STREAMS_TTL_MS,
-    () => fetchCoflixStreams(mediaType, titles, season, episode, extractorConfig),
+    async () => { const s = await fetchCoflixStreams(mediaType, titles, season, episode, extractorConfig); return applyMultiAudio(s); },
     { scope: 'coflix', shouldCache: r => r.length > 0, negativeTtlMs: EMPTY_TTL_MS }
   );
 }

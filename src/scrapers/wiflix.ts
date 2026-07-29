@@ -3,6 +3,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { extractStream, detectExtractor, ExtractorConfig, ExtractorId } from '../extractors';
 import { cached } from '../cache';
+import { applyMultiAudio } from '../multiaudio';
 
 // Wiflix (alias « cinestream ») — source VF/VOSTFR exposée par l'API Movix,
 // keyée par tmdbId. Endpoint découvert dans l'APK Onyx (WiflixProvider) :
@@ -125,13 +126,14 @@ export async function getWiflixStreams(
 ): Promise<WiflixStream[]> {
   if (!tmdbId) return [];
   if (mediaType === 'series' && (!season || !episode)) return [];
+  const mode = extractorConfig.useMediaFlow ? 'mf' : 'loc';
   const key = mediaType === 'series'
-    ? `wiflix:series:${tmdbId}:${season}:${episode}`
-    : `wiflix:movie:${tmdbId}`;
+    ? `wiflix:${mode}:series:${tmdbId}:${season}:${episode}`
+    : `wiflix:${mode}:movie:${tmdbId}`;
   return cached(
     key,
     STREAMS_TTL_MS,
-    () => fetchWiflixStreams(tmdbId, mediaType, extractorConfig, season, episode),
+    async () => { const s = await fetchWiflixStreams(tmdbId, mediaType, extractorConfig, season, episode); return applyMultiAudio(s); },
     { scope: 'wiflix', shouldCache: r => r.length > 0, negativeTtlMs: EMPTY_TTL_MS }
   );
 }

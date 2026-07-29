@@ -4,6 +4,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { extractStream, detectExtractor, ExtractorConfig, ExtractorId } from '../extractors';
 import { cached } from '../cache';
+import { applyMultiAudio } from '../multiaudio';
 
 // FrenchStream is a DataLife-Engine (DLE) site whose front domain rotates
 // (fs03.lol -> fs21.lol -> ...). The stable portal fstream.info publishes the
@@ -398,11 +399,12 @@ export async function getFrenchStreamStreams(
   }
   if (mediaType === 'series' && (!season || !episode)) return [];
 
-  const key = `frenchstream:${mediaType}:${tmdbId}:${season || ''}:${episode || ''}`;
+  const mode = extractorConfig.useMediaFlow ? 'mf' : 'loc';
+  const key = `frenchstream:${mode}:${mediaType}:${tmdbId}:${season || ''}:${episode || ''}`;
   return cached(
     key,
     STREAMS_TTL_MS,
-    () => fetchFrenchStreamStreams(tmdbId, mediaType, apiKey, extractorConfig, season, episode),
+    async () => { const s = await fetchFrenchStreamStreams(tmdbId, mediaType, apiKey, extractorConfig, season, episode); return applyMultiAudio(s); },
     { scope: 'frenchstream', shouldCache: r => r.length > 0 }
   );
 }

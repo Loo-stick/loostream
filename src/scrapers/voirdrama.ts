@@ -3,6 +3,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { extractStream, detectExtractor, ExtractorConfig } from '../extractors';
 import { cached } from '../cache';
+import { applyMultiAudio } from '../multiaudio';
 import { makeEndpointConfig } from '../endpoint-config';
 
 // VoirDrama — dramas asiatiques (K-drama, J-drama, C-drama), exposé par l'API
@@ -313,13 +314,14 @@ export async function getVoirDramaStreams(
 ): Promise<VoirDramaStream[]> {
   if (mediaType === 'series' && (!tmdbId || !season || !episode)) return [];
   if (mediaType === 'movie' && !title) return [];
+  const mode = extractorConfig.useMediaFlow ? 'mf' : 'loc';
   const key = mediaType === 'series'
-    ? `voirdrama:series:${tmdbId}:${season}:${episode}`
-    : `voirdrama:movie:${tmdbId || normalizeTitle(title || '')}`;
+    ? `voirdrama:${mode}:series:${tmdbId}:${season}:${episode}`
+    : `voirdrama:${mode}:movie:${tmdbId || normalizeTitle(title || '')}`;
   return cached(
     key,
     STREAMS_TTL_MS,
-    () => fetchVoirDramaStreams(tmdbId, mediaType, extractorConfig, season, episode, title),
+    async () => { const s = await fetchVoirDramaStreams(tmdbId, mediaType, extractorConfig, season, episode, title); return applyMultiAudio(s); },
     { scope: 'voirdrama', shouldCache: r => r.length > 0, negativeTtlMs: EMPTY_TTL_MS }
   );
 }
