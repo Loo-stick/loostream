@@ -7,7 +7,7 @@
     "build": "tsc && node -e \"['configure.html','admin.html','login.html'].forEach(f=>require('fs').copyFileSync('src/'+f,'dist/'+f))\"",
     "start": "node dist/index.js",
     "dev": "ts-node src/index.ts",
-    "test": "node --import tsx --test \"src/**/*.test.ts\" \"*.test.js\""
+    "test": "node --import tsx --test --test-force-exit \"src/**/*.test.ts\" \"*.test.js\""
   },
   "dependencies": {
     "axios": "^1.6.0",

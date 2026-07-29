@@ -11,10 +11,16 @@ import {
   loadExtractorDomains,
   getExtractorDomains,
   detectExtractor,
+  evalObfuscatedUrl,
 } from './index';
 
-test('EXTRACTOR_IDS contient les 12 extracteurs', () => {
-  assert.equal(EXTRACTOR_IDS.length, 12);
+test('EXTRACTOR_IDS et DEFAULT_EXTRACTOR_DOMAINS restent alignés', () => {
+  // Pas de nombre en dur (rotait à chaque ajout d'extracteur) : les deux
+  // structures doivent lister exactement les mêmes clés.
+  assert.deepEqual(
+    [...EXTRACTOR_IDS].sort(),
+    Object.keys(DEFAULT_EXTRACTOR_DOMAINS).sort(),
+  );
 });
 
 test('mergeExtractorDomains: objet complet valide utilisé tel quel', () => {
@@ -57,6 +63,20 @@ test('detectExtractorIn: reconnaît un domaine voe connu', () => {
     detectExtractorIn('https://vidara.to/e/abc', DEFAULT_EXTRACTOR_DOMAINS),
     'voe',
   );
+});
+
+test('detectExtractorIn: route les hôtes des extracteurs locaux (v1.9)', () => {
+  const cases: Array<[string, string]> = [
+    ['https://luluvdo.com/e/abc', 'lulustream'],
+    ['https://minochinos.com/v/x', 'filelions'],
+    ['https://vidmoly.to/embed-x.html', 'vidmoly'],
+    ['https://vidzy.cc/e/y', 'vidzy'],
+    ['https://streamwish.to/e/z', 'streamwish'],
+    ['https://dood.re/e/q', 'doodstream'],
+  ];
+  for (const [url, id] of cases) {
+    assert.equal(detectExtractorIn(url, DEFAULT_EXTRACTOR_DOMAINS), id, url);
+  }
 });
 
 test('detectExtractorIn: hôte inconnu renvoie null', () => {
@@ -113,4 +133,19 @@ test('detectExtractor: utilise le jeu de domaines chargé', () => {
   }));
   loadExtractorDomains(file);
   assert.equal(detectExtractor('https://kathyinformationwhether.com/e/x'), 'voe');
+});
+
+test('evalObfuscatedUrl: exécute la fonction JS obfusquée (vidzy) et renvoie l’URL', () => {
+  // Reproduit la forme `src:(function(s){…})("base64")` de vidzy : la fonction
+  // est exécutée en sandbox avec atob, et seule une sortie http(s) est acceptée.
+  const b64 = Buffer.from('https://ex.com/a.m3u8').toString('base64');
+  assert.equal(
+    evalObfuscatedUrl(`src:(function(s){return atob(s)})("${b64}")`),
+    'https://ex.com/a.m3u8',
+  );
+});
+
+test('evalObfuscatedUrl: null sans motif fonction ou si la sortie n’est pas une URL', () => {
+  assert.equal(evalObfuscatedUrl('src:"https://plain.m3u8"'), null); // pas une fonction
+  assert.equal(evalObfuscatedUrl('src:(function(){return "coucou"})()'), null); // non-http
 });

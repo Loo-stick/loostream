@@ -334,7 +334,7 @@ export async function extractSharecloudy(embedUrl: string): Promise<ExtractedStr
 // On l'exécute dans une sandbox `vm` isolée (aucun accès require/fs/réseau,
 // timeout 1s) : robuste à tout changement de clé/algorithme, contrairement à
 // une regex figée. `atob` est fourni ; le reste (String, Array…) est natif au vm.
-function evalObfuscatedUrl(js: string): string | null {
+export function evalObfuscatedUrl(js: string): string | null {
   const m = js.match(/(?:src|file)\s*:\s*(\(function\([\s\S]{0,30}?\)\{[\s\S]*?\}\)\([\s\S]*?\))/);
   if (!m) return null;
   try {
