@@ -1,5 +1,6 @@
 import axios from 'axios';
 import * as https from 'https';
+import * as vm from 'vm';
 import { unpackFromHtml, findStreamUrl } from './unpack';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -46,17 +47,20 @@ export const DEFAULT_EXTRACTOR_DOMAINS: Record<ExtractorId, string[]> = {
   uqload: ['uqload'],
   doodstream: ['dood', 'doodstream', 'dsvplay', 'd0o0d', 'dooood', 'd0000d', 'ds2play', 'dood.re'],
   filemoon: ['filemoon', 'filmoon', 'moonlink', 'bysebuho', 'moonplayer'],
-  vidoza: ['vidoza'],
+  vidoza: ['vidoza', 'videzz'],
   mailru: ['my.mail.ru', 'mail.ru', 'ok.ru', 'odnoklassniki'],
   sibnet: ['sibnet.ru', 'video.sibnet'],
   livavid: ['livavid'],
-  vidmoly: ['vidmoly', 'molystream', 'vidhide'],
+  vidmoly: ['vidmoly', 'molystream'],
   streamtape: ['streamtape', 'strcloud', 'shavetape', 'tapewithadblock'],
   mixdrop: ['mixdrop', 'mdrop', 'mdy48tn97'],
   sharecloudy: ['sharecloudy', 'moovbob', 'moovtop'],
-  lulustream: ['luluvdo', 'lulustream', 'lulu.st'],
-  filelions: ['filelions', 'minochinos', 'javplaya', 'lionshare'],
-  streamwish: ['streamwish', 'hgcloud', 'awish', 'embedwish', 'strwish'],
+  // Familles P.A.C.K.E.R. (extractPackedJs) — listes alignées sur Onyx.
+  lulustream: ['luluvdo', 'lulustream', 'lulu.st', 'luluvid', 'luluvdoo'],
+  filelions: ['filelions', 'minochinos', 'minochinoos', 'javplaya', 'lionshare',
+    'vidhide', 'moflix-stream', 'dhtpre', 'dingtezuni', 'dintezuvio', 'morencius', 'lecteurvideo'],
+  streamwish: ['streamwish', 'hgcloud', 'awish', 'embedwish', 'strwish', 'asnwish',
+    'hlswish', 'playerwish', 'swishsrv', 'swiftplayers', 'uqloads.xyz'],
   // Serveurs FrenchStream ("premium" et "vidzy") : page avec JS packé P.A.C.K.E.R.
   fsvid: ['fsvid'],
   vidzy: ['vidzy'],
@@ -201,6 +205,40 @@ export async function extractVoe(embedUrl: string): Promise<ExtractedStream | nu
   }
 }
 
+// Vidmoly (vidmoly.to/.me/.biz/.net) — le m3u8 est EN CLAIR dans la page :
+// `sources:[{file:"…m3u8"}]` (pas de JS packé). Repris de l'app Onyx
+// (VidMoLyExtractor.extractViaOkHttp). Le CDN exige Referer + Origin. Si la page
+// est un challenge Cloudflare, seul un WebView le résout (hors de portée ici).
+export async function extractVidmoly(embedUrl: string): Promise<ExtractedStream | null> {
+  try {
+    const origin = new URL(embedUrl).origin;
+    const { data } = await axios.get<string>(embedUrl, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36',
+        'Referer': `${origin}/`,
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        'Accept-Language': 'fr-FR,fr;q=0.9,en;q=0.5',
+      },
+      timeout: 15000, responseType: 'text', transformResponse: r => r, httpsAgent: INSECURE_AGENT,
+    });
+    const html = String(data || '');
+    if (/challenges\.cloudflare\.com|just a moment|cf-turnstile/i.test(html)) {
+      console.log('[Extractor] Vidmoly: challenge Cloudflare (WebView requis) — écarté');
+      return null;
+    }
+    const m = html.match(/sources\s*:\s*\[\s*\{\s*file\s*:\s*["']([^"']*\.m3u8[^"']*)["']/i)
+      || html.match(/file\s*:\s*["']([^"']*\.m3u8[^"']*)["']/i);
+    if (!m) {
+      console.log(`[Extractor] Vidmoly: pas de source m3u8: ${embedUrl}`);
+      return null;
+    }
+    return { url: m[1], quality: 'HD', format: 'hls', headers: { Referer: `${origin}/`, Origin: origin } };
+  } catch (e: any) {
+    console.log(`[Extractor] Vidmoly error: ${(e.message || '').slice(0, 80)}`);
+    return null;
+  }
+}
+
 /**
  * Extract video URL from Uqload embed
  */
@@ -291,6 +329,26 @@ export async function extractSharecloudy(embedUrl: string): Promise<ExtractedStr
  * de l'app Onyx (FsvidExtractor/VidzyExtractor) : dépacker, puis chercher
  * src / file / sources[0] / une URL .m3u8. Le CDN exige Referer + Origin.
  */
+// Certains hôtes (vidzy…) ne mettent plus l'URL en clair : le `src` est calculé
+// par une fonction JS PURE (ex. base64 + XOR) — `src:(function(s){…})("…")`.
+// On l'exécute dans une sandbox `vm` isolée (aucun accès require/fs/réseau,
+// timeout 1s) : robuste à tout changement de clé/algorithme, contrairement à
+// une regex figée. `atob` est fourni ; le reste (String, Array…) est natif au vm.
+function evalObfuscatedUrl(js: string): string | null {
+  const m = js.match(/(?:src|file)\s*:\s*(\(function\([\s\S]{0,30}?\)\{[\s\S]*?\}\)\([\s\S]*?\))/);
+  if (!m) return null;
+  try {
+    const out = vm.runInNewContext(
+      m[1],
+      { atob: (s: string) => Buffer.from(s, 'base64').toString('binary') },
+      { timeout: 1000 }
+    );
+    return typeof out === 'string' && /^https?:\/\//.test(out) ? out : null;
+  } catch {
+    return null;
+  }
+}
+
 export async function extractPackedJs(embedUrl: string): Promise<ExtractedStream | null> {
   try {
     const origin = new URL(embedUrl).origin;
@@ -299,13 +357,16 @@ export async function extractPackedJs(embedUrl: string): Promise<ExtractedStream
       timeout: 15000,
       responseType: 'text',
       transformResponse: r => r,
+      httpsAgent: INSECURE_AGENT, // certains hôtes (vidoza…) ont un cert TLS expiré
     });
     const js = unpackFromHtml(String(data || ''));
     if (!js) {
       console.log(`[Extractor] packed JS introuvable: ${embedUrl}`);
       return null;
     }
-    const url = findStreamUrl(js);
+    // vidzy (et clones) obfusquent l'URL en clair -> fallback : exécuter la
+    // fonction pure qui la calcule, dans une sandbox isolée.
+    const url = findStreamUrl(js) || evalObfuscatedUrl(js);
     if (!url) {
       console.log(`[Extractor] URL de flux introuvable après dépack: ${embedUrl}`);
       return null;
@@ -428,11 +489,17 @@ async function extractLocally(embedUrl: string, extractor: string): Promise<Extr
     case 'fsvid':
     case 'vidzy':
     case 'livavid':
+    case 'streamwish':
+    case 'filelions':
+    case 'lulustream':
+    case 'vidoza':
       return await extractPackedJs(embedUrl);
     case 'mailru':
       return await extractMailru(embedUrl);
     case 'sibnet':
       return await extractSibnet(embedUrl);
+    case 'vidmoly':
+      return await extractVidmoly(embedUrl);
     default:
       return null;
   }
@@ -551,7 +618,9 @@ export async function extractStream(
     console.log(`[Extractor] MediaFlow failed for ${extractor}, falling back to local`);
   }
 
-  // Fall back to local extraction
+  // Fall back to local extraction. Le drop des CDN anti-datacenter (403) est fait
+  // en aval par applyMultiAudio (src/multiaudio.ts), via la sonde du master —
+  // robuste à tout CDN (tnmr, acek-cdn…) sans liste figée.
   console.log(`[Extractor] Using local extractor for ${extractor}: ${embedUrl}`);
   return await extractLocally(embedUrl, extractor);
 }
