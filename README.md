@@ -32,8 +32,19 @@ Ce projet peut cesser de fonctionner à tout moment sans préavis si les sources
 ```bash
 git clone https://github.com/Loo-stick/loostream.git
 cd loostream
-cp .env.example .env
-docker compose up -d
+cp .env.example .env        # remplir TMDB (+ MediaFlow si utilisé)
+docker compose up -d        # PULL l'image pré-construite (ghcr.io) — aucun build
+```
+
+L'image est publiée sur **GitHub Container Registry** (`ghcr.io/loo-stick/loostream`).
+`docker compose up -d` la télécharge directement : pas de build, pas de toolchain Node.
+
+```bash
+# Mettre à jour vers la dernière image
+docker compose pull && docker compose up -d
+
+# Builder depuis les sources à la place (dev/contrib)
+docker compose up -d --build
 
 # Avec MediaFlow bundlé (recommandé — voir "Obtenir MediaFlow Proxy")
 docker compose --profile mediaflow up -d

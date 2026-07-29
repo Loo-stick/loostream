@@ -1,5 +1,8 @@
 services:
   loostream:
+    # Image pré-construite (GHCR) : `docker compose up -d` la PULL, aucun build.
+    # `docker compose up -d --build` rebuild depuis les sources à la place.
+    image: ghcr.io/loo-stick/loostream:latest
     build: .
     container_name: loostream
     restart: unless-stopped
