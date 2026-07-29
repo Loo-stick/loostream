@@ -27,7 +27,7 @@ let ALLOWED_DOMAINS: string[] = [...DEFAULT_DOMAINS];
 // seul au lieu de bloquer le stream. Alternative au bot Telegram pour les
 // self-hosters. ⚠️ Ne relâche QUE l'allowlist de domaines — le blocage des IP
 // privées (protection SSRF critique) s'exécute avant et reste actif.
-const AUTO_WHITELIST = process.env.AUTO_WHITELIST === 'true';
+export const AUTO_WHITELIST = process.env.AUTO_WHITELIST === 'true';
 
 /** Domaine enregistrable approximatif (2 derniers labels) — couvre les subdomains. */
 function baseDomain(hostname: string): string {
@@ -130,11 +130,11 @@ export function isAllowedUrl(url: string): { allowed: boolean; reason?: string }
     );
 
     if (!isWhitelisted) {
-      // Auto-whitelist opt-in : le domaine vient d'une source (les IP privées
-      // ont déjà été bloquées plus haut), on l'ajoute et on autorise.
-      if (AUTO_WHITELIST && addAllowedDomain(parsed.hostname)) {
-        return { allowed: true };
-      }
+      // Pas d'auto-whitelist ICI : `url` est contrôlé par le client (proxy),
+      // l'ajouter ouvrirait un proxy ouvert vers n'importe quel hôte public.
+      // L'apprentissage AUTO_WHITELIST se fait côté serveur uniquement :
+      // buildProxyUrl (domaine issu de NOTRE extraction) et rewriteManifest
+      // (hôtes enfants d'un master déjà autorisé). Voir addAllowedDomain.
       return { allowed: false, reason: `Domain not whitelisted: ${parsed.hostname}` };
     }
 
@@ -182,6 +182,15 @@ function rewriteManifest(
 ): string {
   const originalBase = originalUrl.substring(0, originalUrl.lastIndexOf('/') + 1);
 
+  // AUTO_WHITELIST (côté serveur, sûr) : ce manifeste provient d'un master DÉJÀ
+  // autorisé (le handler l'a validé). Les variantes/segments qu'il référence sont
+  // donc légitimes — on apprend leur hôte pour survivre à une rotation de CDN de
+  // segments sans intervention. Un client ne peut pas injecter ici : la chaîne
+  // est enracinée sur un domaine autorisé.
+  const learn = AUTO_WHITELIST
+    ? (u: string) => { try { addAllowedDomain(new URL(u).hostname); } catch { /* url invalide */ } }
+    : (_u: string) => { /* no-op */ };
+
   // Build header query params
   const headerParams = Object.entries(headers)
     .map(([k, v]) => `h_${k.toLowerCase()}=${encodeURIComponent(v)}`)
@@ -215,6 +224,7 @@ function rewriteManifest(
     if (trimmed.includes('URI="')) {
       return line.replace(/URI="([^"]+)"/g, (match, uri) => {
         const fullUrl = resolveUrl(uri, originalUrl, originalBase);
+        learn(fullUrl);
 
         // Check if it's a playlist (.m3u8) or a segment
         if (fullUrl.includes('.m3u8')) {
@@ -231,6 +241,7 @@ function rewriteManifest(
       // Resolve relative URLs correctly — including query-relative "?url=..."
       // (some workers self-proxy segments) which naive concat would mangle.
       const targetUrl = resolveUrl(trimmed, originalUrl, originalBase);
+      learn(targetUrl);
 
       // Check if it's a playlist (.m3u8) or a segment
       if (targetUrl.includes('.m3u8')) {

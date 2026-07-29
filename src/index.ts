@@ -15,7 +15,7 @@ import { getFrenchStreamStreams, reloadFrenchStreamEndpoints, getFrenchStreamEnd
 import { cached, getCacheStats } from './cache';
 import { recordOutcome, getAllMetrics } from './metrics';
 import crypto from 'crypto';
-import proxyRouter, { isAllowedUrl, addAllowedDomain, getAllowedDomains } from './proxy';
+import proxyRouter, { isAllowedUrl, addAllowedDomain, getAllowedDomains, AUTO_WHITELIST } from './proxy';
 import * as fsSync from 'fs';
 import { ExtractorConfig, reloadExtractorDomains, getExtractorDomains } from './extractors';
 import { getSceneMeta, buildFilename, providerLabel } from './filename';
@@ -464,6 +464,14 @@ function buildProxyUrl(
   forceLocal: boolean = false,
   forceHls: boolean = false
 ): string | null {
+  // AUTO_WHITELIST (côté serveur, sûr) : ce domaine sort de NOTRE pipeline
+  // d'extraction (pas d'une requête client), on l'apprend AVANT le contrôle
+  // d'allowlist pour qu'un nouveau CDN de source passe sans intervention. Le
+  // blocage des IP privées (dans isAllowedUrl) reste la garde SSRF.
+  if (AUTO_WHITELIST) {
+    try { addAllowedDomain(new URL(streamUrl).hostname); } catch { /* url invalide -> isAllowedUrl tranche */ }
+  }
+
   // SECURITY: Validate stream URL before proxying (applies to both local and MediaFlow)
   const validation = isAllowedUrl(streamUrl);
   if (!validation.allowed) {
