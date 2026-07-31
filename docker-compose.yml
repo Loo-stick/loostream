@@ -15,7 +15,9 @@ services:
     volumes:
       - ./config:/app/config
     healthcheck:
-      test: ["CMD", "node", "-e", "require('http').get('http://localhost:7002/manifest.json',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))"]
+      # /api/stats : léger, en mémoire, NON gaté par ACCESS_KEY (contrairement à
+      # /manifest.json qui renvoie 401 quand une clé d'accès est active).
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:7002/api/stats',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))"]
       interval: 30s
       timeout: 10s
       retries: 3
