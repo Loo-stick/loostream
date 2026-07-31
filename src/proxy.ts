@@ -2,6 +2,7 @@ import { Router, Request, Response } from 'express';
 import axios from 'axios';
 import * as fs from 'fs';
 import * as path from 'path';
+import { requireQueryKey, accessEnabled, accessKey } from './access';
 
 const router = Router();
 
@@ -196,6 +197,10 @@ function rewriteManifest(
     .map(([k, v]) => `h_${k.toLowerCase()}=${encodeURIComponent(v)}`)
     .join('&');
 
+  // Clé d'accès : les segments/variantes réécrits sont rappelés par le player et
+  // repassent par la garde /proxy — ils doivent donc porter `&k=` eux aussi.
+  const keyParam = accessEnabled() ? `&k=${encodeURIComponent(accessKey()!)}` : '';
+
   let lines = manifest.split('\n');
 
   // Optional audio-rendition trim (master playlists). Some sources (NetMirror
@@ -229,9 +234,9 @@ function rewriteManifest(
         // Check if it's a playlist (.m3u8) or a segment
         if (fullUrl.includes('.m3u8')) {
           const transformParam = useTransformer ? '&transformer=ts_stream' : '';
-          return `URI="${baseUrl}/proxy/manifest?url=${encodeURIComponent(fullUrl)}&${headerParams}${transformParam}"`;
+          return `URI="${baseUrl}/proxy/manifest?url=${encodeURIComponent(fullUrl)}&${headerParams}${transformParam}${keyParam}"`;
         } else {
-          return `URI="${baseUrl}/proxy/segment?url=${encodeURIComponent(fullUrl)}&${headerParams}"`;
+          return `URI="${baseUrl}/proxy/segment?url=${encodeURIComponent(fullUrl)}&${headerParams}${keyParam}"`;
         }
       });
     }
@@ -247,11 +252,11 @@ function rewriteManifest(
       if (targetUrl.includes('.m3u8')) {
         // It's a variant playlist - route through manifest proxy
         const transformParam = useTransformer ? '&transformer=ts_stream' : '';
-        return `${baseUrl}/proxy/manifest?url=${encodeURIComponent(targetUrl)}&${headerParams}${transformParam}`;
+        return `${baseUrl}/proxy/manifest?url=${encodeURIComponent(targetUrl)}&${headerParams}${transformParam}${keyParam}`;
       } else {
         // It's a segment - route through segment proxy
         const transformParam = useTransformer ? '&transform=ts' : '';
-        return `${baseUrl}/proxy/segment?url=${encodeURIComponent(targetUrl)}&${headerParams}${transformParam}`;
+        return `${baseUrl}/proxy/segment?url=${encodeURIComponent(targetUrl)}&${headerParams}${transformParam}${keyParam}`;
       }
     }
 
@@ -262,7 +267,7 @@ function rewriteManifest(
 }
 
 // Proxy HLS manifest
-router.get('/manifest', async (req: Request, res: Response) => {
+router.get('/manifest', requireQueryKey, async (req: Request, res: Response) => {
   const url = req.query.url as string;
   const transformer = req.query.transformer === 'ts_stream';
   const audioParam = (req.query.audio as string) || '';
@@ -307,7 +312,7 @@ router.get('/manifest', async (req: Request, res: Response) => {
 });
 
 // Proxy segments (and transform .jpg to .ts if needed)
-router.get('/segment', async (req: Request, res: Response) => {
+router.get('/segment', requireQueryKey, async (req: Request, res: Response) => {
   const url = req.query.url as string;
   const transform = req.query.transform === 'ts';
 
@@ -355,7 +360,7 @@ router.get('/segment', async (req: Request, res: Response) => {
 });
 
 // Proxy direct stream (mkv, mp4, etc.) - passthrough without parsing
-router.get('/stream', async (req: Request, res: Response) => {
+router.get('/stream', requireQueryKey, async (req: Request, res: Response) => {
   const url = req.query.url as string;
 
   if (!url) {

@@ -300,6 +300,15 @@
         </div>
 
         <div class="card">
+            <h2>🔒 Clé d'accès</h2>
+            <p style="color: #aaa; font-size: 0.9em; margin-bottom: 15px;">Optionnel. À renseigner <strong>uniquement</strong> si l'hébergeur a activé une clé d'accès (variable <code>ACCESS_KEY</code>). Sinon, laissez vide.</p>
+            <div class="input-group show">
+                <label>Clé d'accès (optionnel)</label>
+                <input type="text" id="access-key" placeholder="Laissez vide si non requise">
+            </div>
+        </div>
+
+        <div class="card">
             <h2>⚙️ Préférences</h2>
             <p style="color: #aaa; font-size: 0.9em; margin-bottom: 15px;">Filtrer et trier les streams selon vos préférences.</p>
 
@@ -424,6 +433,10 @@
             config.langOrder = getLangOrder();
             config.minStreams = parseInt(document.getElementById('min-streams').value, 10);
 
+            // Clé d'accès optionnelle (seulement si l'hébergeur l'exige)
+            const accessKey = document.getElementById('access-key').value.trim();
+            if (accessKey) config.accessKey = accessKey;
+
             const configStr = btoa(JSON.stringify(config));
             const installUrl = `${baseUrl}/${configStr}/manifest.json`;
 
@@ -510,6 +523,11 @@
                     // Pre-fill TMDB key
                     if (config.tmdbKey) {
                         document.getElementById('tmdb-key').value = config.tmdbKey;
+                    }
+
+                    // Pre-fill access key
+                    if (config.accessKey) {
+                        document.getElementById('access-key').value = config.accessKey;
                     }
 
                     // Pre-fill proxy mode

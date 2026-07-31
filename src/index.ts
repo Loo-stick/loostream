@@ -16,6 +16,7 @@ import { cached, getCacheStats } from './cache';
 import { recordOutcome, getAllMetrics } from './metrics';
 import crypto from 'crypto';
 import proxyRouter, { isAllowedUrl, addAllowedDomain, getAllowedDomains, AUTO_WHITELIST } from './proxy';
+import { accessEnabled, keyMatches, signUrl, requireQueryKey } from './access';
 import * as fsSync from 'fs';
 import { ExtractorConfig, reloadExtractorDomains, getExtractorDomains } from './extractors';
 import { getSceneMeta, buildFilename, providerLabel } from './filename';
@@ -118,6 +119,7 @@ interface UserConfig {
   mfUrl?: string;
   mfPass?: string;
   tmdbKey?: string;
+  accessKey?: string;    // clé d'accès (si l'hébergeur a activé ACCESS_KEY)
   prefQuality?: string;  // "1080p", "4K", "720p", "480p"
   langOrder?: string[];  // ["MULTI", "VF", "VOSTFR", "VO"]
   minStreams?: number;   // early exit: stop waiting once this many wanted streams are in (0 = wait for all)
@@ -213,6 +215,7 @@ function parseConfig(configStr: string): UserConfig | null {
       mfUrl: parsed.mfUrl ? sanitizeString(parsed.mfUrl, 500) : undefined,
       mfPass: parsed.mfPass ? sanitizeString(parsed.mfPass, 100) : undefined,
       tmdbKey: parsed.tmdbKey ? sanitizeString(parsed.tmdbKey, 64) : undefined,
+      accessKey: parsed.accessKey ? sanitizeString(parsed.accessKey, 128) : undefined,
       prefQuality,
       langOrder,
       minStreams,
@@ -220,6 +223,16 @@ function parseConfig(configStr: string): UserConfig | null {
   } catch {
     return null;
   }
+}
+
+// Garde des routes /:config/* : si ACCESS_KEY est active et que le config ne
+// porte pas la bonne clé, répond 401 et renvoie true (l'appelant doit `return`).
+function denyIfNoAccess(config: UserConfig | null, res: express.Response): boolean {
+  if (accessEnabled() && !keyMatches(config?.accessKey)) {
+    res.status(401).send("Non autorisé : clé d'accès requise ou invalide");
+    return true;
+  }
+  return false;
 }
 
 // ============================================
@@ -512,7 +525,7 @@ function buildProxyUrl(
       proxyUrl.searchParams.set(`h_${key.toLowerCase()}`, value);
     }
 
-    return proxyUrl.toString();
+    return signUrl(proxyUrl).toString();
   } else {
     // Use MediaFlow
     if (!mfUrl) {
@@ -553,6 +566,11 @@ app.use(apiLimiter as any);
 // Local HLS proxy (has its own higher limit via proxyLimiter applied internally if needed)
 app.use('/proxy', proxyRouter);
 
+// Clé d'accès : les endpoints de flux auto-générés (appelés directement par le
+// player, hors chaîne /:config) exigent `?k=` quand ACCESS_KEY est active.
+// (Le proxy gère sa propre garde en interne pour épargner /proxy/domains au bot.)
+app.use(['/netmirror', '/moviebox', '/nabistream'], requireQueryKey);
+
 // Manifest generator
 function getManifest(req: express.Request) {
   const proto = req.headers['x-forwarded-proto'] || req.protocol || 'http';
@@ -588,6 +606,8 @@ app.get('/:config/configure', (_req, res) => {
 
 // Manifest without config (uses env defaults)
 app.get('/manifest.json', (req, res) => {
+  // Sans config, aucune clé possible : refusé si la protection est active.
+  if (accessEnabled()) return res.status(401).send("Non autorisé : clé d'accès requise");
   res.json(getManifest(req));
 });
 
@@ -597,6 +617,7 @@ app.get('/:config/manifest.json', (req, res) => {
   if (!config) {
     return res.status(400).json({ error: 'Invalid configuration' });
   }
+  if (denyIfNoAccess(config, res)) return;
   res.json(getManifest(req));
 });
 
@@ -854,7 +875,7 @@ async function handleStream(req: express.Request, res: express.Response, type: s
         mu.searchParams.set('s', r.subtitles
           .map(t => `${t.code}:${encodeURIComponent(t.name)}:${encodeURIComponent(t.uri)}`).join(','));
       }
-      const proxiedUrl = mu.toString();
+      const proxiedUrl = signUrl(mu).toString(); // &k= si ACCESS_KEY active
 
       drafts.push({
         url: proxiedUrl,
@@ -1032,7 +1053,7 @@ async function handleStream(req: express.Request, res: express.Response, type: s
         u.searchParams.set('ep', String(mb.ep));
         u.searchParams.set('rid', mb.resourceId);
         drafts.push({
-          url: u.toString(),
+          url: signUrl(u).toString(), // &k= si ACCESS_KEY active
           behaviorHints: {
             notWebReady: false,
             bingeGroup: `moviebox-${mb.quality}`,
@@ -1146,6 +1167,7 @@ async function handleStream(req: express.Request, res: express.Response, type: s
 
 // Stream endpoint (without config - uses env defaults)
 app.get('/stream/:type/:id.json', async (req, res) => {
+  if (accessEnabled()) return res.status(401).send("Non autorisé : clé d'accès requise");
   const { type, id } = req.params;
   await handleStream(req, res, type, id, null);
 });
@@ -1157,6 +1179,7 @@ app.get('/:config/stream/:type/:id.json', async (req, res) => {
   if (!userConfig) {
     return res.status(400).json({ error: 'Invalid configuration' });
   }
+  if (denyIfNoAccess(userConfig, res)) return;
   await handleStream(req, res, type, id, userConfig);
 });
 
@@ -1182,7 +1205,7 @@ async function handleSubtitles(req: express.Request, res: express.Response, type
         const label = s.lang === 'fre' ? 'Français' : s.lang === 'eng' ? 'English' : s.lang;
         const su = new URL(`/nabistream/subtitle/${encodeURIComponent(label)}.vtt`, baseUrl);
         su.searchParams.set('u', s.url);
-        subtitles.push({ id: `nabistream-${i}-${s.lang}`, url: su.toString(), lang: s.lang });
+        subtitles.push({ id: `nabistream-${i}-${s.lang}`, url: signUrl(su).toString(), lang: s.lang });
       });
     } catch (e: any) {
       console.log('[Subtitles] Nabistream:', (e?.message || '').slice(0, 80));
@@ -1204,7 +1227,7 @@ async function handleSubtitles(req: express.Request, res: express.Response, type
           s.searchParams.set('ep', String(mb.ep));
           s.searchParams.set('rid', mb.resourceId);
           s.searchParams.set('lang', lang);
-          subtitles.push({ id: `moviebox-${lang}`, url: s.toString(), lang });
+          subtitles.push({ id: `moviebox-${lang}`, url: signUrl(s).toString(), lang });
         }
       }
     } catch (e: any) {
@@ -1221,14 +1244,22 @@ async function handleSubtitles(req: express.Request, res: express.Response, type
 
 // Stremio peut appendre un segment "extra" (videoHash/videoSize) avant .json :
 //   /subtitles/{type}/{id}.json   ou   /subtitles/{type}/{id}/{extra}.json
-app.get('/subtitles/:type/:id.json', (req, res) => handleSubtitles(req, res, req.params.type, req.params.id, null));
-app.get('/subtitles/:type/:id/:extra.json', (req, res) => handleSubtitles(req, res, req.params.type, req.params.id, null));
+app.get('/subtitles/:type/:id.json', (req, res) => {
+  if (accessEnabled()) return res.status(401).send("Non autorisé : clé d'accès requise");
+  handleSubtitles(req, res, req.params.type, req.params.id, null);
+});
+app.get('/subtitles/:type/:id/:extra.json', (req, res) => {
+  if (accessEnabled()) return res.status(401).send("Non autorisé : clé d'accès requise");
+  handleSubtitles(req, res, req.params.type, req.params.id, null);
+});
 app.get('/:config/subtitles/:type/:id.json', (req, res) => {
   const cfg = parseConfig(req.params.config);
+  if (denyIfNoAccess(cfg || null, res)) return;
   handleSubtitles(req, res, req.params.type, req.params.id, cfg || null);
 });
 app.get('/:config/subtitles/:type/:id/:extra.json', (req, res) => {
   const cfg = parseConfig(req.params.config);
+  if (denyIfNoAccess(cfg || null, res)) return;
   handleSubtitles(req, res, req.params.type, req.params.id, cfg || null);
 });
 
@@ -1475,10 +1506,11 @@ function nmProxy(base: string, target: string, kind: 'segment' | 'manifest', ts 
   u.searchParams.set('url', target);
   u.searchParams.set('h_referer', NM_REFERER);
   u.searchParams.set('h_user-agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36');
-  if (!ts) return u.toString();
-  if (kind === 'segment') u.searchParams.set('transform', 'ts');
-  else u.searchParams.set('transformer', 'ts_stream');
-  return u.toString();
+  if (ts) {
+    if (kind === 'segment') u.searchParams.set('transform', 'ts');
+    else u.searchParams.set('transformer', 'ts_stream');
+  }
+  return signUrl(u).toString(); // &k= si ACCESS_KEY active (route /proxy gardée)
 }
 
 // Master généré : /netmirror/master.m3u8?h&id&p&n&d&q=1080p,720p&a=0,1
@@ -1493,7 +1525,7 @@ app.get('/netmirror/master.m3u8', (req, res) => {
     const u = new URL('/netmirror/video.m3u8', base);
     u.searchParams.set('h', h); u.searchParams.set('id', id); u.searchParams.set('p', p);
     u.searchParams.set('n', String(n || 0)); u.searchParams.set('d', String(d || 10)); u.searchParams.set('q', q);
-    return u.toString();
+    return signUrl(u).toString(); // &k= si ACCESS_KEY active
   };
   // `a` = "index:code:nom" par piste (langues issues du master d'origine).
   const lines = ['#EXTM3U', '#EXT-X-VERSION:3'];
