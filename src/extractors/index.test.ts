@@ -12,7 +12,17 @@ import {
   getExtractorDomains,
   detectExtractor,
   evalObfuscatedUrl,
+  isDecoyUrl,
 } from './index';
+
+test('isDecoyUrl : rejette les mires/pubs (fsvid /troll/, vast, ads), garde le vrai flux', () => {
+  assert.equal(isDecoyUrl('https://s1.fsvid.lol/troll/master.m3u8'), true);
+  assert.equal(isDecoyUrl('https://x/vast.xml'), true);
+  assert.equal(isDecoyUrl('https://googleads.g.doubleclick.net/x'), true);
+  assert.equal(isDecoyUrl('https://cdn.example/ads/preroll.m3u8'), true);
+  assert.equal(isDecoyUrl('https://s1.fsvid.lol/real/master.m3u8'), false);
+  assert.equal(isDecoyUrl('https://dej02.tnmr.org/hls2/master.m3u8'), false);
+});
 
 test('EXTRACTOR_IDS et DEFAULT_EXTRACTOR_DOMAINS restent alignés', () => {
   // Pas de nombre en dur (rotait à chaque ajout d'extracteur) : les deux
@@ -143,6 +153,14 @@ test('evalObfuscatedUrl: exécute la fonction JS obfusquée (vidzy) et renvoie l
     evalObfuscatedUrl(`src:(function(s){return atob(s)})("${b64}")`),
     'https://ex.com/a.m3u8',
   );
+});
+
+test('evalObfuscatedUrl: gère une IIFE à accolades imbriquées (boucle for, type fsvid)', () => {
+  // XOR clé calculée + reverse, exactement le schéma fsvid, avec un for -> accolades
+  // imbriquées qui cassaient l'ancien regex non-greedy.
+  const b64 = Buffer.from('https://r1.example/a.m3u8'.split('').reverse().join(''), 'binary').toString('base64');
+  const js = `var _d="https://troll/master.m3u8";src:(function(s){var b=atob(s),r="";for(var i=0;i<b.length;i++){r+=b.charAt(i)}return r.split("").reverse().join("")})("${b64}")`;
+  assert.equal(evalObfuscatedUrl(js), 'https://r1.example/a.m3u8');
 });
 
 test('evalObfuscatedUrl: null sans motif fonction ou si la sortie n’est pas une URL', () => {

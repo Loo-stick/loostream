@@ -334,12 +334,36 @@ export async function extractSharecloudy(embedUrl: string): Promise<ExtractedStr
 // On l'exécute dans une sandbox `vm` isolée (aucun accès require/fs/réseau,
 // timeout 1s) : robuste à tout changement de clé/algorithme, contrairement à
 // une regex figée. `atob` est fourni ; le reste (String, Array…) est natif au vm.
-export function evalObfuscatedUrl(js: string): string | null {
-  const m = js.match(/(?:src|file)\s*:\s*(\(function\([\s\S]{0,30}?\)\{[\s\S]*?\}\)\([\s\S]*?\))/);
+// Extrait l'IIFE `(function(...){...})(...)` qui suit `src:`/`file:` par équilibrage
+// de parenthèses (en ignorant le contenu des chaînes) — un regex non-greedy casse
+// sur les accolades imbriquées (boucle for de fsvid).
+function extractIife(js: string): string | null {
+  const m = js.match(/(?:src|file)\s*:\s*(?=\(function\b)/);
   if (!m) return null;
+  const start = m.index! + m[0].length; // index du '(' ouvrant
+  let depth = 0, str = '';
+  for (let i = start; i < js.length; i++) {
+    const c = js[i];
+    if (str) { if (c === '\\') { i++; continue; } if (c === str) str = ''; continue; }
+    if (c === '"' || c === "'" || c === '`') { str = c; continue; }
+    if (c === '(') depth++;
+    else if (c === ')') {
+      if (--depth === 0) {
+        let j = i + 1; while (j < js.length && /\s/.test(js[j])) j++;
+        if (js[j] === '(') continue;      // fin du groupe-fonction, l'appel suit
+        return js.slice(start, i + 1);     // fin de l'appel -> IIFE complète
+      }
+    }
+  }
+  return null;
+}
+
+export function evalObfuscatedUrl(js: string): string | null {
+  const iife = extractIife(js);
+  if (!iife) return null;
   try {
     const out = vm.runInNewContext(
-      m[1],
+      iife,
       { atob: (s: string) => Buffer.from(s, 'base64').toString('binary') },
       { timeout: 1000 }
     );
@@ -347,6 +371,17 @@ export function evalObfuscatedUrl(js: string): string | null {
   } catch {
     return null;
   }
+}
+
+// Leurres / pubs (repris du estPub d'Onyx) : certains hôtes (fsvid…) servent une
+// URL de mire /troll/ ou une pub à la place du flux quand ils flairent un scraper.
+// On les rejette pour ne pas proposer une mire de 18s à l'utilisateur.
+const DECOY_PATTERNS = [
+  /\/troll\//i, /doubleclick/i, /googlesyndication/i, /imasdk/i, /googleads/i,
+  /\/vast\b/i, /vast\.xml/i, /\/ads?\//i, /advert/i, /preroll/i,
+];
+export function isDecoyUrl(url: string): boolean {
+  return DECOY_PATTERNS.some(p => p.test(url));
 }
 
 export async function extractPackedJs(embedUrl: string): Promise<ExtractedStream | null> {
@@ -364,11 +399,14 @@ export async function extractPackedJs(embedUrl: string): Promise<ExtractedStream
       console.log(`[Extractor] packed JS introuvable: ${embedUrl}`);
       return null;
     }
-    // vidzy (et clones) obfusquent l'URL en clair -> fallback : exécuter la
-    // fonction pure qui la calcule, dans une sandbox isolée.
-    const url = findStreamUrl(js) || evalObfuscatedUrl(js);
+    // Deux candidats : l'URL calculée par l'IIFE obfusquée (vidzy, et le VRAI flux
+    // de fsvid) et l'URL en clair. fsvid met le vrai flux dans l'IIFE À CÔTÉ d'un
+    // leurre /troll/ en clair -> on préfère toute URL NON-leurre (obfusquée d'abord).
+    const decoded = evalObfuscatedUrl(js);
+    const plain = findStreamUrl(js);
+    const url = [decoded, plain].find(u => u && !isDecoyUrl(u)) || null;
     if (!url) {
-      console.log(`[Extractor] URL de flux introuvable après dépack: ${embedUrl}`);
+      console.log(`[Extractor] pas de flux (non-leurre) après dépack: ${embedUrl}`);
       return null;
     }
     return {
