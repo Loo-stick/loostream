@@ -231,6 +231,19 @@
             color: #888;
             font-size: 0.85em;
         }
+        .lang-item .lang-toggle {
+            width: 18px;
+            height: 18px;
+            cursor: pointer;
+            flex-shrink: 0;
+            accent-color: #7f5af0;
+        }
+        .lang-item.excluded {
+            opacity: 0.4;
+        }
+        .lang-item.excluded .lang-name {
+            text-decoration: line-through;
+        }
         .lang-item .position {
             background: #7f5af0;
             color: #fff;
@@ -346,27 +359,31 @@
             </div>
 
             <div class="input-group show" style="margin-top: 20px;">
-                <label>Ordre de préférence des langues (glisser pour réordonner)</label>
+                <label>Langues — décocher pour exclure, glisser pour réordonner</label>
                 <ul class="lang-list" id="lang-list">
                     <li class="lang-item" draggable="true" data-lang="MULTI">
+                        <input type="checkbox" class="lang-toggle" draggable="false" checked onmousedown="event.stopPropagation()">
                         <span class="position">1</span>
                         <span class="drag-handle">☰</span>
                         <span class="lang-name">MULTI</span>
                         <span class="lang-desc">VF + VO</span>
                     </li>
                     <li class="lang-item" draggable="true" data-lang="VF">
+                        <input type="checkbox" class="lang-toggle" draggable="false" checked onmousedown="event.stopPropagation()">
                         <span class="position">2</span>
                         <span class="drag-handle">☰</span>
                         <span class="lang-name">VF</span>
                         <span class="lang-desc">Version Française</span>
                     </li>
                     <li class="lang-item" draggable="true" data-lang="VOSTFR">
+                        <input type="checkbox" class="lang-toggle" draggable="false" checked onmousedown="event.stopPropagation()">
                         <span class="position">3</span>
                         <span class="drag-handle">☰</span>
                         <span class="lang-name">VOSTFR</span>
                         <span class="lang-desc">VO sous-titrée FR</span>
                     </li>
                     <li class="lang-item" draggable="true" data-lang="VO">
+                        <input type="checkbox" class="lang-toggle" draggable="false" checked onmousedown="event.stopPropagation()">
                         <span class="position">4</span>
                         <span class="drag-handle">☰</span>
                         <span class="lang-name">VO</span>
@@ -440,6 +457,10 @@
             // Add preferences
             config.prefQuality = document.getElementById('pref-quality').value;
             config.langOrder = getLangOrder();
+            if (config.langOrder.length === 0) {
+                alert('Cochez au moins une langue.');
+                return;
+            }
             config.minStreams = parseInt(document.getElementById('min-streams').value, 10);
 
             // Clé d'accès optionnelle (seulement si l'hébergeur l'exige)
@@ -456,7 +477,29 @@
         // Get language order from drag & drop list
         function getLangOrder() {
             const items = document.querySelectorAll('#lang-list .lang-item');
-            return Array.from(items).map(item => item.dataset.lang);
+            // Uniquement les langues COCHÉES (les décochées sont exclues), dans l'ordre.
+            return Array.from(items)
+                .filter(item => item.querySelector('.lang-toggle').checked)
+                .map(item => item.dataset.lang);
+        }
+
+        // Coche/décoche un item + met à jour son style (barré/estompé).
+        function setLangChecked(item, checked) {
+            const cb = item.querySelector('.lang-toggle');
+            if (cb) cb.checked = checked;
+            item.classList.toggle('excluded', !checked);
+        }
+
+        // Branche les cases à cocher (style + masque le résultat au changement).
+        function setupLangToggles() {
+            document.querySelectorAll('#lang-list .lang-toggle').forEach(cb => {
+                const item = cb.closest('.lang-item');
+                item.classList.toggle('excluded', !cb.checked);
+                cb.addEventListener('change', () => {
+                    item.classList.toggle('excluded', !cb.checked);
+                    document.getElementById('result')?.classList.remove('show');
+                });
+            });
         }
 
         // Update position numbers after reorder
@@ -582,17 +625,19 @@
                 items[item.dataset.lang] = item;
             });
 
-            // Clear and re-add in order
+            // Clear and re-add in order — langues du config = COCHÉES, dans l'ordre.
             list.innerHTML = '';
             order.forEach(lang => {
                 if (items[lang]) {
+                    setLangChecked(items[lang], true);
                     list.appendChild(items[lang]);
                 }
             });
 
-            // Add any missing languages at the end
+            // Langues absentes du config = EXCLUES (décochées), à la fin.
             Object.keys(items).forEach(lang => {
                 if (!order.includes(lang)) {
+                    setLangChecked(items[lang], false);
                     list.appendChild(items[lang]);
                 }
             });
@@ -617,6 +662,7 @@
             selectMode(def);
             initDragAndDrop();
             loadExistingConfig();
+            setupLangToggles();
             // Si le config de l'URL demande un mode désormais interdit, revenir au défaut.
             if (!modes.includes(currentMode)) selectMode(def);
         }
