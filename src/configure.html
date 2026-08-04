@@ -259,7 +259,7 @@
             <div class="option selected" data-mode="mediaflow" onclick="selectMode('mediaflow')">
                 <h3>
                     <span>☁️</span> MediaFlow Proxy
-                    <span class="badge">Recommandé</span>
+                    <span class="badge">Partagé / public</span>
                 </h3>
                 <p>Tout ce qui peut se lire en <strong>direct</strong> passe en direct (0 bande passante). Ce qui ne peut pas (NetMirror, hôtes bloqués) passe par un serveur MediaFlow externe. Idéal pour un usage partagé ou public.</p>
             </div>
@@ -285,7 +285,7 @@
             <div class="option" data-mode="direct" onclick="selectMode('direct')">
                 <h3>
                     <span>🚀</span> Direct — sans proxy
-                    <span class="badge">Self-host</span>
+                    <span class="badge">Recommandé</span>
                 </h3>
                 <p>Stremio lit directement depuis les CDN. <strong>Zéro bande passante serveur.</strong> Les flux qui nécessitent un proxy (NetMirror, hôtes bloqués) ne sont <strong>pas proposés</strong>. Recommandé sur Stremio natif (le player web bute sur le CORS).</p>
             </div>
@@ -600,10 +600,27 @@
             updatePositions();
         }
 
-        // Init
-        selectMode('mediaflow');
-        initDragAndDrop();
-        loadExistingConfig();
+        // Init : les modes proposés sont pilotés par MODE (.env) via /api/modes.
+        async function init() {
+            let modes = ['direct', 'mediaflow', 'local'];
+            let def = 'mediaflow';
+            try {
+                const j = await (await fetch('/api/modes')).json();
+                if (Array.isArray(j.modes) && j.modes.length) { modes = j.modes; def = j.default || modes[0]; }
+            } catch (e) { /* fallback : tous */ }
+
+            // Masquer les options non autorisées par l'hébergeur.
+            document.querySelectorAll('.option[data-mode]').forEach(opt => {
+                if (!modes.includes(opt.dataset.mode)) opt.style.display = 'none';
+            });
+
+            selectMode(def);
+            initDragAndDrop();
+            loadExistingConfig();
+            // Si le config de l'URL demande un mode désormais interdit, revenir au défaut.
+            if (!modes.includes(currentMode)) selectMode(def);
+        }
+        init();
     </script>
 </body>
 </html>

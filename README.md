@@ -68,7 +68,7 @@ npm start
 Accédez à `http://localhost:7002/configure` pour configurer l'addon via une interface web :
 
 1. **Clé API TMDB** - Obtenez-la gratuitement sur [themoviedb.org](https://www.themoviedb.org/settings/api)
-2. **Mode Proxy** - Choisissez entre MediaFlow (recommandé) ou Proxy Local
+2. **Mode de livraison** - Direct (recommandé, sans proxy), MediaFlow ou Proxy Local (voir [Modes de livraison](#modes-de-livraison))
 3. **Générer le lien** - Un lien d'installation personnalisé sera généré
 
 Chaque utilisateur peut avoir sa propre configuration encodée dans l'URL de l'addon.
@@ -101,20 +101,32 @@ MEDIAFLOW_PASSWORD=votre_mot_de_passe
 | `MEDIAFLOW_URL` | URL MediaFlow (publique) | Si USE_LOCAL_PROXY=false |
 | `MEDIAFLOW_PASSWORD` | Mot de passe MediaFlow (partagé avec le conteneur bundlé) | Si USE_LOCAL_PROXY=false |
 | `MEDIAFLOW_PORT` | Port hôte du MediaFlow bundlé (profil `mediaflow`) | Non (défaut: 8888) |
+| `MODE` | Modes de livraison proposés dans `/configure` (`DIRECT`, `MFP`, `LOCAL`, séparés par `;`). Vide = les trois. Ex. `MODE=DIRECT;MFP` | Non (défaut: tous) |
+| `ACCESS_KEY` | Clé d'accès optionnelle : protège tout l'addon (401/403 sans la clé). Vide = libre accès | Non (défaut: vide) |
 | `AUTO_WHITELIST` | `true` = whitelist auto des nouveaux domaines de sources (voir [Maintenance des sources](#maintenance-des-sources)) | Non (défaut: false) |
 | `ADMIN_USER` / `ADMIN_PASS` | Active le dashboard `/admin`. Vides = `/admin` renvoie 503 | Non |
 | `SESSION_SECRET` | Signe les sessions admin. Vide = clé aléatoire par démarrage | Non |
 
 > Voir `.env.example` pour la liste complète et commentée (dont les overrides avancés `NETMIRROR_API_BASE`, chemins de config…).
 
-### Mode Proxy
+### Modes de livraison
 
-| Mode | Description | Bande passante serveur | Usage recommandé |
-|------|-------------|------------------------|------------------|
-| **MediaFlow** | Flux via serveur MediaFlow externe | Faible | Public / Multi-users / Stremio Web |
-| **Proxy Local** | Flux via ce serveur | Élevée | Usage perso / 1-3 users / Apps natives |
+**Le direct est toujours prioritaire** : tout flux jouable en direct (la majorité)
+est livré CDN → client, **sans passer par le serveur** (0 bande passante). Le mode
+choisi ne décide que du **repli** pour les flux non-directables (NetMirror, hôtes
+bloqués par le FAI…) :
 
-> **Note** : Le proxy local peut avoir des problèmes de décodage sur Stremio Web. Utilisez MediaFlow pour le web.
+| Mode | Repli des non-directables | Bande passante serveur | Usage recommandé |
+|------|---------------------------|------------------------|------------------|
+| **🚀 Direct** | *aucun* — ces flux ne sont pas proposés | **~0** | Self-host, apps natives |
+| **☁️ MediaFlow** | via serveur MediaFlow externe | Faible | Public / multi-users / Stremio Web |
+| **🏠 Proxy Local** | via ce serveur | Moyenne | Usage perso / 1-3 users |
+
+Chaque flux affiche son mode réel dans sa description (**🚀 Direct** / **🏠 Proxy** / **☁️ MFP**).
+
+> **Notes** :
+> - Le **direct** requiert une app Stremio **native** (desktop/mobile/box) — le player **web** bute sur le CORS. Pour le web, utilisez MediaFlow.
+> - L'hébergeur peut restreindre les modes proposés via `MODE` dans le `.env` (ex. `MODE=DIRECT;MFP`).
 
 ## Maintenance des sources
 

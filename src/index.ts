@@ -162,6 +162,20 @@ function sanitizeString(str: string, maxLength: number = 200): string {
   return str.slice(0, maxLength).replace(/[<>]/g, ''); // Remove potential XSS chars
 }
 
+// Modes de livraison PROPOSÉS/AUTORISÉS par l'hébergeur, via `MODE` du .env
+// (ex. "DIRECT;MFP;LOCAL"). Vide = les trois. Alias : MFP=mediaflow. L'ordre est
+// l'ordre de préférence (le 1er est le défaut dans /configure). Sert à la fois
+// à l'UI (/api/modes) et au garde de parseConfig.
+const MODE_ALIAS: Record<string, 'direct' | 'mediaflow' | 'local'> = {
+  direct: 'direct', mfp: 'mediaflow', mediaflow: 'mediaflow', local: 'local',
+};
+function allowedModes(): ('direct' | 'mediaflow' | 'local')[] {
+  const raw = (process.env.MODE || '').trim();
+  if (!raw) return ['direct', 'mediaflow', 'local'];
+  const list = raw.split(/[;,]/).map(s => MODE_ALIAS[s.trim().toLowerCase()]).filter(Boolean);
+  return list.length ? [...new Set(list)] as ('direct' | 'mediaflow' | 'local')[] : ['direct', 'mediaflow', 'local'];
+}
+
 // Parse and validate config from base64 URL param
 function parseConfig(configStr: string): UserConfig | null {
   try {
@@ -179,6 +193,10 @@ function parseConfig(configStr: string): UserConfig | null {
       console.warn('[Config] Invalid proxy type');
       return null;
     }
+    // Garde MODE : si l'hébergeur restreint les modes (env MODE) et que le config
+    // en demande un non autorisé, on le ramène au 1er mode autorisé.
+    const allowed = allowedModes();
+    const proxy: 'local' | 'mediaflow' | 'direct' = allowed.includes(parsed.proxy) ? parsed.proxy : allowed[0];
 
     // Validate MediaFlow URL if provided
     if (parsed.mfUrl && !isValidUrl(parsed.mfUrl)) {
@@ -212,7 +230,7 @@ function parseConfig(configStr: string): UserConfig | null {
 
     // Sanitize strings
     return {
-      proxy: parsed.proxy,
+      proxy,
       mfUrl: parsed.mfUrl ? sanitizeString(parsed.mfUrl, 500) : undefined,
       mfPass: parsed.mfPass ? sanitizeString(parsed.mfPass, 100) : undefined,
       tmdbKey: parsed.tmdbKey ? sanitizeString(parsed.tmdbKey, 64) : undefined,
@@ -1633,6 +1651,12 @@ app.get('/netmirror/video.m3u8', (req, res) => {
   res.setHeader('Content-Type', 'application/vnd.apple.mpegurl');
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.send(out.join('\n') + '\n');
+});
+
+// Modes de livraison proposés (pilotés par MODE du .env) — lu par /configure.
+app.get('/api/modes', (_req, res) => {
+  const modes = allowedModes();
+  res.json({ modes, default: modes[0] });
 });
 
 // Stats endpoint
