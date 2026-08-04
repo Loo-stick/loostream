@@ -576,17 +576,44 @@ function buildProxyUrl(
 // behaviorHints.proxyHeaders et Stremio fetch en direct (0 bande passante
 // serveur). Sinon, comportement actuel via buildProxyUrl (proxy local/mediaflow).
 // `null` = URL bloquée (SSRF) côté proxy.
-function deliver(
+// Un hôte exige-t-il des en-têtes (Referer/Origin) pour livrer, ou le token dans
+// l'URL suffit-il ? Caché par hôte (6h). Détermine, en direct, si on peut servir
+// l'URL BRUTE (notWebReady:false -> lecteur natif Stremio, rapide + parallèle) ou
+// s'il faut proxyHeaders (notWebReady:true -> serveur interne Stremio, plus lent).
+const HOSTHDR_TTL_MS = 6 * 60 * 60 * 1000;
+async function hostNeedsHeaders(streamUrl: string): Promise<boolean> {
+  let host: string;
+  try { host = new URL(streamUrl).hostname; } catch { return true; }
+  return cached<boolean>(
+    `hosthdr:${host}`,
+    HOSTHDR_TTL_MS,
+    async () => {
+      try {
+        const r = await axios.get(streamUrl, {
+          headers: { 'User-Agent': 'Mozilla/5.0', Range: 'bytes=0-1' },
+          validateStatus: () => true, timeout: 4000, maxRedirects: 3, responseType: 'arraybuffer',
+        });
+        return !(r.status === 200 || r.status === 206); // 200/206 sans Referer -> header-free
+      } catch { return true; } // doute -> chemin sûr (avec headers)
+    },
+    { scope: 'hosthdr', shouldCache: () => true },
+  );
+}
+
+async function deliver(
   streamUrl: string,
   headers: Record<string, string>,
   opts: { forceLocal?: boolean; forceHls?: boolean; useTransformer?: boolean },
   req: express.Request,
   config: UserConfig | null,
-): { url: string; proxyHeaders?: Record<string, string> } | null {
+): Promise<{ url: string; proxyHeaders?: Record<string, string> } | null> {
   // Direct TOUJOURS prioritaire, quel que soit le mode : tout hôte directable
   // est livré en direct (0 bande passante serveur).
   if (canDirect(streamUrl, !!opts.forceLocal)) {
-    return { url: streamUrl, proxyHeaders: headers };
+    // Hôte header-free -> URL brute (lecteur natif Stremio, rapide). Sinon
+    // proxyHeaders (nécessaire, mais passe par le serveur interne Stremio, lent).
+    const needsHdr = await hostNeedsHeaders(streamUrl);
+    return needsHdr ? { url: streamUrl, proxyHeaders: headers } : { url: streamUrl };
   }
   // Flux NON-directable (NetMirror / hôte bloqué) : le mode choisit le fallback.
   // 'direct' = « sans proxy » -> on n'offre pas ce flux du tout.
@@ -900,7 +927,7 @@ async function handleStream(req: express.Request, res: express.Response, type: s
         // stream plays but every subtitle track is silently missing. The API
         // already tells us the format — trust it over the extension.
         const isHls = mv.format === 'm3u8';
-        const d = deliver(mv.url, proxyHeaders, { forceHls: isHls }, req, config);
+        const d = await deliver(mv.url, proxyHeaders, { forceHls: isHls }, req, config);
 
         if (!d) continue; // Skip blocked URLs
         finalUrl = d.url;
@@ -961,7 +988,7 @@ async function handleStream(req: express.Request, res: express.Response, type: s
 
     // Process StreamFlix results
     for (const sf of streamflixResults) {
-      const d = deliver(sf.url, {
+      const d = await deliver(sf.url, {
         'Referer': 'https://api.streamflix.app/',
         'Origin': 'https://api.streamflix.app',
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
@@ -986,7 +1013,7 @@ async function handleStream(req: express.Request, res: express.Response, type: s
 
     // Process Wiflix results (API Movix, tmdbId-keyed — pas de scraping).
     for (const wf of wiflixResults) {
-      const d = deliver(wf.url, {
+      const d = await deliver(wf.url, {
         ...(wf.headers || {}),
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
       }, {}, req, config);
@@ -1011,7 +1038,7 @@ async function handleStream(req: express.Request, res: express.Response, type: s
 
     // Process VoirDrama results (dramas asiatiques, API Movix, séries seulement).
     for (const vd of voirdramaResults) {
-      const d = deliver(vd.url, {
+      const d = await deliver(vd.url, {
         ...(vd.headers || {}),
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
       }, {}, req, config);
@@ -1036,7 +1063,7 @@ async function handleStream(req: express.Request, res: express.Response, type: s
 
     // Process VoirAnime results (anime VF/VOSTFR, scraping voir-anime.to).
     for (const va of voiranimeResults) {
-      const d = deliver(va.url, {
+      const d = await deliver(va.url, {
         ...(va.headers || {}),
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
       }, {}, req, config);
@@ -1064,7 +1091,7 @@ async function handleStream(req: express.Request, res: express.Response, type: s
     // ressource /subtitles (handleSubtitles), seul mécanisme que Nuvio consomme.
     // Un double-listage (stream + ressource) faisait empiler les pistes.
     for (const nb of nabistreamResults) {
-      const d = deliver(nb.url, {
+      const d = await deliver(nb.url, {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
       }, { forceHls: true }, req, config);
 
@@ -1088,7 +1115,7 @@ async function handleStream(req: express.Request, res: express.Response, type: s
 
     // Process Coflix results (films/séries FR VF+VOSTFR, HLS extrait des hôtes).
     for (const cf of coflixResults) {
-      const d = deliver(cf.url, {
+      const d = await deliver(cf.url, {
         ...(cf.headers || {}),
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
       }, { forceHls: true }, req, config);
@@ -1162,7 +1189,7 @@ async function handleStream(req: express.Request, res: express.Response, type: s
           'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
           ...fr.headers,
         };
-        const d = deliver(fr.url, proxyHeaders, {}, req, config);
+        const d = await deliver(fr.url, proxyHeaders, {}, req, config);
         if (!d) continue;
         finalUrl = d.url;
         proxyHdrs = d.proxyHeaders;
