@@ -575,6 +575,21 @@ function deliver(
   return url ? { url } : null;
 }
 
+// Déduit le mode de livraison d'un flux finalisé (pour le badge d'affichage) :
+// direct (CDN->client, 0 relais), local (notre /proxy ou /netmirror) ou mediaflow.
+function computeDelivery(url: string, hasProxyHeaders: boolean, config: UserConfig | null): 'direct' | 'local' | 'mediaflow' {
+  if (hasProxyHeaders) return 'direct';
+  // MediaFlow d'ABORD : ses URLs contiennent /proxy/hls/ dans le chemin, il ne
+  // faut pas les confondre avec notre proxy local (distinction par l'hôte).
+  const mfUrl = config?.mfUrl || DEFAULT_MEDIAFLOW_URL;
+  if (mfUrl) {
+    try { if (new URL(url).hostname.includes(new URL(mfUrl).hostname)) return 'mediaflow'; } catch { /* ignore */ }
+  }
+  if (url.includes('/proxy/') || url.includes('/netmirror/')) return 'local';
+  if (url.includes('/moviebox/')) return 'direct'; // 302 -> CDN, aucun relais serveur
+  return 'direct'; // URL CDN brute sans en-têtes = pas de relais
+}
+
 // CORS for Stremio
 app.use((_req, res, next) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -1173,11 +1188,13 @@ async function handleStream(req: express.Request, res: express.Response, type: s
         codec: d._meta.codec,
         provider: providerLabel(d._meta.source),
       });
+      const delivery = computeDelivery(d.url, !!d.behaviorHints?.proxyHeaders, config);
+      const meta = { ...d._meta, delivery };
       return {
         ...d,
         behaviorHints: { ...d.behaviorHints, filename },
-        name: buildStreamName(d._meta),
-        title: buildStreamTitle(d._meta, info.originalLanguage, filename),
+        name: buildStreamName(meta),
+        title: buildStreamTitle(meta, info.originalLanguage, filename),
       };
     });
 

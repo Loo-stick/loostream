@@ -14,6 +14,19 @@ export interface DisplayMeta {
   platform?: string;
   sizeBytes?: number;
   subCount?: number;
+  delivery?: 'direct' | 'local' | 'mediaflow'; // mode de livraison du flux
+}
+
+// Badge du mode de livraison, pour voir d'un coup d'œil si un flux coûte de la
+// bande passante serveur. Direct = CDN -> client (0 relais) ; Proxy = via ce
+// serveur ; MFP = via MediaFlow.
+export function deliveryChip(delivery?: string): string {
+  switch (delivery) {
+    case 'direct': return '🚀 Direct';
+    case 'local': return '🏠 Proxy';
+    case 'mediaflow': return '☁️ MFP';
+    default: return '';
+  }
 }
 
 // Tag qualité brut -> "emoji résolution". Beaucoup de sources FR ne renvoient
@@ -74,7 +87,8 @@ export function buildStreamName(m: DisplayMeta): string {
 // Ligne 2 = [serveur] [· n sous-titres]. Ligne 3 = 💾 nom de fichier (scène) si
 // fourni. On saute toute ligne vide.
 export function buildStreamTitle(m: DisplayMeta, originalLanguage?: string, filename?: string): string {
-  const line1 = [languageChip(m.language, originalLanguage)];
+  const badge = deliveryChip(m.delivery);
+  const line1 = badge ? [badge, languageChip(m.language, originalLanguage)] : [languageChip(m.language, originalLanguage)];
   const codec = codecChip(m.codec);
   if (codec) line1.push(`🧬 ${codec}`);
   const size = m.sizeBytes ? humanSize(m.sizeBytes) : '';
