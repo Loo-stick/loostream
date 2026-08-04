@@ -837,6 +837,7 @@ async function handleStream(req: express.Request, res: express.Response, type: s
     // Process Movix results
     for (const mv of movixResults) {
       let finalUrl: string;
+      let proxyHdrs: Record<string, string> | undefined; // posé si livraison directe
 
       // Check if URL is already a MediaFlow URL (from extractor)
       const mfUrl = config?.mfUrl || DEFAULT_MEDIAFLOW_URL;
@@ -859,17 +860,19 @@ async function handleStream(req: express.Request, res: express.Response, type: s
         // stream plays but every subtitle track is silently missing. The API
         // already tells us the format — trust it over the extension.
         const isHls = mv.format === 'm3u8';
-        const proxiedUrl = buildProxyUrl(mv.url, proxyHeaders, false, req, config, false, isHls);
+        const d = deliver(mv.url, proxyHeaders, { forceHls: isHls }, req, config);
 
-        if (!proxiedUrl) continue; // Skip blocked URLs
-        finalUrl = proxiedUrl;
+        if (!d) continue; // Skip blocked URLs
+        finalUrl = d.url;
+        proxyHdrs = d.proxyHeaders;
       }
 
       drafts.push({
         url: finalUrl,
         behaviorHints: {
-          notWebReady: false,
+          notWebReady: !!proxyHdrs,
           bingeGroup: 'movix',
+          ...(proxyHdrs ? { proxyHeaders: { request: proxyHdrs } } : {}),
         },
         _meta: {
           quality: mv.quality,
@@ -917,19 +920,20 @@ async function handleStream(req: express.Request, res: express.Response, type: s
 
     // Process StreamFlix results
     for (const sf of streamflixResults) {
-      const proxiedUrl = buildProxyUrl(sf.url, {
+      const d = deliver(sf.url, {
         'Referer': 'https://api.streamflix.app/',
         'Origin': 'https://api.streamflix.app',
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-      }, false, req, config);
+      }, {}, req, config);
 
-      if (!proxiedUrl) continue; // Skip blocked URLs
+      if (!d) continue; // Skip blocked URLs
 
       drafts.push({
-        url: proxiedUrl,
+        url: d.url,
         behaviorHints: {
-          notWebReady: false,
+          notWebReady: !!d.proxyHeaders,
           bingeGroup: 'streamflix',
+          ...(d.proxyHeaders ? { proxyHeaders: { request: d.proxyHeaders } } : {}),
         },
         _meta: {
           quality: sf.quality,
@@ -941,18 +945,19 @@ async function handleStream(req: express.Request, res: express.Response, type: s
 
     // Process Wiflix results (API Movix, tmdbId-keyed — pas de scraping).
     for (const wf of wiflixResults) {
-      const proxiedUrl = buildProxyUrl(wf.url, {
+      const d = deliver(wf.url, {
         ...(wf.headers || {}),
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-      }, false, req, config);
+      }, {}, req, config);
 
-      if (!proxiedUrl) continue; // Skip blocked URLs
+      if (!d) continue; // Skip blocked URLs
 
       drafts.push({
-        url: proxiedUrl,
+        url: d.url,
         behaviorHints: {
-          notWebReady: false,
+          notWebReady: !!d.proxyHeaders,
           bingeGroup: `wiflix-${wf.server}`,
+          ...(d.proxyHeaders ? { proxyHeaders: { request: d.proxyHeaders } } : {}),
         },
         _meta: {
           quality: wf.quality,
@@ -965,18 +970,19 @@ async function handleStream(req: express.Request, res: express.Response, type: s
 
     // Process VoirDrama results (dramas asiatiques, API Movix, séries seulement).
     for (const vd of voirdramaResults) {
-      const proxiedUrl = buildProxyUrl(vd.url, {
+      const d = deliver(vd.url, {
         ...(vd.headers || {}),
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-      }, false, req, config);
+      }, {}, req, config);
 
-      if (!proxiedUrl) continue; // Skip blocked URLs
+      if (!d) continue; // Skip blocked URLs
 
       drafts.push({
-        url: proxiedUrl,
+        url: d.url,
         behaviorHints: {
-          notWebReady: false,
+          notWebReady: !!d.proxyHeaders,
           bingeGroup: `voirdrama-${vd.server}`,
+          ...(d.proxyHeaders ? { proxyHeaders: { request: d.proxyHeaders } } : {}),
         },
         _meta: {
           quality: vd.quality,
@@ -989,18 +995,19 @@ async function handleStream(req: express.Request, res: express.Response, type: s
 
     // Process VoirAnime results (anime VF/VOSTFR, scraping voir-anime.to).
     for (const va of voiranimeResults) {
-      const proxiedUrl = buildProxyUrl(va.url, {
+      const d = deliver(va.url, {
         ...(va.headers || {}),
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-      }, false, req, config);
+      }, {}, req, config);
 
-      if (!proxiedUrl) continue; // Skip blocked URLs
+      if (!d) continue; // Skip blocked URLs
 
       drafts.push({
-        url: proxiedUrl,
+        url: d.url,
         behaviorHints: {
-          notWebReady: false,
+          notWebReady: !!d.proxyHeaders,
           bingeGroup: `voiranime-${va.server}`,
+          ...(d.proxyHeaders ? { proxyHeaders: { request: d.proxyHeaders } } : {}),
         },
         _meta: {
           quality: va.quality,
@@ -1016,17 +1023,18 @@ async function handleStream(req: express.Request, res: express.Response, type: s
     // ressource /subtitles (handleSubtitles), seul mécanisme que Nuvio consomme.
     // Un double-listage (stream + ressource) faisait empiler les pistes.
     for (const nb of nabistreamResults) {
-      const proxiedUrl = buildProxyUrl(nb.url, {
+      const d = deliver(nb.url, {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-      }, false, req, config, false, true);
+      }, { forceHls: true }, req, config);
 
-      if (!proxiedUrl) continue; // Skip blocked URLs
+      if (!d) continue; // Skip blocked URLs
 
       drafts.push({
-        url: proxiedUrl,
+        url: d.url,
         behaviorHints: {
-          notWebReady: false,
+          notWebReady: !!d.proxyHeaders,
           bingeGroup: 'nabistream',
+          ...(d.proxyHeaders ? { proxyHeaders: { request: d.proxyHeaders } } : {}),
         },
         _meta: {
           quality: nb.quality,
@@ -1039,18 +1047,19 @@ async function handleStream(req: express.Request, res: express.Response, type: s
 
     // Process Coflix results (films/séries FR VF+VOSTFR, HLS extrait des hôtes).
     for (const cf of coflixResults) {
-      const proxiedUrl = buildProxyUrl(cf.url, {
+      const d = deliver(cf.url, {
         ...(cf.headers || {}),
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-      }, false, req, config, false, true);
+      }, { forceHls: true }, req, config);
 
-      if (!proxiedUrl) continue; // Skip blocked URLs
+      if (!d) continue; // Skip blocked URLs
 
       drafts.push({
-        url: proxiedUrl,
+        url: d.url,
         behaviorHints: {
-          notWebReady: false,
+          notWebReady: !!d.proxyHeaders,
           bingeGroup: `coflix-${cf.server}`,
+          ...(d.proxyHeaders ? { proxyHeaders: { request: d.proxyHeaders } } : {}),
         },
         _meta: {
           quality: cf.quality,
@@ -1100,6 +1109,7 @@ async function handleStream(req: express.Request, res: express.Response, type: s
     // Process FrenchStream results
     for (const fr of frenchstreamResults) {
       let finalUrl: string;
+      let proxyHdrs: Record<string, string> | undefined; // posé si livraison directe
 
       const mfUrl = config?.mfUrl || DEFAULT_MEDIAFLOW_URL;
       const isMediaFlowUrl = mfUrl && fr.url.includes(new URL(mfUrl).hostname);
@@ -1111,16 +1121,18 @@ async function handleStream(req: express.Request, res: express.Response, type: s
           'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
           ...fr.headers,
         };
-        const proxiedUrl = buildProxyUrl(fr.url, proxyHeaders, false, req, config);
-        if (!proxiedUrl) continue;
-        finalUrl = proxiedUrl;
+        const d = deliver(fr.url, proxyHeaders, {}, req, config);
+        if (!d) continue;
+        finalUrl = d.url;
+        proxyHdrs = d.proxyHeaders;
       }
 
       drafts.push({
         url: finalUrl,
         behaviorHints: {
-          notWebReady: false,
+          notWebReady: !!proxyHdrs,
           bingeGroup: 'frenchstream',
+          ...(proxyHdrs ? { proxyHeaders: { request: proxyHdrs } } : {}),
         },
         _meta: {
           quality: fr.quality,
