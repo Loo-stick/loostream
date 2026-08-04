@@ -74,7 +74,8 @@ drafts.push({
 - Note UI : « Stremio lit depuis les CDN, aucune bande passante serveur. NetMirror et quelques hôtes repassent par le proxy. Stremio natif recommandé (le web bute sur le CORS). »
 
 ## Inchangé
-- **NetMirror** : `forceLocal` → toujours proxy local (marche). **MovieBox** : endpoint `/moviebox/stream` (302) inchangé.
+- **NetMirror** : `forceLocal` → toujours proxy local (marche).
+- **MovieBox** : **DÉJÀ direct dans tous les modes**. `/moviebox/stream` résout l'URL CDN brute (`resourceLink`, MP4) et fait `res.redirect(302, url)` → le player streame depuis le CDN, la vidéo ne transite jamais par le serveur. On garde le 302 (résolution **fraîche à la lecture**, car les URLs MovieBox sont éphémères — les mettre en brut dans le draft à l'affichage donnerait des liens périmés). Le CDN aoneroom est permissif (token en URL, pas de Referer) → pas besoin de `proxyHeaders` ; si ça changeait, on en ajouterait. **Inchangé.**
 - **Clé d'accès** : les flux qui repassent par le proxy portent toujours `?k=`.
 
 ## Limites (documentées côté UI/README)
