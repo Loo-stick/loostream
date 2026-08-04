@@ -580,10 +580,26 @@ function buildProxyUrl(
 // l'URL suffit-il ? Caché par hôte (6h). Détermine, en direct, si on peut servir
 // l'URL BRUTE (notWebReady:false -> lecteur natif Stremio, rapide + parallèle) ou
 // s'il faut proxyHeaders (notWebReady:true -> serveur interne Stremio, plus lent).
+// UA navigateur injecté dans les proxyHeaders des hôtes header-gatés.
+const BROWSER_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
+
+// Hôtes qui servent une MIRE (/troll/ de ~18s) selon l'User-Agent : ils exigent
+// un UA « navigateur » et trollent les UA de lecteur. PROUVÉ pour fsvid : même URL
+// index, UA navigateur -> vrai film (650 seg) ; ExoPlayerLib/okhttp/VLC -> mire
+// (9 seg / 18s). Nuvio lit via ExoPlayer -> troll en URL brute. Ces hôtes doivent
+// donc être servis AVEC proxyHeaders (UA navigateur), jamais en URL brute — le
+// lecteur injecte alors le bon UA. Onyx fait pareil (headers navigateur complets).
+const UA_GATED_HOSTS = ['fsvid'];
+function isUaGatedHost(host: string): boolean {
+  return UA_GATED_HOSTS.some(p => host.includes(p));
+}
+
 const HOSTHDR_TTL_MS = 6 * 60 * 60 * 1000;
 async function hostNeedsHeaders(streamUrl: string): Promise<boolean> {
   let host: string;
   try { host = new URL(streamUrl).hostname; } catch { return true; }
+  // Hôte qui troll selon l'UA -> exige des headers (UA navigateur), pas d'URL brute.
+  if (isUaGatedHost(host)) return true;
   return cached<boolean>(
     `hosthdr:${host}`,
     HOSTHDR_TTL_MS,
@@ -613,7 +629,11 @@ async function deliver(
     // Hôte header-free -> URL brute (lecteur natif Stremio, rapide). Sinon
     // proxyHeaders (nécessaire, mais passe par le serveur interne Stremio, lent).
     const needsHdr = await hostNeedsHeaders(streamUrl);
-    return needsHdr ? { url: streamUrl, proxyHeaders: headers } : { url: streamUrl };
+    if (!needsHdr) return { url: streamUrl };
+    // Header-gaté : garantir un UA navigateur dans les proxyHeaders (fsvid & co
+    // trollent les UA de lecteur ExoPlayer/okhttp). Un UA explicite de l'extracteur
+    // reste prioritaire ; sinon on force le navigateur.
+    return { url: streamUrl, proxyHeaders: { 'User-Agent': BROWSER_UA, ...headers } };
   }
   // Flux NON-directable (NetMirror / hôte bloqué) : le mode choisit le fallback.
   // 'direct' = « sans proxy » -> on n'offre pas ce flux du tout.
