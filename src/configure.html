@@ -282,6 +282,14 @@
                 <p>Les flux passent directement par ce serveur. Aucune dépendance externe. Réservé à un usage personnel (1-3 utilisateurs max).</p>
             </div>
 
+            <div class="option" data-mode="direct" onclick="selectMode('direct')">
+                <h3>
+                    <span>🚀</span> Direct — sans proxy
+                    <span class="badge">Self-host</span>
+                </h3>
+                <p>Stremio lit directement depuis les CDN. <strong>Zéro bande passante serveur.</strong> NetMirror et quelques hôtes repassent par le proxy. Recommandé sur Stremio natif (le player web bute sur le CORS).</p>
+            </div>
+
             <div class="warning-box" id="local-warning">
                 <p>⚠️ <strong>Attention :</strong> En mode local, TOUT le trafic vidéo passe par ce serveur. Un flux 4K consomme ~25 Mbps. Assurez-vous d'avoir une bande passante suffisante. Non recommandé pour un usage public.</p>
             </div>
@@ -425,7 +433,8 @@
                 config.mfUrl = url;
                 config.mfPass = password;
             } else {
-                config.proxy = 'local';
+                // 'local' ou 'direct' : pas de mfUrl/mfPass
+                config.proxy = currentMode;
             }
 
             // Add preferences
@@ -533,6 +542,8 @@
                     // Pre-fill proxy mode
                     if (config.proxy === 'local') {
                         selectMode('local');
+                    } else if (config.proxy === 'direct') {
+                        selectMode('direct');
                     } else {
                         selectMode('mediaflow');
                         if (config.mfUrl) {
