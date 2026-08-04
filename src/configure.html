@@ -261,7 +261,7 @@
                     <span>☁️</span> MediaFlow Proxy
                     <span class="badge">Recommandé</span>
                 </h3>
-                <p>Les flux passent par un serveur MediaFlow externe. Économise la bande passante du serveur addon. Idéal pour un usage partagé ou public.</p>
+                <p>Tout ce qui peut se lire en <strong>direct</strong> passe en direct (0 bande passante). Ce qui ne peut pas (NetMirror, hôtes bloqués) passe par un serveur MediaFlow externe. Idéal pour un usage partagé ou public.</p>
             </div>
 
             <div class="input-group" id="mf-config">
@@ -279,7 +279,7 @@
                     <span>🏠</span> Proxy Local
                     <span class="badge warning">Avancé</span>
                 </h3>
-                <p>Les flux passent directement par ce serveur. Aucune dépendance externe. Réservé à un usage personnel (1-3 utilisateurs max).</p>
+                <p>Tout ce qui peut se lire en <strong>direct</strong> passe en direct (0 bande passante). Ce qui ne peut pas (NetMirror, hôtes bloqués) passe par ce serveur. Aucune dépendance externe. Usage personnel (1-3 utilisateurs).</p>
             </div>
 
             <div class="option" data-mode="direct" onclick="selectMode('direct')">
@@ -287,7 +287,7 @@
                     <span>🚀</span> Direct — sans proxy
                     <span class="badge">Self-host</span>
                 </h3>
-                <p>Stremio lit directement depuis les CDN. <strong>Zéro bande passante serveur.</strong> NetMirror et quelques hôtes repassent par le proxy. Recommandé sur Stremio natif (le player web bute sur le CORS).</p>
+                <p>Stremio lit directement depuis les CDN. <strong>Zéro bande passante serveur.</strong> Les flux qui nécessitent un proxy (NetMirror, hôtes bloqués) ne sont <strong>pas proposés</strong>. Recommandé sur Stremio natif (le player web bute sur le CORS).</p>
             </div>
 
             <div class="warning-box" id="local-warning">

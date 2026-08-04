@@ -20,9 +20,11 @@ export function isDirectable(streamUrl: string): boolean {
 }
 
 /**
- * Livrer ce flux en direct ? Vrai seulement si : mode `direct`, pas de
- * `forceLocal` (NetMirror), et hôte directable. Fonction pure -> testable.
+ * Ce flux peut-il être livré en direct ? Vrai si l'hôte est directable et qu'il
+ * n'exige pas le proxy local (NetMirror / `forceLocal`). **Indépendant du mode** :
+ * le direct est toujours prioritaire ; le mode ne choisit que le *fallback* des
+ * flux non-directables (MFP / proxy local / rien). Fonction pure -> testable.
  */
-export function directDecision(streamUrl: string, forceLocal: boolean, proxy: string | undefined): boolean {
-  return proxy === 'direct' && !forceLocal && isDirectable(streamUrl);
+export function canDirect(streamUrl: string, forceLocal: boolean): boolean {
+  return !forceLocal && isDirectable(streamUrl);
 }

@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { isDirectable, directDecision, PROXY_FORCED_HOSTS } from './deliver';
+import { isDirectable, canDirect, PROXY_FORCED_HOSTS } from './deliver';
 
 test('isDirectable : hôte normal OK, hôte FAI-bloqué non, URL invalide non', () => {
   assert.equal(isDirectable('https://cuyyro04xrqrh.premilkyway.com/x.m3u8'), true);
@@ -10,14 +10,11 @@ test('isDirectable : hôte normal OK, hôte FAI-bloqué non, URL invalide non', 
   assert.equal(isDirectable('pas-une-url'), false);
 });
 
-test('directDecision : direct seulement si mode direct + directable + pas forceLocal', () => {
+test('canDirect : directable + pas forceLocal, INDÉPENDANT du mode proxy', () => {
   const ok = 'https://a.premilkyway.com/x.m3u8';
-  assert.equal(directDecision(ok, false, 'direct'), true);
-  assert.equal(directDecision(ok, true,  'direct'), false); // NetMirror (forceLocal)
-  assert.equal(directDecision('https://strm2.uqload.is/x', false, 'direct'), false); // bloqué
-  assert.equal(directDecision(ok, false, 'local'), false);   // pas le mode direct
-  assert.equal(directDecision(ok, false, 'mediaflow'), false);
-  assert.equal(directDecision(ok, false, undefined), false);
+  assert.equal(canDirect(ok, false), true);  // directable -> direct, quel que soit le mode
+  assert.equal(canDirect(ok, true),  false); // NetMirror (forceLocal) -> jamais direct
+  assert.equal(canDirect('https://strm2.uqload.is/x', false), false); // hôte bloqué
 });
 
 test('PROXY_FORCED_HOSTS contient au moins uqload et voe', () => {

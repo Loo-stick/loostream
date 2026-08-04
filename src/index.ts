@@ -17,7 +17,7 @@ import { recordOutcome, getAllMetrics } from './metrics';
 import crypto from 'crypto';
 import proxyRouter, { isAllowedUrl, addAllowedDomain, getAllowedDomains, AUTO_WHITELIST } from './proxy';
 import { accessEnabled, keyMatches, signUrl, requireQueryKey } from './access';
-import { directDecision } from './deliver';
+import { canDirect } from './deliver';
 import * as fsSync from 'fs';
 import { ExtractorConfig, reloadExtractorDomains, getExtractorDomains } from './extractors';
 import { getSceneMeta, buildFilename, providerLabel } from './filename';
@@ -565,9 +565,14 @@ function deliver(
   req: express.Request,
   config: UserConfig | null,
 ): { url: string; proxyHeaders?: Record<string, string> } | null {
-  if (directDecision(streamUrl, !!opts.forceLocal, config?.proxy)) {
+  // Direct TOUJOURS prioritaire, quel que soit le mode : tout hôte directable
+  // est livré en direct (0 bande passante serveur).
+  if (canDirect(streamUrl, !!opts.forceLocal)) {
     return { url: streamUrl, proxyHeaders: headers };
   }
+  // Flux NON-directable (NetMirror / hôte bloqué) : le mode choisit le fallback.
+  // 'direct' = « sans proxy » -> on n'offre pas ce flux du tout.
+  if (config?.proxy === 'direct') return null;
   const url = buildProxyUrl(
     streamUrl, headers, opts.useTransformer ?? false, req, config,
     opts.forceLocal ?? false, opts.forceHls ?? false,
@@ -902,7 +907,8 @@ async function handleStream(req: express.Request, res: express.Response, type: s
     // the LOCAL proxy: the segment token is IP-bound to the fetcher and the .jpg
     // segments need the local transformer -> video/mp2t. One adaptive stream per
     // platform; the player picks the audio track (VO + VF when available).
-    for (const r of netmirrorResults) {
+    // Mode 'direct' (« sans proxy ») : NetMirror exige le proxy -> non proposé.
+    for (const r of (config?.proxy === 'direct' ? [] : netmirrorResults)) {
       // Master RECONSTRUIT servi par l'addon (le master d'origine = placeholder).
       const mu = new URL('/netmirror/master.m3u8', nmSegBase(req));
       mu.searchParams.set('h', r.cdnHost);

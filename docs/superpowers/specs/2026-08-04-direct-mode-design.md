@@ -19,16 +19,24 @@ DNS-bloqués).
 - Seul host « proxy-OUI / direct-NON » = **NetMirror**. uqload/voe échouent des DEUX côtés (serveur aussi sur Orange) → le repli n'a de valeur pour eux **que si le proxy fait du DoH**.
 - Le client peut aussi mettre son DNS en 1.1.1.1/DoH (box/OS) → débloque uqload/voe côté direct, sans rien changer chez nous (documenté, hors-code).
 
-## Décision de livraison (par flux)
+## Décision de livraison (par flux) — DIRECT-FIRST
 
-Fonction `deliveryMode(host, forceLocal, config)` :
+**Le direct est TOUJOURS prioritaire, quel que soit le mode.** Le choix de mode
+(`mediaflow` / `local` / `direct`) ne sélectionne que le **fallback** des flux
+NON-directables.
 
-| Condition | Livraison |
+`canDirect(streamUrl, forceLocal)` = `!forceLocal && isDirectable(host)` (indépendant du mode).
+
+| Flux | Livraison |
 |---|---|
-| `config.proxy !== 'direct'` | inchangé (local / mediaflow) |
-| `forceLocal` (NetMirror) | **proxy local** (transform requis) |
-| host ∈ `PROXY_FORCED_HOSTS` (FAI-bloqué : uqload, voe…) | **proxy local + DoH** (phase 2) |
-| sinon | **direct** : URL brute + `proxyHeaders` |
+| directable (pas forceLocal, hôte non bloqué) | **direct** : URL brute + `proxyHeaders` — **dans tous les modes** |
+| non-directable, mode `mediaflow` | MediaFlow |
+| non-directable, mode `local` | proxy local |
+| non-directable (NetMirror `forceLocal`) | **toujours proxy local** (transform), même en mode mediaflow |
+| non-directable, mode `direct` | **DROP** — non proposé (« sans proxy ») |
+
+⚠️ NetMirror ne passe pas par `deliver()` (il construit son URL `/netmirror/`) →
+le drop en mode `direct` est fait explicitement sur son bloc.
 
 ## Composants
 
