@@ -269,7 +269,7 @@ const DEFAULT_LANG_ORDER = ['MULTI', 'VF', 'VOSTFR', 'VO'];
 // running and fill the cache, so the next request for the same title gets them
 // instantly.
 const DEFAULT_MIN_STREAMS = 5;
-const EARLY_EXIT_GRACE_MS = 2000;   // never answer before this — lets near-tied sources land
+const EARLY_EXIT_GRACE_MS = 1000;   // never answer before this — lets near-tied sources land
 const EARLY_EXIT_DEADLINE_MS = 20000; // hard ceiling, even if the target is never met
 
 interface SourceTask<T> {
