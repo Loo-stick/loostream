@@ -791,9 +791,11 @@ async function handleStream(req: express.Request, res: express.Response, type: s
     stats.requests.total++;
     stats.requests.streams++;
 
-    // Build extractor config based on user settings
+    // Build extractor config based on user settings. MediaFlow SEULEMENT en mode
+    // 'mediaflow' : en 'direct' (comme en 'local') on extrait localement, sinon
+    // voe/doodstream ressortent en URL MediaFlow qu'on servirait à tort en direct.
     const extractorConfig: ExtractorConfig = {
-      useMediaFlow: config?.proxy !== 'local',
+      useMediaFlow: config?.proxy === 'mediaflow',
       mediaFlowUrl: config?.mfUrl || DEFAULT_MEDIAFLOW_URL,
       mediaFlowPassword: config?.mfPass || DEFAULT_MEDIAFLOW_PASSWORD,
     };
