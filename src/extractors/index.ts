@@ -431,39 +431,50 @@ async function packedJsOnce(embedUrl: string, origin: string): Promise<string | 
 // tnmr master 200, film complet (6842s). Le token est court -> extraire au plus
 // près de la lecture. Headers CORS/XHR (Sec-Fetch cors/cross-site) OBLIGATOIRES,
 // sinon 403 nginx (repris du LuluVdoExtractor d'Onyx).
-async function extractLuluvdo(embedUrl: string): Promise<ExtractedStream | null> {
+// tnmr.org (CDN de luluvdo) fait de l'UA-gating MOBILE : UA desktop -> 403, UA
+// mobile -> 200. Le token dure 8h (e=28800), donc pas de résolution paresseuse
+// nécessaire — juste servir avec CE UA de bout en bout (probe multiaudio + Nuvio).
+const LULU_UA = 'Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/116.0.0.0 Mobile Safari/537.36';
+
+// Voie /dl?op=embed de la famille StreamWish/KVS (luluvdo, streamwish, filelions…).
+// Renvoie une URL FRAÎCHE à cert valide (tnmr.org) là où l'embed direct /e|/v/<code>
+// livre un CDN mort (acek-cdn). Renvoie null si l'hôte n'a pas cet endpoint (404) —
+// l'appelant retombe alors sur l'unpack direct. Token 8h, mais UA MOBILE obligatoire.
+async function tryDlEmbed(embedUrl: string): Promise<ExtractedStream | null> {
   try {
     const u = new URL(embedUrl);
     const origin = u.origin;
     const code = (u.pathname.split('/').filter(Boolean).pop() || '')
       .replace(/\.html$/, '').replace(/^embed-/, '');
-    if (!code) { console.log(`[Extractor] LuluVdo: file_code introuvable: ${embedUrl}`); return null; }
+    if (!code) return null;
     const dlUrl = `${origin}/dl?op=embed&file_code=${encodeURIComponent(code)}&auto=1&referer=`;
-    const { data } = await axios.get<string>(dlUrl, {
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/116.0.0.0 Mobile Safari/537.36',
-        Referer: `${origin}/e/${code}`,
-        Accept: 'text/html,application/xhtml+xml,*/*;q=0.8',
-      },
+    const { data, status } = await axios.get<string>(dlUrl, {
+      headers: { 'User-Agent': LULU_UA, Referer: `${origin}/e/${code}`, Accept: 'text/html,application/xhtml+xml,*/*;q=0.8' },
       timeout: 15000, responseType: 'text', transformResponse: r => r, httpsAgent: INSECURE_AGENT,
+      validateStatus: () => true,
     });
+    if (status >= 400) return null; // hôte sans endpoint /dl -> repli sur l'unpack direct
     const js = unpackFromHtml(String(data || ''));
-    if (!js) { console.log(`[Extractor] LuluVdo: pas de packed JS (/dl): ${embedUrl}`); return null; }
+    if (!js) return null;
     const url = [evalObfuscatedUrl(js), findStreamUrl(js)].find(u => u && !isDecoyUrl(u)) || null;
-    if (!url) { console.log(`[Extractor] LuluVdo: pas de flux non-leurre (/dl): ${embedUrl}`); return null; }
-    console.log(`[Extractor] LuluVdo OK: ${new URL(url).host} <- ${embedUrl}`);
-    // Headers CORS/XHR requis (sinon 403 nginx sur tnmr.org).
+    if (!url) return null;
+    console.log(`[Extractor] /dl OK: ${new URL(url).host} <- ${embedUrl}`);
+    // UA MOBILE + headers CORS/XHR requis (sinon 403 sur tnmr.org).
     return {
       url, quality: 'HD', format: 'hls',
       headers: {
+        'User-Agent': LULU_UA,
         Referer: `${origin}/`, Origin: origin, Accept: '*/*',
         'Sec-Fetch-Dest': 'empty', 'Sec-Fetch-Mode': 'cors', 'Sec-Fetch-Site': 'cross-site',
       },
     };
-  } catch (e: any) {
-    console.log(`[Extractor] LuluVdo error: ${(e.message || '').slice(0, 80)}`);
-    return null;
-  }
+  } catch { return null; }
+}
+
+// Famille StreamWish/KVS : /dl d'abord (URL vivante à cert valide), repli sur
+// l'unpack direct de l'embed pour les hôtes sans /dl (ex. filelions/minochinos).
+async function extractStreamWishFamily(embedUrl: string): Promise<ExtractedStream | null> {
+  return (await tryDlEmbed(embedUrl)) || (await extractPackedJs(embedUrl));
 }
 
 export async function extractPackedJs(embedUrl: string): Promise<ExtractedStream | null> {
@@ -602,12 +613,12 @@ async function extractLocally(embedUrl: string, extractor: string): Promise<Extr
     case 'sharecloudy':
       return await extractSharecloudy(embedUrl);
     case 'lulustream':
-      return await extractLuluvdo(embedUrl);
+    case 'streamwish':
+    case 'filelions':
+      return await extractStreamWishFamily(embedUrl);
     case 'fsvid':
     case 'vidzy':
     case 'livavid':
-    case 'streamwish':
-    case 'filelions':
     case 'vidoza':
       return await extractPackedJs(embedUrl);
     case 'mailru':

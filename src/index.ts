@@ -1034,8 +1034,8 @@ async function handleStream(req: express.Request, res: express.Response, type: s
     // Process Wiflix results (API Movix, tmdbId-keyed — pas de scraping).
     for (const wf of wiflixResults) {
       const d = await deliver(wf.url, {
-        ...(wf.headers || {}),
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        ...(wf.headers || {}), // l'UA spécifique de l'extracteur (ex. mobile pour luluvdo/tnmr) prime
       }, {}, req, config);
 
       if (!d) continue; // Skip blocked URLs
