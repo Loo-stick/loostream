@@ -15,6 +15,21 @@ const HEADERS = {
   'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
 };
 
+// Émulation IFRAME complète, reprise à l'identique du FsvidExtractor d'Onyx.
+// fsvid (et consorts P.A.C.K.E.R.) discriminent le vrai flux du leurre /troll/
+// selon que la requête RESSEMBLE à une vraie iframe de navigateur. Prouvé : nos
+// headers minimaux -> 403/leurre ; ce set -> vrai flux 6/6. Referer/Origin sont
+// ajoutés par appel (origine de l'embed).
+const IFRAME_HEADERS = {
+  'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+  'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+  'Accept-Language': 'fr-FR,fr;q=0.9,en-US;q=0.8,en;q=0.7',
+  'Sec-Fetch-Dest': 'iframe',
+  'Sec-Fetch-Mode': 'navigate',
+  'Sec-Fetch-Site': 'same-origin',
+  'Upgrade-Insecure-Requests': '1',
+};
+
 export interface ExtractedStream {
   url: string;
   quality: string;
@@ -384,27 +399,46 @@ export function isDecoyUrl(url: string): boolean {
   return DECOY_PATTERNS.some(p => p.test(url));
 }
 
+// Une passe d'extraction : récupère la page embed avec l'émulation iframe et
+// tente de décoder une URL NON-leurre. Renvoie 'decoy' si la page ne contient
+// qu'un leurre (/troll/) — signal pour réessayer, comme Onyx.
+async function packedJsOnce(embedUrl: string, origin: string): Promise<string | null | 'decoy'> {
+  const { data } = await axios.get<string>(embedUrl, {
+    headers: { ...IFRAME_HEADERS, Referer: `${origin}/`, Origin: origin },
+    timeout: 15000,
+    responseType: 'text',
+    transformResponse: r => r,
+    httpsAgent: INSECURE_AGENT, // certains hôtes (vidoza…) ont un cert TLS expiré
+  });
+  const js = unpackFromHtml(String(data || ''));
+  if (!js) return null;
+  // Deux candidats : l'URL calculée par l'IIFE obfusquée (vidzy, et le VRAI flux
+  // de fsvid) et l'URL en clair. fsvid met le vrai flux dans l'IIFE À CÔTÉ d'un
+  // leurre /troll/ en clair -> on préfère toute URL NON-leurre (obfusquée d'abord).
+  const decoded = evalObfuscatedUrl(js);
+  const plain = findStreamUrl(js);
+  const url = [decoded, plain].find(u => u && !isDecoyUrl(u)) || null;
+  if (url) return url;
+  // Une URL a été trouvée mais uniquement un leurre -> page LEURRE (comme Onyx).
+  return (decoded || plain) ? 'decoy' : null;
+}
+
 export async function extractPackedJs(embedUrl: string): Promise<ExtractedStream | null> {
   try {
     const origin = new URL(embedUrl).origin;
-    const { data } = await axios.get<string>(embedUrl, {
-      headers: { ...HEADERS, Referer: `${origin}/` },
-      timeout: 15000,
-      responseType: 'text',
-      transformResponse: r => r,
-      httpsAgent: INSECURE_AGENT, // certains hôtes (vidoza…) ont un cert TLS expiré
-    });
-    const js = unpackFromHtml(String(data || ''));
-    if (!js) {
-      console.log(`[Extractor] packed JS introuvable: ${embedUrl}`);
-      return null;
+    // Retry anti-leurre : fsvid sert par intermittence la page /troll/ ; une
+    // ré-extraction fraîche retombe en général sur le vrai flux (cf. FsvidExtractor
+    // d'Onyx qui re-pioche). 3 tentatives max.
+    let url: string | null = null;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const r = await packedJsOnce(embedUrl, origin);
+      if (r && r !== 'decoy') { url = r; break; }
+      if (r === 'decoy') {
+        console.log(`[Extractor] page leurre (/troll/) reçue, retry ${attempt + 1}/3: ${embedUrl}`);
+        continue;
+      }
+      break; // null franc (pas de packed JS / erreur de page) -> inutile d'insister
     }
-    // Deux candidats : l'URL calculée par l'IIFE obfusquée (vidzy, et le VRAI flux
-    // de fsvid) et l'URL en clair. fsvid met le vrai flux dans l'IIFE À CÔTÉ d'un
-    // leurre /troll/ en clair -> on préfère toute URL NON-leurre (obfusquée d'abord).
-    const decoded = evalObfuscatedUrl(js);
-    const plain = findStreamUrl(js);
-    const url = [decoded, plain].find(u => u && !isDecoyUrl(u)) || null;
     if (!url) {
       console.log(`[Extractor] pas de flux (non-leurre) après dépack: ${embedUrl}`);
       return null;
