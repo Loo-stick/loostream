@@ -115,7 +115,7 @@ const DEFAULT_MEDIAFLOW_PASSWORD = process.env.MEDIAFLOW_PASSWORD || '';
 
 // User config interface
 interface UserConfig {
-  proxy: 'local' | 'mediaflow';
+  proxy: 'local' | 'mediaflow' | 'direct';
   mfUrl?: string;
   mfPass?: string;
   tmdbKey?: string;
@@ -130,7 +130,7 @@ interface StreamWithMeta {
   name: string;
   title: string;
   url: string;
-  behaviorHints: { notWebReady: boolean; bingeGroup: string; filename?: string; videoSize?: number };
+  behaviorHints: { notWebReady: boolean; bingeGroup: string; filename?: string; videoSize?: number; proxyHeaders?: { request: Record<string, string> } };
   subtitles?: { id: string; url: string; lang: string }[];
   _meta: {
     quality: string;
@@ -174,7 +174,7 @@ function parseConfig(configStr: string): UserConfig | null {
     const parsed = JSON.parse(decoded);
 
     // Validate proxy type
-    if (!['local', 'mediaflow'].includes(parsed.proxy)) {
+    if (!['local', 'mediaflow', 'direct'].includes(parsed.proxy)) {
       console.warn('[Config] Invalid proxy type');
       return null;
     }
