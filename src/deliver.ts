@@ -7,12 +7,17 @@
 // hôtes bloqués par les FAI (DNS -> ::1) — qui, en Phase 2, seront résolus par
 // DoH côté proxy.
 
-// Motifs d'hôtes bloqués par les FAI FR (ex. Orange -> ::1) ou morts en direct.
-// Ils repassent par le proxy plutôt que d'être livrés en direct (inutile). À
-// étendre au fil des blocages constatés.
-export const PROXY_FORCED_HOSTS = ['uqload', 'voe.sx'];
+// Hôtes NON livrables en direct : bloqués par les FAI FR (Orange -> ::1), ou dont
+// le CDN a un cert TLS invalide que le lecteur client refuse. Ils repassent par le
+// proxy (qui bypasse le cert via INSECURE_AGENT et re-sert sur notre cert valide).
+// À étendre au fil des blocages constatés.
+//   - uqload / voe.sx : DNS-bloqués (Orange -> ::1)
+//   - vmnow / vmeas    : CDN vidmoly = mini-PC perso exposés via Tailscale, cert
+//                        `*.ts.net` invalide/expiré -> Nuvio refuse le TLS en direct.
+//                        Doit passer par le proxy (comme sur `main` avant direct-first).
+export const PROXY_FORCED_HOSTS = ['uqload', 'voe.sx', 'vmnow', 'vmeas'];
 
-/** Un hôte est directable s'il n'est pas dans la liste FAI-bloquée. */
+/** Un hôte est directable s'il n'est pas dans la liste non-directable ci-dessus. */
 export function isDirectable(streamUrl: string): boolean {
   let host: string;
   try { host = new URL(streamUrl).hostname; } catch { return false; }
