@@ -423,6 +423,49 @@ async function packedJsOnce(embedUrl: string, origin: string): Promise<string | 
   return (decoded || plain) ? 'decoy' : null;
 }
 
+// LuluVdo / LuluStream (luluvdo.com, lulustream.com, lulu.st, luluvid…).
+// L'embed /e/<code> livre une URL CDN MORTE (acek-cdn = mini-PC Tailscale, cert
+// cassé + 404). Le VRAI flux vient de l'endpoint /dl?op=embed (ce que le WebView
+// d'Onyx charge — mais nous le faisons en PUR HTTP) : il renvoie du P.A.C.K.E.R.
+// contenant une URL tnmr.org FRAÎCHE, à cert VALIDE. Prouvé : /dl -> unpack ->
+// tnmr master 200, film complet (6842s). Le token est court -> extraire au plus
+// près de la lecture. Headers CORS/XHR (Sec-Fetch cors/cross-site) OBLIGATOIRES,
+// sinon 403 nginx (repris du LuluVdoExtractor d'Onyx).
+async function extractLuluvdo(embedUrl: string): Promise<ExtractedStream | null> {
+  try {
+    const u = new URL(embedUrl);
+    const origin = u.origin;
+    const code = (u.pathname.split('/').filter(Boolean).pop() || '')
+      .replace(/\.html$/, '').replace(/^embed-/, '');
+    if (!code) { console.log(`[Extractor] LuluVdo: file_code introuvable: ${embedUrl}`); return null; }
+    const dlUrl = `${origin}/dl?op=embed&file_code=${encodeURIComponent(code)}&auto=1&referer=`;
+    const { data } = await axios.get<string>(dlUrl, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/116.0.0.0 Mobile Safari/537.36',
+        Referer: `${origin}/e/${code}`,
+        Accept: 'text/html,application/xhtml+xml,*/*;q=0.8',
+      },
+      timeout: 15000, responseType: 'text', transformResponse: r => r, httpsAgent: INSECURE_AGENT,
+    });
+    const js = unpackFromHtml(String(data || ''));
+    if (!js) { console.log(`[Extractor] LuluVdo: pas de packed JS (/dl): ${embedUrl}`); return null; }
+    const url = [evalObfuscatedUrl(js), findStreamUrl(js)].find(u => u && !isDecoyUrl(u)) || null;
+    if (!url) { console.log(`[Extractor] LuluVdo: pas de flux non-leurre (/dl): ${embedUrl}`); return null; }
+    console.log(`[Extractor] LuluVdo OK: ${new URL(url).host} <- ${embedUrl}`);
+    // Headers CORS/XHR requis (sinon 403 nginx sur tnmr.org).
+    return {
+      url, quality: 'HD', format: 'hls',
+      headers: {
+        Referer: `${origin}/`, Origin: origin, Accept: '*/*',
+        'Sec-Fetch-Dest': 'empty', 'Sec-Fetch-Mode': 'cors', 'Sec-Fetch-Site': 'cross-site',
+      },
+    };
+  } catch (e: any) {
+    console.log(`[Extractor] LuluVdo error: ${(e.message || '').slice(0, 80)}`);
+    return null;
+  }
+}
+
 export async function extractPackedJs(embedUrl: string): Promise<ExtractedStream | null> {
   try {
     const origin = new URL(embedUrl).origin;
@@ -558,12 +601,13 @@ async function extractLocally(embedUrl: string, extractor: string): Promise<Extr
       return await extractUqload(embedUrl);
     case 'sharecloudy':
       return await extractSharecloudy(embedUrl);
+    case 'lulustream':
+      return await extractLuluvdo(embedUrl);
     case 'fsvid':
     case 'vidzy':
     case 'livavid':
     case 'streamwish':
     case 'filelions':
-    case 'lulustream':
     case 'vidoza':
       return await extractPackedJs(embedUrl);
     case 'mailru':
