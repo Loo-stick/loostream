@@ -17,6 +17,7 @@ import { recordOutcome, getAllMetrics } from './metrics';
 import crypto from 'crypto';
 import proxyRouter, { isAllowedUrl, addAllowedDomain, getAllowedDomains, AUTO_WHITELIST } from './proxy';
 import { accessEnabled, keyMatches, signUrl, requireQueryKey } from './access';
+import { directDecision } from './deliver';
 import * as fsSync from 'fs';
 import { ExtractorConfig, reloadExtractorDomains, getExtractorDomains } from './extractors';
 import { getSceneMeta, buildFilename, providerLabel } from './filename';
@@ -550,6 +551,28 @@ function buildProxyUrl(
 
     return proxyUrl.toString();
   }
+}
+
+// Décide comment livrer un flux. En mode `direct` (hôte directable, pas
+// forceLocal), renvoie l'URL CDN BRUTE + les headers -> le draft posera
+// behaviorHints.proxyHeaders et Stremio fetch en direct (0 bande passante
+// serveur). Sinon, comportement actuel via buildProxyUrl (proxy local/mediaflow).
+// `null` = URL bloquée (SSRF) côté proxy.
+function deliver(
+  streamUrl: string,
+  headers: Record<string, string>,
+  opts: { forceLocal?: boolean; forceHls?: boolean; useTransformer?: boolean },
+  req: express.Request,
+  config: UserConfig | null,
+): { url: string; proxyHeaders?: Record<string, string> } | null {
+  if (directDecision(streamUrl, !!opts.forceLocal, config?.proxy)) {
+    return { url: streamUrl, proxyHeaders: headers };
+  }
+  const url = buildProxyUrl(
+    streamUrl, headers, opts.useTransformer ?? false, req, config,
+    opts.forceLocal ?? false, opts.forceHls ?? false,
+  );
+  return url ? { url } : null;
 }
 
 // CORS for Stremio
