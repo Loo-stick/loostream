@@ -287,9 +287,10 @@ router.get('/manifest', requireQueryKey, async (req: Request, res: Response) => 
   }
 
   const headers = parseHeaders(req.query as Record<string, any>);
+  const t0 = Date.now();
+  let host = '?'; try { host = new URL(url).hostname; } catch { /* ignore */ }
 
   try {
-    console.log(`[Proxy] Fetching manifest: ${url}`);
     const response = await axios.get(url, {
       headers: {
         ...headers,
@@ -301,6 +302,7 @@ router.get('/manifest', requireQueryKey, async (req: Request, res: Response) => 
 
     const baseUrl = getBaseUrl(req);
     const rewritten = rewriteManifest(response.data, url, baseUrl, headers, transformer, audioKeep);
+    console.log(`[Proxy] manifest ${host} ${Date.now() - t0}ms`);
 
     res.setHeader('Content-Type', 'application/vnd.apple.mpegurl');
     res.setHeader('Access-Control-Allow-Origin', '*');
@@ -328,6 +330,8 @@ router.get('/segment', requireQueryKey, async (req: Request, res: Response) => {
   }
 
   const headers = parseHeaders(req.query as Record<string, any>);
+  const t0 = Date.now();
+  let host = '?'; try { host = new URL(url).hostname; } catch { /* ignore */ }
 
   try {
     const response = await axios.get(url, {
@@ -338,6 +342,7 @@ router.get('/segment', requireQueryKey, async (req: Request, res: Response) => {
       timeout: 30000,
       responseType: 'stream',
     });
+    const ttfb = Date.now() - t0;
 
     // Set content type (transform .jpg to .ts)
     let contentType = response.headers['content-type'];
@@ -352,9 +357,20 @@ router.get('/segment', requireQueryKey, async (req: Request, res: Response) => {
       res.setHeader('Content-Length', response.headers['content-length']);
     }
 
+    // Timing : révèle le pattern de fetch de Stremio (séquentiel/parallèle) et le
+    // débit réel du CDN par segment — le goulot du démarrage. Seg de log = filename.
+    let bytes = 0;
+    const seg = url.split('/').pop()?.split('?')[0] || '';
+    response.data.on('data', (c: Buffer) => { bytes += c.length; });
+    response.data.on('end', () => {
+      const ms = Date.now() - t0;
+      const mbps = bytes > 0 && ms > 0 ? (bytes * 8 / ms / 1000).toFixed(1) : '0';
+      console.log(`[Proxy] seg ${host} ${seg} ttfb=${ttfb}ms total=${ms}ms ${(bytes / 1e6).toFixed(1)}Mo ${mbps}Mbps`);
+    });
+
     response.data.pipe(res);
   } catch (e: any) {
-    console.error(`[Proxy] Segment error:`, e.message);
+    console.error(`[Proxy] Segment error ${host} (${Date.now() - t0}ms):`, e.message);
     res.status(502).send('Failed to fetch segment');
   }
 });
