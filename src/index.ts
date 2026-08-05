@@ -1333,12 +1333,20 @@ async function handleStream(req: express.Request, res: express.Response, type: s
     // Remove _meta before sending to Stremio (internal use only)
     const cleanStreams = sortedStreams.map(({ _meta, ...rest }) => rest);
 
-    // Count actual streams by source (after filtering blocked URLs)
-    const movixCount = streams.filter(s => s._meta?.source === 'movix').length;
-    const netmirrorCount = streams.filter(s => s._meta?.source === 'netmirror').length;
-    const streamflixCount = streams.filter(s => s._meta?.source === 'streamflix').length;
+    // Ventilation par source sur les flux RÉELLEMENT renvoyés (post-filtrage), pour
+    // que la somme colle au total. Dynamique : toutes les sources présentes, triées
+    // par nombre décroissant — plus de liste figée sur 3 scrapers.
+    const bySource = new Map<string, number>();
+    for (const s of sortedStreams) {
+      const src = s._meta?.source || 'inconnu';
+      bySource.set(src, (bySource.get(src) || 0) + 1);
+    }
+    const breakdown = [...bySource.entries()]
+      .sort((a, b) => b[1] - a[1])
+      .map(([src, n]) => `${src}: ${n}`)
+      .join(', ');
 
-    console.log(`[Stream] Returning ${cleanStreams.length} streams (Movix: ${movixCount}, NetMirror: ${netmirrorCount}, StreamFlix: ${streamflixCount})`);
+    console.log(`[Stream] Returning ${cleanStreams.length} streams${breakdown ? ` (${breakdown})` : ''}`);
     res.json({ streams: cleanStreams });
   } catch (e) {
     console.error('[Stream] Error:', e);
