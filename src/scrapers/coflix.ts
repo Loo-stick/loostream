@@ -2,6 +2,7 @@ import axios from 'axios';
 import { extractStream, ExtractorConfig } from '../extractors';
 import { cached } from '../cache';
 import { applyMultiAudio } from '../multiaudio';
+import { Wanted, accepts } from '../matching';
 import { makeEndpointConfig } from '../endpoint-config';
 
 // Coflix — films & séries FR généralistes, VF ET VOSTFR (versions séparées).
@@ -78,9 +79,10 @@ function serverName(url: string): string {
   } catch { return 'coflix'; }
 }
 
-interface SuggestItem { episodeId: string; slug: string; title: string; type: string; }
+interface SuggestItem { episodeId: string; slug: string; title: string; type: string; year?: number; }
 
-const ITEM_RX = /<a class="item"\s+href="([^"]+\/ep-(\d+))"[\s\S]*?data-jp="([^"]*)"[\s\S]*?<span class="dot">([^<]+)<\/span>/gi;
+// m[4] = type (Movie/Series) ; m[5] = année (2e `.dot`, optionnelle) — sert au matching strict.
+const ITEM_RX = /<a class="item"\s+href="([^"]+\/ep-(\d+))"[\s\S]*?data-jp="([^"]*)"[\s\S]*?<span class="dot">([^<]+)<\/span>(?:[\s\S]{0,140}?<span class="dot">\s*((?:19|20)\d\d)\s*<\/span>)?/gi;
 
 async function firstOk<T>(fn: (base: string) => Promise<T | null>): Promise<T | null> {
   for (const base of domainCandidates()) {
@@ -120,7 +122,7 @@ async function searchSuggest(title: string): Promise<{ base: string; items: Sugg
     const items: SuggestItem[] = [];
     for (const m of html.matchAll(ITEM_RX)) {
       const slug = (m[1].split('/film/')[1] || m[1]).replace(/\/ep-\d+.*$/, '');
-      items.push({ episodeId: m[2], slug, title: m[3], type: (m[4] || '').trim() });
+      items.push({ episodeId: m[2], slug, title: m[3], type: (m[4] || '').trim(), year: m[5] ? Number(m[5]) : undefined });
     }
     return items.length ? { base, items } : null;
   });
@@ -184,7 +186,8 @@ export async function getCoflixStreams(
   season: number | undefined,
   episode: number | undefined,
   title: string,
-  originalTitle?: string
+  originalTitle?: string,
+  year?: number
 ): Promise<CoflixStream[]> {
   if (!title) return [];
   if (mediaType === 'series' && (!season || !episode)) return [];
@@ -197,14 +200,14 @@ export async function getCoflixStreams(
   const titles = [...new Set([title, originalTitle].filter(Boolean) as string[])];
   return cached(
     key, STREAMS_TTL_MS,
-    async () => { const s = await fetchCoflixStreams(mediaType, titles, season, episode, extractorConfig); return applyMultiAudio(s); },
+    async () => { const s = await fetchCoflixStreams(mediaType, titles, season, episode, extractorConfig, year); return applyMultiAudio(s); },
     { scope: 'coflix', shouldCache: r => r.length > 0, negativeTtlMs: EMPTY_TTL_MS }
   );
 }
 
 async function fetchCoflixStreams(
   mediaType: 'movie' | 'series', titles: string[], season: number | undefined,
-  episode: number | undefined, extractorConfig: ExtractorConfig
+  episode: number | undefined, extractorConfig: ExtractorConfig, year?: number
 ): Promise<CoflixStream[]> {
   let found: { base: string; items: SuggestItem[] } | null = null;
   for (const t of titles) {
@@ -213,7 +216,10 @@ async function fetchCoflixStreams(
   }
   if (!found) { console.log(`[Coflix] Aucun résultat pour "${titles[0]}"`); return []; }
   const { base, items } = found;
-  const targets = titles.map(normalize);
+  // Matching STRICT (token-set + année du suggest). Pour les séries l'année du site
+  // peut différer de l'année TMDB (première diffusion vs saison) -> on s'appuie sur
+  // le titre + le filtre de saison, sans l'année (qui rejetterait à tort).
+  const wanted: Wanted = { titles, year: mediaType === 'movie' ? year : undefined };
 
   // Sélectionne les fiches pertinentes (film ou saison), une par version.
   const byVersion = new Map<string, SuggestItem>();
@@ -226,10 +232,8 @@ async function fetchCoflixStreams(
       const sm = it.slug.match(/saison[-\s]?(\d+)/i);
       if (!sm || Number(sm[1]) !== season) continue;
     }
-    // Titre : le slug (hors saison/version) doit matcher le titre demandé.
-    const cleanSlug = normalize(it.slug.replace(/saison[-\s]?\d+/i, '').replace(/(vostfr|truefrench|vf|french)$/i, ''));
-    const ok = targets.some(t => t && (cleanSlug.includes(t) || t.includes(cleanSlug)));
-    if (!ok) continue;
+    // Titre + année stricts : plus de sous-chaîne (« My Happy Ending » ne matche plus).
+    if (!accepts(wanted, { title: it.title, year: it.year, item: it })) continue;
 
     const v = versionFromSlug(it.slug);
     if (!byVersion.has(v)) byVersion.set(v, it);

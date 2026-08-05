@@ -843,7 +843,7 @@ async function handleStream(req: express.Request, res: express.Response, type: s
         .catch(e => { console.log('[Nabistream] Error:', e); trackSourceResult('nabistream', false); recordOutcome('nabistream', 'error', e?.message); return []; }),
       // Coflix : films/séries FR généralistes, VF ET VOSTFR (scraping titre-keyé).
       // Site FR -> chercher d'abord le titre FRANÇAIS, puis l'anglais en repli.
-      getCoflixStreams(type as 'movie' | 'series', extractorConfig, parsed.season, parsed.episode, info.frenchTitle || info.title, info.title)
+      getCoflixStreams(type as 'movie' | 'series', extractorConfig, parsed.season, parsed.episode, info.frenchTitle || info.title, info.title, info.year ? Number(info.year) : undefined)
         .then(r => { trackSourceResult('coflix', true, r.length); recordOutcome('coflix', r.length > 0 ? 'success' : 'empty'); return r; })
         .catch(e => { console.log('[Coflix] Error:', e); trackSourceResult('coflix', false); recordOutcome('coflix', 'error', e?.message); return []; }),
       // Videasy : agrégateur VO (anglais) + sous-titres (VOSTFR si FR dispo), keyé TMDB.
