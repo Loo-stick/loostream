@@ -3,7 +3,7 @@ import { extractStream, detectExtractor, ExtractorConfig } from '../extractors';
 import { cached } from '../cache';
 import { applyMultiAudio } from '../multiaudio';
 import { makeEndpointConfig } from '../endpoint-config';
-import { titlesMatch } from '../matching';
+import { titlesMatch, expandTitles } from '../matching';
 
 // VoirAnime — anime VOSTFR/VF (voir-anime.to). Provider Onyx VoirAnimeProvider.
 // Site WordPress/Madara, structure identique à VoirDrama :
@@ -118,6 +118,7 @@ function slugBasesFor(titles: string[], season?: number): string[] {
 async function searchSite(keyword: string, wantedTitles: string[]): Promise<Candidate[]> {
   const html = await getHtml(`${SITE_BASE()}/?s=${encodeURIComponent(keyword)}&post_type=wp-manga`);
   if (!html) return [];
+  const wanted = expandTitles(wantedTitles); // nom de base inclus (sous-titre TMDB)
   const out: Candidate[] = [];
   const seen = new Set<string>();
   for (const m of html.matchAll(SEARCH_ITEM_RX)) {
@@ -127,7 +128,7 @@ async function searchSite(keyword: string, wantedTitles: string[]): Promise<Cand
     seen.add(url);
     // Match STRICT token-set contre titre FR + original (l'anime n'expose pas
     // d'année fiable) — fini le match par préfixe (« Naruto » ⊄ « Naruto Shippuden »).
-    if (!titlesMatch(wantedTitles, name)) continue;
+    if (!titlesMatch(wanted, name)) continue;
     out.push({ url, title: name, language: languageOf(url, name) });
   }
   // Une fiche par langue, la correspondance la plus proche d'abord.

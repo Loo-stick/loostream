@@ -1,6 +1,13 @@
 import { test } from 'node:test';
 import assert from 'node:assert';
-import { normalizeTokens, titlesMatch, yearVerdict, accepts, pickBest } from './matching';
+import { normalizeTokens, titlesMatch, yearVerdict, accepts, pickBest, expandTitles } from './matching';
+
+test('expandTitles : ajoute le nom de base (sous-titre TMDB retiré)', () => {
+  const out = expandTitles(['Mushoku Tensei: Jobless Reincarnation']);
+  assert.ok(out.includes('Mushoku Tensei'), 'doit contenir le nom de base');
+  // le nom de base matche alors le titre court du site en token-set strict
+  assert.equal(titlesMatch(out, 'Mushoku Tensei'), true);
+});
 
 test('normalizeTokens : accents, articles, tags de version et année retirés', () => {
   assert.deepEqual(normalizeTokens('Le Fabuleux Destin (2001)'), ['fabuleux', 'destin']);

@@ -4,7 +4,7 @@ import { makeEndpointConfig } from '../endpoint-config';
 import { ExtractorConfig, detectExtractor, extractStream } from '../extractors';
 import { applyMultiAudio } from '../multiaudio';
 import { probeMp4Quality } from '../mp4probe';
-import { Wanted, pickBest } from '../matching';
+import { Wanted, pickBest, expandTitles } from '../matching';
 
 // AnimeSama (anime-sama.to) — source ANIME (VOSTFR + VF). HTML scraping :
 //   1. Recherche : POST /template-php/defaut/fetch.php?query= -> fiches /catalogue/{slug}/
@@ -57,7 +57,7 @@ async function getText(url: string, referer: string): Promise<string | null> {
 // Recherche -> slug retenu via le matcher (titres FR + original + EN ; pas d'année).
 async function findSlug(titles: string[]): Promise<string | null> {
   const base = BASE();
-  const wanted: Wanted = { titles };
+  const wanted: Wanted = { titles: expandTitles(titles) };
   for (const t of titles) {
     try {
       const { data } = await axios.post<string>(

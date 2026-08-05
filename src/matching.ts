@@ -39,6 +39,21 @@ export function titlesMatch(wantedTitles: string[], candidateTitle: string): boo
   return wantedTitles.some(w => { const ws = tokenSet(w); return ws.size > 0 && setEq(ws, c); });
 }
 
+// Étend une liste de titres avec leur NOM DE BASE (avant un sous-titre « : » / « - »).
+// TMDB nomme souvent « X: Jobless Reincarnation » là où un site FR/anime n'a que
+// « X » -> sans ça le matcher strict rejette. On ajoute juste des variantes exactes
+// candidates (la précision reste : on compare toujours en token-set exact).
+export function expandTitles(titles: string[]): string[] {
+  const out = new Set<string>();
+  for (const t of titles) {
+    if (!t) continue;
+    out.add(t);
+    const base = t.split(/\s*[:–—]\s*|\s+-\s+/)[0].trim();
+    if (base && base.length >= 3) out.add(base);
+  }
+  return [...out];
+}
+
 export function yearVerdict(wanted: number | undefined, candidate: number | undefined): YearVerdict {
   if (!wanted || !candidate) return 'unknown';
   const d = Math.abs(wanted - candidate);
