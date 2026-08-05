@@ -7,6 +7,7 @@ import { getWiflixStreams } from './scrapers/wiflix';
 import { getVoirDramaStreams, reloadVoirDramaEndpoints, getVoirDramaEndpoints } from './scrapers/voirdrama';
 import { getMovieboxStreams, movieboxProbe, resolveMovieboxUrl, resolveMovieboxSubtitle } from './scrapers/moviebox';
 import { getVoirAnimeStreams, getVoirAnimeEndpoints, reloadVoirAnimeEndpoints } from './scrapers/voiranime';
+import { getAnimeSamaStreams, getAnimesamaEndpoints, reloadAnimesamaEndpoints } from './scrapers/animesama';
 import { getNabistreamStreams, getNabistreamEndpoints, reloadNabistreamEndpoints } from './scrapers/nabistream';
 import { getCoflixStreams, getCoflixEndpoints, reloadCoflixEndpoints } from './scrapers/coflix';
 import { getStreamFlixStreams, reloadStreamflixEndpoints, getStreamflixEndpoints } from './scrapers/streamflix';
@@ -61,6 +62,7 @@ interface Stats {
     nabistream: { requests: number; success: number; errors: number; lastSuccess: number | null };
     coflix: { requests: number; success: number; errors: number; lastSuccess: number | null };
     videasy: { requests: number; success: number; errors: number; lastSuccess: number | null };
+    animesama: { requests: number; success: number; errors: number; lastSuccess: number | null };
   };
   streamsServed: {
     movix: number;
@@ -74,6 +76,7 @@ interface Stats {
     nabistream: number;
     coflix: number;
     videasy: number;
+    animesama: number;
   };
 }
 
@@ -92,11 +95,12 @@ const stats: Stats = {
     nabistream: { requests: 0, success: 0, errors: 0, lastSuccess: null },
     coflix: { requests: 0, success: 0, errors: 0, lastSuccess: null },
     videasy: { requests: 0, success: 0, errors: 0, lastSuccess: null },
+    animesama: { requests: 0, success: 0, errors: 0, lastSuccess: null },
   },
-  streamsServed: { movix: 0, netmirror: 0, streamflix: 0, frenchstream: 0, wiflix: 0, voirdrama: 0, moviebox: 0, voiranime: 0, nabistream: 0, coflix: 0, videasy: 0 },
+  streamsServed: { movix: 0, netmirror: 0, streamflix: 0, frenchstream: 0, wiflix: 0, voirdrama: 0, moviebox: 0, voiranime: 0, nabistream: 0, coflix: 0, videasy: 0, animesama: 0 },
 };
 
-function trackSourceResult(source: 'movix' | 'netmirror' | 'streamflix' | 'frenchstream' | 'wiflix' | 'voirdrama' | 'moviebox' | 'voiranime' | 'nabistream' | 'coflix' | 'videasy', success: boolean, streamCount: number = 0) {
+function trackSourceResult(source: 'movix' | 'netmirror' | 'streamflix' | 'frenchstream' | 'wiflix' | 'voirdrama' | 'moviebox' | 'voiranime' | 'nabistream' | 'coflix' | 'videasy' | 'animesama', success: boolean, streamCount: number = 0) {
   stats.sources[source].requests++;
   if (success) {
     stats.sources[source].success++;
@@ -859,9 +863,16 @@ async function handleStream(req: express.Request, res: express.Response, type: s
       getVideasyStreams(info.tmdbId, type as 'movie' | 'series', parsed.season, parsed.episode, config?.tmdbKey || DEFAULT_TMDB_KEY)
         .then(r => { trackSourceResult('videasy', true, r.length); recordOutcome('videasy', r.length > 0 ? 'success' : 'empty'); return r; })
         .catch(e => { console.log('[Videasy] Error:', e); trackSourceResult('videasy', false); recordOutcome('videasy', 'error', e?.message); return []; }),
+      // AnimeSama : anime VOSTFR/VF, scraping titre-keyé. Gaté sur l'anime
+      // (originalLanguage japonais) — évite de chercher chaque titre occidental.
+      (info.originalLanguage === 'ja'
+        ? getAnimeSamaStreams(type as 'movie' | 'series', [info.title, info.originalTitle, info.frenchTitle].filter(Boolean) as string[], parsed.season, parsed.episode, extractorConfig)
+        : Promise.resolve([]))
+        .then(r => { if (info.originalLanguage === 'ja') { trackSourceResult('animesama', true, r.length); recordOutcome('animesama', r.length > 0 ? 'success' : 'empty'); } return r; })
+        .catch(e => { console.log('[AnimeSama] Error:', e); trackSourceResult('animesama', false); recordOutcome('animesama', 'error', e?.message); return []; }),
     ];
 
-    const SOURCE_NAMES = ['netmirror', 'streamflix', 'movix', 'frenchstream', 'wiflix', 'voirdrama', 'moviebox', 'voiranime', 'nabistream', 'coflix', 'videasy'];
+    const SOURCE_NAMES = ['netmirror', 'streamflix', 'movix', 'frenchstream', 'wiflix', 'voirdrama', 'moviebox', 'voiranime', 'nabistream', 'coflix', 'videasy', 'animesama'];
     const collected = await collectSources(
       sourcePromises.map((promise, i) => ({
         name: SOURCE_NAMES[i],
@@ -885,6 +896,7 @@ async function handleStream(req: express.Request, res: express.Response, type: s
     const nabistreamResults = collected[8] as Awaited<ReturnType<typeof getNabistreamStreams>>;
     const coflixResults = collected[9] as Awaited<ReturnType<typeof getCoflixStreams>>;
     const videasyResults = collected[10] as Awaited<ReturnType<typeof getVideasyStreams>>;
+    const animesamaResults = collected[11] as Awaited<ReturnType<typeof getAnimeSamaStreams>>;
 
     // On accumule des "drafts" (streams sans name/title). name/title sont posés
     // en UNE passe centralisée plus bas (src/display.ts), pour un rendu uniforme.
@@ -1123,6 +1135,30 @@ async function handleStream(req: express.Request, res: express.Response, type: s
           language: cf.language,
           source: 'coflix',
           server: cf.server,
+        },
+      });
+    }
+
+    // Process AnimeSama results (anime VOSTFR/VF, HLS ansembed ou MP4 sibnet).
+    for (const as of animesamaResults) {
+      const d = await deliver(as.url, {
+        ...(as.headers || {}),
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+      }, { forceHls: /\.m3u8/i.test(as.url) }, req, config);
+
+      if (!d) continue; // Skip blocked URLs
+
+      drafts.push({
+        url: d.url,
+        behaviorHints: {
+          notWebReady: !!d.proxyHeaders,
+          bingeGroup: `animesama-${as.language}`,
+          ...(d.proxyHeaders ? { proxyHeaders: { request: d.proxyHeaders } } : {}),
+        },
+        _meta: {
+          quality: as.quality,
+          language: as.language,
+          source: 'animesama',
         },
       });
     }
@@ -1581,6 +1617,10 @@ app.get('/api/videasy/endpoints', (req, res) => {
   const reload = req.query.reload === 'true';
   res.json({ ...(reload ? reloadVideasyEndpoints() : getVideasyEndpoints()), reloaded: reload });
 });
+app.get('/api/animesama/endpoints', (req, res) => {
+  const reload = req.query.reload === 'true';
+  res.json({ ...(reload ? reloadAnimesamaEndpoints() : getAnimesamaEndpoints()), reloaded: reload });
+});
 app.get('/api/voirdrama/endpoints', (req, res) => {
   const reload = req.query.reload === 'true';
   res.json({ ...(reload ? reloadVoirDramaEndpoints() : getVoirDramaEndpoints()), reloaded: reload });
@@ -1642,6 +1682,7 @@ const singleBaseSources: Array<{ path: string; file: string; reload: () => unkno
   { path: 'nabistream', file: 'nabistream-endpoints.json', reload: reloadNabistreamEndpoints },
   { path: 'coflix', file: 'coflix-endpoints.json', reload: reloadCoflixEndpoints },
   { path: 'videasy', file: 'videasy-endpoints.json', reload: reloadVideasyEndpoints },
+  { path: 'animesama', file: 'animesama-endpoints.json', reload: reloadAnimesamaEndpoints },
 ];
 for (const src of singleBaseSources) {
   app.post(`/api/${src.path}/endpoints`, requireAdminSession, jsonBody, (req, res) => {

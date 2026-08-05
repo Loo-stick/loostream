@@ -427,6 +427,7 @@ const SOURCES = [
     { path: 'voiranime', label: 'VoirAnime', fields: ['base'], note: 'scraping du site (anime, gaté sur les titres japonais)' },
     { path: 'nabistream', label: 'Nabistream', fields: ['base'], note: 'API dramas asiatiques VOSTFR (keyée TMDB, HLS direct + subs FR)' },
     { path: 'coflix', label: 'Coflix', fields: ['base'], note: 'scraping FR généraliste VF+VOSTFR (domaine tournant, fallbacks intégrés)' },
+    { path: 'animesama', label: 'AnimeSama', fields: ['base'], note: 'anime VOSTFR/VF (domaine rotatif : anime-sama.to/.pw ; gaté sur l\'anime)' },
 ];
 async function loadEndpoints() {
     const box = document.getElementById('endpoints');
