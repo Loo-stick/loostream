@@ -1,0 +1,4 @@
+{
+  "_comment": "Base de l'API Videasy. Le domaine TOURNE souvent (speedracelight -> ...). Éditez ici si l'extraction Videasy renvoie 0 (voir le domaine dans player.videasy.to) ; hot-reloadé (aucun rebuild).",
+  "base": "https://api.speedracelight.com"
+}

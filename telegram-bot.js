@@ -247,6 +247,24 @@ function fetchLoostreamApi(endpoint) {
   });
 }
 
+// Notification quand AUTO_WHITELIST apprend un nouveau domaine (CDN de segments
+// rotatif, ex. Videasy). Une notif par domaine (pas de cooldown : chaque hôte 1x).
+const sentAutoWl = new Set();
+async function sendAutoWhitelistNotice(domain) {
+  if (sentAutoWl.has(domain)) return;
+  sentAutoWl.add(domain);
+  const baseDomain = extractBaseDomain(domain);
+  let message = `🆕 <b>Domaine auto-whitelisté</b>\n\n<code>${domain}</code>\n`;
+  if (baseDomain) message += `└ racine: <code>${baseDomain}</code>\n`;
+  message += `\nAppris automatiquement depuis un master déjà autorisé (AUTO_WHITELIST).`;
+  try {
+    await telegramRequest('sendMessage', { chat_id: CHAT_ID, text: message, parse_mode: 'HTML' });
+    console.log(`[Telegram] Auto-whitelist notice sent for: ${domain}`);
+  } catch (e) {
+    console.error('[Telegram] Failed to send auto-wl notice:', e.message);
+  }
+}
+
 // Format stats message
 async function sendStatsMessage() {
   try {
@@ -689,6 +707,10 @@ function monitorLogs() {
         const [, domain, url] = match;
         sendDomainAlert(domain, url);
       }
+      const wl = line.match(/Auto-whitelisted ([^\s]+)/);
+      if (wl) {
+        sendAutoWhitelistNotice(wl[1]);
+      }
       const unrec = parseUnrecognizedHostLine(line);
       if (unrec) {
         handleUnrecognizedHost(unrec);
@@ -703,6 +725,10 @@ function monitorLogs() {
       if (match) {
         const [, domain, url] = match;
         sendDomainAlert(domain, url);
+      }
+      const wl = line.match(/Auto-whitelisted ([^\s]+)/);
+      if (wl) {
+        sendAutoWhitelistNotice(wl[1]);
       }
       const unrec = parseUnrecognizedHostLine(line);
       if (unrec) {

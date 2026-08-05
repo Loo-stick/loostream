@@ -10,6 +10,7 @@ import { getVoirAnimeStreams, getVoirAnimeEndpoints, reloadVoirAnimeEndpoints } 
 import { getNabistreamStreams, getNabistreamEndpoints, reloadNabistreamEndpoints } from './scrapers/nabistream';
 import { getCoflixStreams, getCoflixEndpoints, reloadCoflixEndpoints } from './scrapers/coflix';
 import { getStreamFlixStreams, reloadStreamflixEndpoints, getStreamflixEndpoints } from './scrapers/streamflix';
+import { getVideasyStreams, reloadVideasyEndpoints, getVideasyEndpoints } from './scrapers/videasy';
 import { getMovixStreams, reloadMovixEndpoints, getMovixEndpoints } from './scrapers/movix';
 import { getFrenchStreamStreams, reloadFrenchStreamEndpoints, getFrenchStreamEndpoints } from './scrapers/frenchstream';
 import { cached, getCacheStats } from './cache';
@@ -49,6 +50,7 @@ interface Stats {
     voiranime: { requests: number; success: number; errors: number; lastSuccess: number | null };
     nabistream: { requests: number; success: number; errors: number; lastSuccess: number | null };
     coflix: { requests: number; success: number; errors: number; lastSuccess: number | null };
+    videasy: { requests: number; success: number; errors: number; lastSuccess: number | null };
   };
   streamsServed: {
     movix: number;
@@ -61,6 +63,7 @@ interface Stats {
     voiranime: number;
     nabistream: number;
     coflix: number;
+    videasy: number;
   };
 }
 
@@ -78,11 +81,12 @@ const stats: Stats = {
     voiranime: { requests: 0, success: 0, errors: 0, lastSuccess: null },
     nabistream: { requests: 0, success: 0, errors: 0, lastSuccess: null },
     coflix: { requests: 0, success: 0, errors: 0, lastSuccess: null },
+    videasy: { requests: 0, success: 0, errors: 0, lastSuccess: null },
   },
-  streamsServed: { movix: 0, netmirror: 0, streamflix: 0, frenchstream: 0, wiflix: 0, voirdrama: 0, moviebox: 0, voiranime: 0, nabistream: 0, coflix: 0 },
+  streamsServed: { movix: 0, netmirror: 0, streamflix: 0, frenchstream: 0, wiflix: 0, voirdrama: 0, moviebox: 0, voiranime: 0, nabistream: 0, coflix: 0, videasy: 0 },
 };
 
-function trackSourceResult(source: 'movix' | 'netmirror' | 'streamflix' | 'frenchstream' | 'wiflix' | 'voirdrama' | 'moviebox' | 'voiranime' | 'nabistream' | 'coflix', success: boolean, streamCount: number = 0) {
+function trackSourceResult(source: 'movix' | 'netmirror' | 'streamflix' | 'frenchstream' | 'wiflix' | 'voirdrama' | 'moviebox' | 'voiranime' | 'nabistream' | 'coflix' | 'videasy', success: boolean, streamCount: number = 0) {
   stats.sources[source].requests++;
   if (success) {
     stats.sources[source].success++;
@@ -894,9 +898,13 @@ async function handleStream(req: express.Request, res: express.Response, type: s
       getCoflixStreams(type as 'movie' | 'series', extractorConfig, parsed.season, parsed.episode, info.frenchTitle || info.title, info.title)
         .then(r => { trackSourceResult('coflix', true, r.length); recordOutcome('coflix', r.length > 0 ? 'success' : 'empty'); return r; })
         .catch(e => { console.log('[Coflix] Error:', e); trackSourceResult('coflix', false); recordOutcome('coflix', 'error', e?.message); return []; }),
+      // Videasy : agrégateur VO (anglais) + sous-titres (VOSTFR si FR dispo), keyé TMDB.
+      getVideasyStreams(info.tmdbId, type as 'movie' | 'series', parsed.season, parsed.episode, config?.tmdbKey || DEFAULT_TMDB_KEY)
+        .then(r => { trackSourceResult('videasy', true, r.length); recordOutcome('videasy', r.length > 0 ? 'success' : 'empty'); return r; })
+        .catch(e => { console.log('[Videasy] Error:', e); trackSourceResult('videasy', false); recordOutcome('videasy', 'error', e?.message); return []; }),
     ];
 
-    const SOURCE_NAMES = ['netmirror', 'streamflix', 'movix', 'frenchstream', 'wiflix', 'voirdrama', 'moviebox', 'voiranime', 'nabistream', 'coflix'];
+    const SOURCE_NAMES = ['netmirror', 'streamflix', 'movix', 'frenchstream', 'wiflix', 'voirdrama', 'moviebox', 'voiranime', 'nabistream', 'coflix', 'videasy'];
     const collected = await collectSources(
       sourcePromises.map((promise, i) => ({
         name: SOURCE_NAMES[i],
@@ -919,6 +927,7 @@ async function handleStream(req: express.Request, res: express.Response, type: s
     const voiranimeResults = collected[7] as Awaited<ReturnType<typeof getVoirAnimeStreams>>;
     const nabistreamResults = collected[8] as Awaited<ReturnType<typeof getNabistreamStreams>>;
     const coflixResults = collected[9] as Awaited<ReturnType<typeof getCoflixStreams>>;
+    const videasyResults = collected[10] as Awaited<ReturnType<typeof getVideasyStreams>>;
 
     // On accumule des "drafts" (streams sans name/title). name/title sont posés
     // en UNE passe centralisée plus bas (src/display.ts), pour un rendu uniforme.
@@ -1161,6 +1170,33 @@ async function handleStream(req: express.Request, res: express.Response, type: s
       });
     }
 
+    // Process Videasy results (agrégateur VO anglais + sous-titres). HLS dont les
+    // segments sont des .jpg = TS déguisé (servis image/jpeg, comme NetMirror) ->
+    // forceLocal + useTransformer (transformer .jpg->video/mp2t, proxy local only).
+    for (const vd of videasyResults) {
+      const d = await deliver(vd.url, {
+        ...(vd.headers || {}),
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+      }, { forceHls: true, forceLocal: true, useTransformer: true }, req, config);
+
+      if (!d) continue; // Skip blocked URLs
+
+      drafts.push({
+        url: d.url,
+        behaviorHints: {
+          notWebReady: !!d.proxyHeaders,
+          bingeGroup: `videasy-${vd.server}`,
+          ...(d.proxyHeaders ? { proxyHeaders: { request: d.proxyHeaders } } : {}),
+        },
+        _meta: {
+          quality: vd.quality,
+          language: vd.language,
+          source: 'videasy',
+          server: vd.server,
+        },
+      });
+    }
+
     // Process MovieBox results (aoneroom mobile API — direct signed MP4s). The
     // signed URL is time-limited, so instead of embedding it we point at our own
     // /moviebox/stream endpoint which resolves a fresh URL and 302-redirects at
@@ -1362,6 +1398,23 @@ async function handleSubtitles(req: express.Request, res: express.Response, type
       console.log('[Subtitles] MovieBox:', (e?.message || '').slice(0, 80));
     }
 
+    // Videasy : sous-titres .vtt (VO anglais + autres langues si dispo, dont FR ->
+    // VOSTFR), servis via /videasy/subtitle (ajoute le Referer, sert text/vtt).
+    try {
+      const vds = await getVideasyStreams(info.tmdbId, type as 'movie' | 'series', parsed.season, parsed.episode, config?.tmdbKey || DEFAULT_TMDB_KEY);
+      const seenLang = new Set<string>();
+      for (const s of (vds[0]?.subtitles || [])) { // subs identiques entre serveurs
+        if (seenLang.has(s.lang)) continue;
+        seenLang.add(s.lang);
+        const label = /^fr/i.test(s.lang) ? 'Français' : /^en/i.test(s.lang) ? 'English' : s.lang;
+        const su = new URL(`/videasy/subtitle/${encodeURIComponent(label)}.vtt`, baseUrl);
+        su.searchParams.set('u', s.url);
+        subtitles.push({ id: `videasy-${s.lang}`, url: signUrl(su).toString(), lang: s.lang });
+      }
+    } catch (e: any) {
+      console.log('[Subtitles] Videasy:', (e?.message || '').slice(0, 80));
+    }
+
     console.log(`[Subtitles] ${type}/${id} -> ${subtitles.length} piste(s)`);
     res.json({ subtitles });
   } catch (e) {
@@ -1532,6 +1585,10 @@ app.get('/api/streamflix/endpoints', (req, res) => {
   const reload = req.query.reload === 'true';
   res.json({ ...(reload ? reloadStreamflixEndpoints() : getStreamflixEndpoints()), reloaded: reload });
 });
+app.get('/api/videasy/endpoints', (req, res) => {
+  const reload = req.query.reload === 'true';
+  res.json({ ...(reload ? reloadVideasyEndpoints() : getVideasyEndpoints()), reloaded: reload });
+});
 app.get('/api/voirdrama/endpoints', (req, res) => {
   const reload = req.query.reload === 'true';
   res.json({ ...(reload ? reloadVoirDramaEndpoints() : getVoirDramaEndpoints()), reloaded: reload });
@@ -1592,6 +1649,7 @@ const singleBaseSources: Array<{ path: string; file: string; reload: () => unkno
   { path: 'voiranime', file: 'voiranime-endpoints.json', reload: reloadVoirAnimeEndpoints },
   { path: 'nabistream', file: 'nabistream-endpoints.json', reload: reloadNabistreamEndpoints },
   { path: 'coflix', file: 'coflix-endpoints.json', reload: reloadCoflixEndpoints },
+  { path: 'videasy', file: 'videasy-endpoints.json', reload: reloadVideasyEndpoints },
 ];
 for (const src of singleBaseSources) {
   app.post(`/api/${src.path}/endpoints`, requireAdminSession, jsonBody, (req, res) => {
@@ -1902,6 +1960,28 @@ app.get('/api/health', async (_req, res) => {
 // Stremio ignore ; VTT + text/vtt marche partout. :label est cosmétique.
 // Nabistream : re-sert le .vtt (déjà en VTT chez tanastream) depuis notre origine,
 // en text/vtt — Nuvio n'affiche pas les sous-titres d'un host tiers direct.
+// Videasy : sous-titre .vtt sur le CDN rotatif (moon/premiumvacations/winterforest…).
+// Anti-SSRF : chemin Videasy `/vd/.../subs/*.vtt` + hôte autorisé + pas d'IP privée
+// (isAllowedUrl). Ajoute le Referer player.videasy.to (exigé par le CDN).
+app.get('/videasy/subtitle/:label', async (req, res) => {
+  const u = String(req.query.u || '');
+  try {
+    const parsed = new URL(u);
+    if (parsed.protocol !== 'https:' || !/\/vd\/.+\/subs\/.+\.vtt$/i.test(parsed.pathname) || !isAllowedUrl(u).allowed) {
+      res.status(404).end();
+      return;
+    }
+    const resp = await axios.get(u, { responseType: 'text', timeout: 15000, transformResponse: v => v, headers: { Referer: 'https://player.videasy.to/' } });
+    let vtt = String(resp.data).replace(/\r+/g, '');
+    if (!/^﻿?WEBVTT/.test(vtt)) vtt = 'WEBVTT\n\n' + vtt;
+    res.setHeader('Content-Type', 'text/vtt; charset=utf-8');
+    res.setHeader('Cache-Control', 'public, max-age=3600');
+    res.send(vtt);
+  } catch {
+    res.status(502).end();
+  }
+});
+
 app.get('/nabistream/subtitle/:label', async (req, res) => {
   const u = String(req.query.u || '');
   try {

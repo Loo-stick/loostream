@@ -1,286 +1,152 @@
 import axios from 'axios';
+import { cached } from '../cache';
+import { makeEndpointConfig } from '../endpoint-config';
 
+// Videasy — gros agrégateur (VO anglais + sous-titres) keyé TMDB. Protocole repris
+// du VideasyExtractor d'Onyx + capture navigateur du player actuel (player.videasy.to) :
+//   1. GET {base}/seed?mediaId={tmdb}                       -> { seed, ttlMs:30000 }
+//   2. GET {base}/{server}/sources-with-title?title=…&enc=2&seed=…  -> réponse CHIFFRÉE
+//   3. POST enc-dec.app/api/dec-videasy {text,id,seed}      -> { sources:[{quality,url}], subtitles:[{lang,url}] }
+// Les m3u8 sont sur moon.ironwallnet.net (cert VALIDE, exige Referer player.videasy.to).
+// Le domaine d'API TOURNE (videasy.net -> wingsdatabase -> speedracelight…) : d'où la
+// base éditable dans l'admin (hot-reload) — TOUT part de `endpoints.get().base`.
+
+const STREAMS_TTL_MS = 15 * 60 * 1000;
+const DEC_URL = 'https://enc-dec.app/api/dec-videasy';
+const DEFAULT_TMDB_API_KEY = process.env.TMDB_API_KEY || '';
+
+const endpoints = makeEndpointConfig('videasy-endpoints.json', 'VIDEASY_ENDPOINTS_CONFIG', {
+  base: 'https://api.speedracelight.com',
+});
+export const reloadVideasyEndpoints = endpoints.reload;
+export const getVideasyEndpoints = endpoints.get;
+const BASE = () => endpoints.get().base.replace(/\/+$/, '');
+
+const PLAYER = 'https://player.videasy.to';
 const HEADERS = {
-  'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36',
-  'Connection': 'keep-alive'
+  'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+  Accept: '*/*',
+  Origin: PLAYER,
+  Referer: `${PLAYER}/`,
 };
 
-const API = 'https://enc-dec.app/api';
-const TMDB_API_KEY = process.env.TMDB_API_KEY || '';
-const TMDB_BASE_URL = 'https://api.themoviedb.org/3';
+// Serveurs Videasy (nom affiché -> endpoint), repris d'Onyx.
+const SERVERS: Array<[string, string]> = [['Hydrogen', 'cdn'], ['Titanium', 'tejo'], ['Oxygen', 'neon2']];
 
-interface ServerConfig {
-  url: string;
-  language: string;
-  params?: Record<string, string>;
-  moviesOnly?: boolean;
-}
-
-// French + Original language servers
-const SERVERS: Record<string, ServerConfig> = {
-  // French server (priority)
-  'Chamber': {
-    url: 'https://api.videasy.net/meine/sources-with-title',
-    language: 'French',
-    params: { language: 'french' },
-    moviesOnly: true
-  },
-  // Original/VO servers
-  'Neon': {
-    url: 'https://api.videasy.net/myflixerzupcloud/sources-with-title',
-    language: 'Original'
-  },
-  'Sage': {
-    url: 'https://api.videasy.net/1movies/sources-with-title',
-    language: 'Original'
-  },
-  'Cypher': {
-    url: 'https://api.videasy.net/moviebox/sources-with-title',
-    language: 'Original'
-  },
-  'Reyna': {
-    url: 'https://api2.videasy.net/primewire/sources-with-title',
-    language: 'Original'
-  },
-  'Omen': {
-    url: 'https://api.videasy.net/onionplay/sources-with-title',
-    language: 'Original'
-  },
-  'Breach': {
-    url: 'https://api.videasy.net/m4uhd/sources-with-title',
-    language: 'Original'
-  },
-  'Vyse': {
-    url: 'https://api.videasy.net/hdmovie/sources-with-title',
-    language: 'Original'
-  },
-};
-
-export interface VideoEasyStream {
+export interface VideasyStream {
   name: string;
   title: string;
   url: string;
   quality: string;
-  server: string;
   language: string;
+  server: string;
+  headers?: Record<string, string>;
+  subtitles?: { lang: string; url: string }[];
 }
 
-interface MediaDetails {
-  id: number;
-  title: string;
-  year: string;
-  imdbId: string;
-  mediaType: 'movie' | 'tv';
+async function getTmdb(tmdbId: string, mediaType: 'movie' | 'series', apiKey: string): Promise<{ title: string; year: string; imdb: string } | null> {
+  const endpoint = mediaType === 'movie' ? 'movie' : 'tv';
+  return cached(
+    `tmdb:vd:${endpoint}:${tmdbId}`,
+    12 * 60 * 60 * 1000,
+    async () => {
+      try {
+        const { data } = await axios.get(`https://api.themoviedb.org/3/${endpoint}/${tmdbId}?api_key=${apiKey}&append_to_response=external_ids`, { timeout: 10000 });
+        return {
+          title: data?.title || data?.name || '',
+          year: String(data?.release_date || data?.first_air_date || '').slice(0, 4),
+          imdb: data?.external_ids?.imdb_id || data?.imdb_id || '',
+        };
+      } catch { return null; }
+    },
+    { scope: 'tmdb', shouldCache: r => !!r?.title },
+  );
 }
 
-interface VideoEasySource {
-  url?: string;
-  quality?: string;
-  language?: string;
-}
-
-interface VideoEasyData {
-  sources?: VideoEasySource[];
-}
-
-async function fetchMediaDetails(tmdbId: string, mediaType: 'movie' | 'series'): Promise<MediaDetails | null> {
+async function decrypt(encText: string, tmdbId: string, seed: string): Promise<any | null> {
   try {
-    const endpoint = mediaType === 'movie' ? 'movie' : 'tv';
-    const url = `${TMDB_BASE_URL}/${endpoint}/${tmdbId}?api_key=${TMDB_API_KEY}&append_to_response=external_ids`;
-    const { data } = await axios.get(url, { headers: HEADERS, timeout: 10000 });
-
-    return {
-      id: data.id,
-      title: data.title || data.name,
-      year: (data.release_date || data.first_air_date || '').split('-')[0],
-      imdbId: data.external_ids?.imdb_id || '',
-      mediaType: mediaType === 'movie' ? 'movie' : 'tv',
-    };
-  } catch (e) {
-    console.log('[VidEasy] Error fetching TMDB details:', e);
-    return null;
-  }
+    const { data } = await axios.post(DEC_URL, { text: encText, id: tmdbId, seed }, { timeout: 15000, headers: { 'Content-Type': 'application/json' } });
+    return data?.result || null;
+  } catch { return null; }
 }
 
-async function decryptVideoEasy(encryptedText: string, tmdbId: string): Promise<VideoEasyData | null> {
-  try {
-    const { data } = await axios.post(`${API}/dec-videasy`, {
-      text: encryptedText,
-      id: tmdbId
-    }, {
-      headers: { ...HEADERS, 'Content-Type': 'application/json' },
-      timeout: 15000,
-    });
-    return data.result;
-  } catch (e) {
-    console.log('[VidEasy] Decryption error:', e);
-    return null;
-  }
-}
-
-function buildVideoEasyUrl(
-  serverConfig: ServerConfig,
-  mediaType: 'movie' | 'tv',
-  title: string,
-  year: string,
-  tmdbId: string,
-  imdbId: string,
-  season?: number,
-  episode?: number
-): string {
-  const params: Record<string, string> = {
-    title,
-    mediaType,
-    year,
-    tmdbId,
-    imdbId,
-  };
-
-  if (serverConfig.params) {
-    Object.assign(params, serverConfig.params);
-  }
-
-  if (mediaType === 'tv' && season && episode) {
-    params.seasonId = String(season);
-    params.episodeId = String(episode);
-  }
-
-  const queryString = Object.entries(params)
-    .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`)
-    .join('&');
-
-  return `${serverConfig.url}?${queryString}`;
-}
-
-function extractQualityFromUrl(url: string): string {
-  if (url.includes('1080') || url.includes('1920')) return '1080p';
-  if (url.includes('720') || url.includes('1280')) return '720p';
-  if (url.includes('480') || url.includes('854')) return '480p';
-  if (url.includes('360') || url.includes('640')) return '360p';
-
-  const match = url.match(/(\d{3,4})p/i);
-  if (match) return `${match[1]}p`;
-
-  return 'Auto';
-}
-
-async function fetchFromServer(
-  serverName: string,
-  serverConfig: ServerConfig,
-  mediaDetails: MediaDetails,
-  season?: number,
-  episode?: number
-): Promise<VideoEasyStream[]> {
-  // Skip movie-only servers for TV shows
-  if (mediaDetails.mediaType === 'tv' && serverConfig.moviesOnly) {
-    return [];
-  }
-
-  try {
-    const url = buildVideoEasyUrl(
-      serverConfig,
-      mediaDetails.mediaType,
-      mediaDetails.title,
-      mediaDetails.year,
-      String(mediaDetails.id),
-      mediaDetails.imdbId,
-      season,
-      episode
-    );
-
-    const { data: encryptedData } = await axios.get(url, {
-      headers: HEADERS,
-      timeout: 15000,
-    });
-
-    if (!encryptedData || typeof encryptedData !== 'string') {
-      return [];
-    }
-
-    const decrypted = await decryptVideoEasy(encryptedData, String(mediaDetails.id));
-    if (!decrypted?.sources) {
-      return [];
-    }
-
-    const streams: VideoEasyStream[] = [];
-
-    for (const source of decrypted.sources) {
-      if (!source.url) continue;
-
-      // Only keep HLS streams for compatibility with MediaFlow
-      if (!source.url.includes('.m3u8')) continue;
-
-      const quality = source.quality || extractQualityFromUrl(source.url);
-
-      streams.push({
-        name: `VidEasy ${serverName}`,
-        title: `${mediaDetails.title} (${mediaDetails.year})`,
-        url: source.url,
-        quality,
-        server: serverName,
-        language: serverConfig.language,
-      });
-    }
-
-    if (streams.length > 0) {
-      console.log(`[VidEasy] ${serverName}: ${streams.length} stream(s)`);
-    }
-
-    return streams;
-  } catch (e) {
-    return [];
-  }
-}
-
-export async function getVideoEasyStreams(
+export async function getVideasyStreams(
   tmdbId: string,
   mediaType: 'movie' | 'series',
   season?: number,
-  episode?: number
-): Promise<VideoEasyStream[]> {
-  console.log(`[VidEasy] Searching for TMDB ${tmdbId}...`);
-
-  const mediaDetails = await fetchMediaDetails(tmdbId, mediaType);
-  if (!mediaDetails) {
-    console.log('[VidEasy] Could not fetch media details');
-    return [];
-  }
-
-  console.log(`[VidEasy] Found: ${mediaDetails.title} (${mediaDetails.year})`);
-
-  // Fetch from all servers in parallel
-  const serverEntries = Object.entries(SERVERS);
-  const results = await Promise.all(
-    serverEntries.map(([name, config]) =>
-      fetchFromServer(name, config, mediaDetails, season, episode)
-    )
+  episode?: number,
+  tmdbKey?: string,
+): Promise<VideasyStream[]> {
+  if (!tmdbId) return [];
+  if (mediaType === 'series' && (!season || !episode)) return [];
+  const key = `videasy:${mediaType}:${tmdbId}:${season || ''}:${episode || ''}`;
+  return cached(
+    key,
+    STREAMS_TTL_MS,
+    () => fetchVideasyStreams(tmdbId, mediaType, season, episode, tmdbKey),
+    { scope: 'videasy', shouldCache: r => r.length > 0 },
   );
+}
 
-  // Combine and deduplicate
-  const allStreams: VideoEasyStream[] = [];
+async function fetchVideasyStreams(
+  tmdbId: string,
+  mediaType: 'movie' | 'series',
+  season: number | undefined,
+  episode: number | undefined,
+  tmdbKey?: string,
+): Promise<VideasyStream[]> {
+  const apiKey = tmdbKey || DEFAULT_TMDB_API_KEY;
+  if (!apiKey) return [];
+  const info = await getTmdb(tmdbId, mediaType, apiKey);
+  if (!info?.title) return [];
+
+  const base = BASE();
+  // 1. seed (TTL 30s -> utilisé immédiatement).
+  let seed = '';
+  try {
+    const { data } = await axios.get(`${base}/seed?mediaId=${encodeURIComponent(tmdbId)}`, { headers: HEADERS, timeout: 12000 });
+    seed = data?.seed || '';
+  } catch { /* seed KO -> abandon */ }
+  if (!seed) { console.log(`[Videasy] pas de seed (tmdb ${tmdbId})`); return []; }
+
+  const title = encodeURIComponent(info.title);
+  const common = `&tmdbId=${encodeURIComponent(tmdbId)}&imdbId=${encodeURIComponent(info.imdb)}&enc=2&seed=${encodeURIComponent(seed)}`;
+  const q = mediaType === 'movie'
+    ? `title=${title}&mediaType=movie&year=${info.year}&episodeId=1&seasonId=1${common}`
+    : `title=${title}&mediaType=tv&year=${info.year}&episodeId=${episode}&seasonId=${season}${common}`;
+
+  const streams: VideasyStream[] = [];
   const seenUrls = new Set<string>();
-
-  for (const streams of results) {
-    for (const stream of streams) {
-      if (!seenUrls.has(stream.url)) {
-        seenUrls.add(stream.url);
-        allStreams.push(stream);
-      }
+  // 2+3. essayer chaque serveur, déchiffrer, collecter les sources HLS + sous-titres.
+  for (const [name, ep] of SERVERS) {
+    let encText: string;
+    try {
+      const { data } = await axios.get<string>(`${base}/${ep}/sources-with-title?${q}`, { headers: HEADERS, timeout: 12000, responseType: 'text', transformResponse: r => r });
+      encText = String(data || '');
+    } catch { continue; }
+    if (!encText || encText.trim().startsWith('{')) continue; // vide ou erreur JSON en clair
+    const result = await decrypt(encText, tmdbId, seed);
+    const sources: any[] = result?.sources || [];
+    if (!sources.length) continue;
+    const subtitles = (result?.subtitles || [])
+      .filter((s: any) => s?.url && /^https?:\/\//.test(s.url))
+      .map((s: any) => ({ lang: String(s.lang || s.language || 'und'), url: String(s.url) }));
+    for (const s of sources) {
+      const url = String(s?.url || '');
+      if (!url || !url.includes('.m3u8') || seenUrls.has(url)) continue;
+      seenUrls.add(url);
+      streams.push({
+        name: `Videasy ${name}`,
+        title: `${info.title}${info.year ? ` (${info.year})` : ''}`,
+        url,
+        quality: String(s.quality || 'HD'),
+        language: 'VO', // audio original (anglais) ; sous-titres attachés -> VOSTFR quand FR dispo
+        server: name,
+        headers: { Referer: `${PLAYER}/`, Origin: PLAYER },
+        subtitles,
+      });
     }
   }
-
-  // Sort by quality
-  const qualityOrder: Record<string, number> = {
-    '4K': 2160, '2160p': 2160, '1440p': 1440, '1080p': 1080,
-    '720p': 720, '480p': 480, '360p': 360, '240p': 240, 'Auto': 500
-  };
-
-  allStreams.sort((a, b) => {
-    const qa = qualityOrder[a.quality] || 0;
-    const qb = qualityOrder[b.quality] || 0;
-    return qb - qa;
-  });
-
-  console.log(`[VidEasy] Total: ${allStreams.length} stream(s)`);
-  return allStreams;
+  if (streams.length) console.log(`[Videasy] tmdb ${tmdbId} -> ${streams.length} flux (${streams[0].quality}, ${streams[0].subtitles?.length || 0} sub)`);
+  return streams;
 }
