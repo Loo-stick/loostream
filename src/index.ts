@@ -597,7 +597,12 @@ const BROWSER_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36
 // (9 seg / 18s). Nuvio lit via ExoPlayer -> troll en URL brute. Ces hôtes doivent
 // donc être servis AVEC proxyHeaders (UA navigateur), jamais en URL brute — le
 // lecteur injecte alors le bon UA. Onyx fait pareil (headers navigateur complets).
-const UA_GATED_HOSTS = ['fsvid'];
+// AUSSI les hôtes gatés par REFERER (même logique : servir AVEC proxyHeaders, jamais
+// en URL brute) : la sonde hostNeedsHeaders est bernée sinon — sans Referer, ces CDN
+// renvoient 200 sur une page-gate (ex. citron-edge de StreamFlix -> redirige vers un
+// lien Telegram t.me) que la sonde prend pour "header-free". PROUVÉ citron-edge :
+// sans Referer -> gate t.me ; avec Referer streamflix.mom -> 206 video/mp4.
+const UA_GATED_HOSTS = ['fsvid', 'citron-edge'];
 function isUaGatedHost(host: string): boolean {
   return UA_GATED_HOSTS.some(p => host.includes(p));
 }
