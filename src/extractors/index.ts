@@ -375,13 +375,19 @@ function extractIife(js: string): string | null {
   return null;
 }
 
-export function evalObfuscatedUrl(js: string): string | null {
+// `hostname` = domaine de la page embed. vidzy/fsvid dérivent désormais la clé de
+// déchiffrement de `location.hostname` (somme des codes de caractères) : sans un
+// `location` correct, la clé est fausse et l'IIFE retombe sur l'URL /troll/. On
+// fournit donc un `location` minimal calé sur le vrai hostname.
+export function evalObfuscatedUrl(js: string, hostname?: string): string | null {
   const iife = extractIife(js);
   if (!iife) return null;
   try {
+    const h = hostname || '';
+    const location = { hostname: h, host: h, protocol: 'https:', href: h ? `https://${h}/` : '', search: '', pathname: '/' };
     const out = vm.runInNewContext(
       iife,
-      { atob: (s: string) => Buffer.from(s, 'base64').toString('binary') },
+      { atob: (s: string) => Buffer.from(s, 'base64').toString('binary'), location },
       { timeout: 1000 }
     );
     return typeof out === 'string' && /^https?:\/\//.test(out) ? out : null;
@@ -417,7 +423,8 @@ async function packedJsOnce(embedUrl: string, origin: string): Promise<string | 
   // Deux candidats : l'URL calculée par l'IIFE obfusquée (vidzy, et le VRAI flux
   // de fsvid) et l'URL en clair. fsvid met le vrai flux dans l'IIFE À CÔTÉ d'un
   // leurre /troll/ en clair -> on préfère toute URL NON-leurre (obfusquée d'abord).
-  const decoded = evalObfuscatedUrl(js);
+  let host = ''; try { host = new URL(embedUrl).hostname; } catch { /* embedUrl valide en amont */ }
+  const decoded = evalObfuscatedUrl(js, host);
   const plain = findStreamUrl(js);
   const url = [decoded, plain].find(u => u && !isDecoyUrl(u)) || null;
   if (url) return url;
