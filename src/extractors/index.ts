@@ -477,18 +477,26 @@ async function extractStreamWishFamily(embedUrl: string): Promise<ExtractedStrea
   return (await tryDlEmbed(embedUrl)) || (await extractPackedJs(embedUrl));
 }
 
+// Retry anti-leurre : fsvid/vidzy servent PAR INTERMITTENCE une page /troll/ quand
+// ils flairent un scraper ou throttlent une rafale de requêtes (IP/fenêtre). Le vrai
+// flux revient à l'essai suivant — MAIS il faut ESPACER : Onyx attend ~1s entre
+// chaque tentative (VidzyExtractor). On enchaînait 3 GET sans pause -> on retombait
+// dans la même fenêtre de troll. 4 essais espacés de 800 ms laissent la fenêtre se
+// rouvrir dans la même requête (coût user nul : l'early-exit répond déjà avec les
+// autres sources, vidzy arrive juste un peu plus tard).
+const PACKED_RETRIES = 4;
+const PACKED_RETRY_DELAY_MS = 800;
+
 export async function extractPackedJs(embedUrl: string): Promise<ExtractedStream | null> {
   try {
     const origin = new URL(embedUrl).origin;
-    // Retry anti-leurre : fsvid sert par intermittence la page /troll/ ; une
-    // ré-extraction fraîche retombe en général sur le vrai flux (cf. FsvidExtractor
-    // d'Onyx qui re-pioche). 3 tentatives max.
     let url: string | null = null;
-    for (let attempt = 0; attempt < 3; attempt++) {
+    for (let attempt = 0; attempt < PACKED_RETRIES; attempt++) {
       const r = await packedJsOnce(embedUrl, origin);
       if (r && r !== 'decoy') { url = r; break; }
       if (r === 'decoy') {
-        console.log(`[Extractor] page leurre (/troll/) reçue, retry ${attempt + 1}/3: ${embedUrl}`);
+        console.log(`[Extractor] page leurre (/troll/) reçue, retry ${attempt + 1}/${PACKED_RETRIES}: ${embedUrl}`);
+        if (attempt < PACKED_RETRIES - 1) await new Promise(res => setTimeout(res, PACKED_RETRY_DELAY_MS));
         continue;
       }
       break; // null franc (pas de packed JS / erreur de page) -> inutile d'insister
