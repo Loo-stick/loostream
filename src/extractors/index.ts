@@ -43,12 +43,12 @@ export interface ExtractorConfig {
   mediaFlowPassword?: string;
 }
 
-export type ExtractorId ='voe' | 'uqload' | 'doodstream' | 'filemoon' | 'vidoza' | 'vidmoly' | 'streamtape' | 'mixdrop' | 'sharecloudy' | 'lulustream' | 'filelions' | 'streamwish' | 'fsvid' | 'vidzy' | 'mailru' | 'sibnet' | 'livavid';
+export type ExtractorId ='voe' | 'uqload' | 'doodstream' | 'filemoon' | 'vidoza' | 'vidmoly' | 'streamtape' | 'mixdrop' | 'sharecloudy' | 'lulustream' | 'filelions' | 'streamwish' | 'fsvid' | 'vidzy' | 'mailru' | 'sibnet' | 'livavid' | 'ansembed';
 
 export const EXTRACTOR_IDS: ExtractorId[] = [
   'voe', 'uqload', 'doodstream', 'filemoon', 'vidoza', 'vidmoly',
   'streamtape', 'mixdrop', 'sharecloudy', 'lulustream', 'filelions',
-  'streamwish', 'fsvid', 'vidzy', 'mailru', 'sibnet', 'livavid',
+  'streamwish', 'fsvid', 'vidzy', 'mailru', 'sibnet', 'livavid', 'ansembed',
 ];
 
 export const DEFAULT_EXTRACTOR_DOMAINS: Record<ExtractorId, string[]> = {
@@ -79,6 +79,8 @@ export const DEFAULT_EXTRACTOR_DOMAINS: Record<ExtractorId, string[]> = {
   // Serveurs FrenchStream ("premium" et "vidzy") : page avec JS packé P.A.C.K.E.R.
   fsvid: ['fsvid'],
   vidzy: ['vidzy'],
+  // ansembed : lecteur d'AnimeSama (jwplayer, URL HLS en clair).
+  ansembed: ['ansembed'],
 };
 
 /**
@@ -633,10 +635,35 @@ async function extractLocally(embedUrl: string, extractor: string): Promise<Extr
       return await extractMailru(embedUrl);
     case 'sibnet':
       return await extractSibnet(embedUrl);
+    case 'ansembed':
+      return await extractAnsembed(embedUrl);
     case 'vidmoly':
       return await extractVidmoly(embedUrl);
     default:
       return null;
+  }
+}
+
+/**
+ * ansembed.net (lecteur d'AnimeSama) — jwplayer avec l'URL HLS EN CLAIR dans
+ * `sources:[{file:"…master.m3u8"}]`. `findStreamUrl` couvre déjà ce pattern. Le CDN
+ * (vmpx.online…) tourne → appris par AUTO_WHITELIST à l'extraction ; il exige le
+ * Referer ansembed.
+ */
+async function extractAnsembed(embedUrl: string): Promise<ExtractedStream | null> {
+  try {
+    const origin = new URL(embedUrl).origin;
+    const { data } = await axios.get<string>(embedUrl, {
+      headers: { ...HEADERS, Referer: 'https://anime-sama.to/' },
+      timeout: 15000,
+      responseType: 'text',
+      transformResponse: v => v,
+    });
+    const url = findStreamUrl(String(data));
+    if (!url || !/\.m3u8/i.test(url)) return null;
+    return { url, quality: 'HD', format: 'hls', headers: { Referer: `${origin}/` } };
+  } catch {
+    return null;
   }
 }
 
