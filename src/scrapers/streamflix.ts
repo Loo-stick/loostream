@@ -2,31 +2,27 @@ import axios from 'axios';
 import { cached } from '../cache';
 import { makeEndpointConfig } from '../endpoint-config';
 
-const STREAMS_TTL_MS = 15 * 60 * 1000;
-const DUMP_TTL_MS = 30 * 60 * 1000;
+// StreamFlix V2 (streamflix.mom) — API REST publique keyée TMDB, zéro auth.
+//   Film  : GET /api/movies/{tmdbId}            -> { id (interne), title, video_quality, has_video }
+//           GET /api/movies/{id}/video-url      -> { directUrl, isHls }
+//   Série : GET /api/series/{tmdbId}            -> { id (interne), name }
+//           GET /api/series/{id}/season/{s}/episode/{e}/video-url -> { directUrl, isHls }
+// Le directUrl est un MP4 progressif sur citron-edge.lol (302 -> cheksum.lol). Contenu
+// VF (chemin .../series/VF/...). L'ANCIENNE app (api.streamflix.app) pointait des CDN
+// morts -> réécrit pour la V2. La base est éditable dans l'admin (hot-reload) : TOUT
+// part de `endpoints.get().base`.
 
-// Base URL is editable in config/streamflix-endpoints.json (hot-reloaded).
+const STREAMS_TTL_MS = 15 * 60 * 1000;
+
 const endpoints = makeEndpointConfig('streamflix-endpoints.json', 'STREAMFLIX_ENDPOINTS_CONFIG', {
-  base: 'https://api.streamflix.app',
+  base: 'https://streamflix.mom',
 });
 export const reloadStreamflixEndpoints = endpoints.reload;
 export const getStreamflixEndpoints = endpoints.get;
-const CONFIG_URL = () => `${endpoints.get().base}/config/config-streamflixapp.json`;
-const DATA_URL = () => `${endpoints.get().base}/data.json`;
-const DEFAULT_TMDB_API_KEY = process.env.TMDB_API_KEY || '';
+const BASE = () => endpoints.get().base.replace(/\/+$/, '');
 
-const HEADERS = {
-  'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-  'Accept': 'application/json, */*',
-  'Referer': 'https://api.streamflix.app/',
-};
-
-// Cache
-let configCache: any = null;
-let configCacheTime = 0;
-let dataCache: any[] = [];
-let dataCacheTime = 0;
-const CACHE_TTL = 30 * 60 * 1000; // 30 minutes
+const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
+const HEADERS = () => ({ 'User-Agent': UA, Accept: 'application/json, */*', Referer: `${BASE()}/` });
 
 export interface StreamFlixStream {
   name: string;
@@ -34,164 +30,16 @@ export interface StreamFlixStream {
   url: string;
   quality: string;
   language: string;
+  headers?: Record<string, string>;
 }
 
-async function getConfig(): Promise<any> {
-  if (configCache && Date.now() - configCacheTime < CACHE_TTL) {
-    return configCache;
-  }
-
+async function getJson<T = any>(url: string): Promise<T | null> {
   try {
-    const { data } = await axios.get(CONFIG_URL(), { headers: HEADERS, timeout: 15000 });
-    configCache = data;
-    configCacheTime = Date.now();
-    console.log('[StreamFlix] Config loaded');
+    const { data, status } = await axios.get<T>(url, { headers: HEADERS(), timeout: 12000, validateStatus: () => true });
+    if (status < 200 || status >= 300 || !data || typeof data !== 'object') return null;
     return data;
-  } catch (e) {
-    console.log('[StreamFlix] Error loading config:', e);
-    return null;
-  }
-}
-
-async function getData(): Promise<any[]> {
-  if (dataCache.length && Date.now() - dataCacheTime < CACHE_TTL) {
-    return dataCache;
-  }
-
-  const items = await cached<any[]>(
-    'streamflix:dump',
-    DUMP_TTL_MS,
-    async () => {
-      try {
-        const { data } = await axios.get(DATA_URL(), { headers: HEADERS, timeout: 30000 });
-        if (Array.isArray(data)) return data;
-        if (data.data && Array.isArray(data.data)) return data.data;
-        if (data.movies && Array.isArray(data.movies)) return data.movies;
-        for (const val of Object.values(data)) {
-          if (Array.isArray(val) && val.length > 5) return val as any[];
-        }
-        return [];
-      } catch (e) {
-        console.log('[StreamFlix] Error loading data:', e);
-        return [];
-      }
-    },
-    { scope: 'streamflix-dump', shouldCache: r => r.length > 0 }
-  );
-
-  dataCache = items;
-  dataCacheTime = Date.now();
-  console.log(`[StreamFlix] Data loaded: ${items.length} items`);
-  return items;
-}
-
-function getTitle(item: any): string {
-  const fields = ['moviename', 'Movie_Name', 'movie_name', 'MovieName', 'title', 'Title', 'name', 'Name'];
-  for (const f of fields) {
-    if (item[f]) return String(item[f]);
-  }
-  return '';
-}
-
-function getLink(item: any): string {
-  const fields = ['movielink', 'Movie_Link', 'movie_link', 'MovieLink', 'link', 'Link', 'url', 'file', 'stream'];
-  for (const f of fields) {
-    if (item[f]) return String(item[f]);
-  }
-  return '';
-}
-
-function getKey(item: any): string {
-  const fields = ['moviekey', 'Movie_Key', 'movie_key', 'MovieKey', 'key', 'Key', 'firebase_key', 'id', 'ID'];
-  for (const f of fields) {
-    if (item[f]) return String(item[f]);
-  }
-  return '';
-}
-
-function getLanguage(item: any): string {
-  const fields = ['movielanguage', 'language', 'Language', 'lang', 'audio'];
-  for (const f of fields) {
-    if (item[f]) return String(item[f]);
-  }
-  return 'Original';
-}
-
-function getQuality(item: any): string {
-  // Try to get quality from item data
-  const qualityFields = ['moviequality', 'quality', 'Quality', 'resolution', 'Resolution'];
-  for (const f of qualityFields) {
-    if (item[f]) return String(item[f]);
-  }
-
-  // Try to extract from link
-  const link = getLink(item);
-  if (link) {
-    if (link.includes('4k') || link.includes('2160')) return '4K';
-    if (link.includes('1080')) return '1080p';
-    if (link.includes('720')) return '720p';
-    if (link.includes('480')) return '480p';
-  }
-
-  // Try to extract from title
-  const title = getTitle(item);
-  if (title) {
-    const qualityMatch = title.match(/(\d{3,4}p|4K|HD|FHD)/i);
-    if (qualityMatch) return qualityMatch[1].toUpperCase();
-  }
-
-  return 'HD';
-}
-
-function normalizeTitle(title: string): string {
-  return title.toLowerCase()
-    .replace(/[^a-z0-9\s]/g, '')
-    .replace(/\s+/g, ' ')
-    .trim();
-}
-
-function calculateSimilarity(a: string, b: string): number {
-  const wordsA = new Set(a.split(' ').filter(w => w.length > 1));
-  const wordsB = new Set(b.split(' ').filter(w => w.length > 1));
-
-  if (wordsA.size === 0 || wordsB.size === 0) return 0;
-
-  const intersection = [...wordsA].filter(w => wordsB.has(w)).length;
-  const union = new Set([...wordsA, ...wordsB]).size;
-
-  return intersection / union; // Jaccard similarity
-}
-
-function getCdnUrls(config: any): string[] {
-  if (!config) return [];
-
-  // StreamFlix uses "movies" and "tv" arrays for CDN URLs
-  const cdns: string[] = [];
-
-  if (config.movies && Array.isArray(config.movies)) {
-    cdns.push(...config.movies.filter((u: string) => u && u.startsWith('http')));
-  }
-  if (config.tv && Array.isArray(config.tv)) {
-    cdns.push(...config.tv.filter((u: string) => u && u.startsWith('http')));
-  }
-  if (config.premium && Array.isArray(config.premium)) {
-    cdns.push(...config.premium.filter((u: string) => u && u.startsWith('http')));
-  }
-
-  // Deduplicate
-  return [...new Set(cdns)];
-}
-
-async function checkUrl(url: string): Promise<boolean> {
-  try {
-    const resp = await axios.head(url, {
-      headers: HEADERS,
-      timeout: 5000,
-      validateStatus: (status) => status < 400
-    });
-    return true;
   } catch {
-    return false;
+    return null;
   }
 }
 
@@ -200,14 +48,16 @@ export async function getStreamFlixStreams(
   mediaType: 'movie' | 'series',
   season?: number,
   episode?: number,
-  tmdbKey?: string
+  _tmdbKey?: string, // conservé pour compat de signature (plus nécessaire : API keyée TMDB)
 ): Promise<StreamFlixStream[]> {
+  if (!tmdbId) return [];
+  if (mediaType === 'series' && (!season || !episode)) return [];
   const key = `streamflix:${mediaType}:${tmdbId}:${season || ''}:${episode || ''}`;
   return cached(
     key,
     STREAMS_TTL_MS,
-    () => fetchStreamFlixStreams(tmdbId, mediaType, season, episode, tmdbKey),
-    { scope: 'streamflix', shouldCache: r => r.length > 0 }
+    () => fetchStreamFlixStreams(tmdbId, mediaType, season, episode),
+    { scope: 'streamflix', shouldCache: r => r.length > 0 },
   );
 }
 
@@ -216,123 +66,45 @@ async function fetchStreamFlixStreams(
   mediaType: 'movie' | 'series',
   season?: number,
   episode?: number,
-  tmdbKey?: string
 ): Promise<StreamFlixStream[]> {
-  const apiKey = tmdbKey || DEFAULT_TMDB_API_KEY;
+  const base = BASE();
+  // 1. Résoudre le contenu par tmdbId -> id interne + métadonnées.
+  const kind = mediaType === 'movie' ? 'movies' : 'series';
+  const meta = await getJson<any>(`${base}/api/${kind}/${encodeURIComponent(tmdbId)}`);
+  if (!meta?.id) {
+    console.log(`[StreamFlix] Hors catalogue (tmdb ${tmdbId})`);
+    return [];
+  }
+  if (meta.has_video === false) {
+    console.log(`[StreamFlix] Pas de vidéo pour ${meta.title || tmdbId}`);
+    return [];
+  }
+  const title = String(meta.title || meta.original_title || meta.name || meta.original_name || '');
+  const year = String(meta.release_date || meta.first_air_date || '').slice(0, 4);
+  const quality = String(meta.video_quality || 'HD');
 
-  if (!apiKey) {
-    console.log('[StreamFlix] No TMDB API key available, skipping');
+  // 2. Récupérer l'URL vidéo (id INTERNE + numéros de saison/épisode pour les séries).
+  const videoUrlEndpoint = mediaType === 'movie'
+    ? `${base}/api/movies/${meta.id}/video-url`
+    : `${base}/api/series/${meta.id}/season/${season}/episode/${episode}/video-url`;
+  const v = await getJson<any>(videoUrlEndpoint);
+  const direct: string | undefined = v?.directUrl || v?.url;
+  if (!direct || !/^https?:\/\//.test(direct)) {
+    console.log(`[StreamFlix] Pas d'URL vidéo (tmdb ${tmdbId})`);
     return [];
   }
 
-  console.log(`[StreamFlix] Searching for TMDB ${tmdbId}...`);
+  let host = '';
+  try { host = new URL(direct).host; } catch { /* garde vide */ }
+  console.log(`[StreamFlix] ${title} -> ${host} (${quality}, ${v.isHls ? 'hls' : 'mp4'})`);
 
-  try {
-    // Get TMDB info (cached 12h, shared across scrapers)
-    const endpoint = mediaType === 'movie' ? 'movie' : 'tv';
-    const tmdbData = await cached<any>(
-      `tmdb:${endpoint}:${tmdbId}`,
-      12 * 60 * 60 * 1000,
-      async () => {
-        const { data } = await axios.get(
-          `https://api.themoviedb.org/3/${endpoint}/${tmdbId}?api_key=${apiKey}`,
-          { timeout: 10000 }
-        );
-        return data;
-      },
-      { scope: 'tmdb', shouldCache: r => !!r }
-    );
-
-    const title = tmdbData?.title || tmdbData?.name;
-    const year = (tmdbData?.release_date || tmdbData?.first_air_date || '').split('-')[0];
-
-    if (!title) {
-      console.log('[StreamFlix] No TMDB title found');
-      return [];
-    }
-
-    console.log(`[StreamFlix] Found: ${title} (${year})`);
-
-    // Load config and data in parallel
-    const [config, items] = await Promise.all([getConfig(), getData()]);
-
-    if (!config || !items.length) {
-      console.log('[StreamFlix] No config or data');
-      return [];
-    }
-
-    // Prefer exact TMDB id match (items carry a `tmdb` field); fall back to fuzzy title matching
-    const tmdbMatches = items
-      .filter(item => String(item.tmdb || '') === String(tmdbId))
-      .map(item => ({ item, itemTitle: getTitle(item), similarity: 1 }));
-
-    let matches: { item: any; itemTitle: string; similarity: number }[];
-    if (tmdbMatches.length > 0) {
-      matches = tmdbMatches;
-      console.log(`[StreamFlix] TMDB match: ${matches.length} item(s)`);
-    } else {
-      const normalizedTitle = normalizeTitle(title);
-      matches = items
-        .map(item => {
-          const itemTitle = normalizeTitle(getTitle(item));
-          const similarity = calculateSimilarity(normalizedTitle, itemTitle);
-          return { item, itemTitle, similarity };
-        })
-        .filter(({ similarity }) => similarity >= 0.6)
-        .sort((a, b) => b.similarity - a.similarity);
-
-      if (!matches.length) {
-        console.log('[StreamFlix] No matches found (no TMDB id + fuzzy title <60%)');
-        return [];
-      }
-      console.log(`[StreamFlix] Fuzzy match ${matches.length} item(s): ${matches.map(m => `${m.itemTitle} (${(m.similarity * 100).toFixed(0)}%)`).join(', ')}`);
-    }
-
-    // Get CDN base URLs
-    const cdnUrls = getCdnUrls(config);
-    console.log(`[StreamFlix] CDN URLs: ${cdnUrls.length}`);
-
-    const streams: StreamFlixStream[] = [];
-
-    for (const { item } of matches.slice(0, 3)) { // Limit to 3 matches
-      const link = getLink(item);
-      const language = getLanguage(item);
-      const quality = getQuality(item);
-
-      console.log(`[StreamFlix] Item data:`, JSON.stringify(item).substring(0, 500));
-      console.log(`[StreamFlix] Extracted - link: ${link}, quality: ${quality}, language: ${language}`);
-
-      if (!link) continue;
-
-      // If link is already a full URL, use it directly
-      if (link.startsWith('http')) {
-        streams.push({
-          name: 'StreamFlix',
-          title: `${title} (${year})`,
-          url: link,
-          quality,
-          language,
-        });
-      } else if (cdnUrls.length > 0) {
-        // Create streams for multiple CDNs (as fallbacks)
-        for (const cdnBase of cdnUrls.slice(0, 2)) { // Limit to 2 CDNs
-          const fullUrl = `${cdnBase}${link}`;
-          streams.push({
-            name: 'StreamFlix',
-            title: `${title} (${year})`,
-            url: fullUrl,
-            quality,
-            language,
-          });
-        }
-      }
-    }
-
-    console.log(`[StreamFlix] Total: ${streams.length} stream(s)`);
-    return streams;
-
-  } catch (e) {
-    console.log('[StreamFlix] Error:', e);
-    return [];
-  }
+  return [{
+    name: 'StreamFlix',
+    title: `${title}${year ? ` (${year})` : ''}`,
+    url: direct,
+    quality,
+    language: 'VF', // site FR, contenu doublé (chemins .../VF/...) ; has_vo non exploité ici
+    // Le CDN 302 vers cheksum.lol ; certains hôtes exigent le Referer streamflix.
+    headers: { Referer: `${base}/` },
+  }];
 }

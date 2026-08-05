@@ -1013,8 +1013,7 @@ async function handleStream(req: express.Request, res: express.Response, type: s
     // Process StreamFlix results
     for (const sf of streamflixResults) {
       const d = await deliver(sf.url, {
-        'Referer': 'https://api.streamflix.app/',
-        'Origin': 'https://api.streamflix.app',
+        ...(sf.headers || {}), // Referer streamflix.mom (V2)
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
       }, {}, req, config);
 
