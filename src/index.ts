@@ -1140,13 +1140,17 @@ async function handleStream(req: express.Request, res: express.Response, type: s
     }
 
     // Process AnimeSama results (anime VOSTFR/VF, HLS ansembed ou MP4 sibnet).
+    // Le HLS ansembed (vmpx) a un token lié à l'IP/ASN de l'extracteur (param asn=)
+    // -> INJOUABLE en direct depuis le client (autre IP). forceLocal : le serveur
+    // relaie avec la bonne IP (comme Videasy). Le MP4 sibnet, lui, reste directable.
     for (const as of animesamaResults) {
+      const isHls = /\.m3u8/i.test(as.url);
       const d = await deliver(as.url, {
         ...(as.headers || {}),
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-      }, { forceHls: /\.m3u8/i.test(as.url) }, req, config);
+      }, { forceHls: isHls }, req, config);
 
-      if (!d) continue; // Skip blocked URLs
+      if (!d) continue; // Skip blocked URLs (ex. vmpx en mode direct : non-directable)
 
       drafts.push({
         url: d.url,

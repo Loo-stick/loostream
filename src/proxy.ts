@@ -21,6 +21,8 @@ const DEFAULT_DOMAINS = [
   'xalaflix.design', 'movix.blog',
   'streamflix.app', 'chilflix', 'streamflix.one',
   'akamaized.net', 'cloudfront.net', 'googleapis.com',
+  // AnimeSama : lecteur ansembed + son CDN vmpx (sous-domaines rotatifs prx-*.vmpx.online).
+  'ansembed.net', 'vmpx.online',
 ];
 
 let ALLOWED_DOMAINS: string[] = [...DEFAULT_DOMAINS];
@@ -70,8 +72,11 @@ function loadAllowedDomains(): void {
       const data = fs.readFileSync(CONFIG_PATH, 'utf-8');
       const config = JSON.parse(data);
       if (Array.isArray(config.domains)) {
-        ALLOWED_DOMAINS = config.domains;
-        console.log(`[Proxy] Loaded ${ALLOWED_DOMAINS.length} domains from config`);
+        // Fusion : DEFAULT_DOMAINS (baseline codé, ex. CDN vmpx d'AnimeSama) TOUJOURS
+        // présent, + les domaines du fichier. Sans ça, un fichier existant masquait
+        // les défauts et un nouveau CDN codé en dur n'était jamais whitelisté.
+        ALLOWED_DOMAINS = [...new Set([...DEFAULT_DOMAINS, ...config.domains])];
+        console.log(`[Proxy] Loaded ${ALLOWED_DOMAINS.length} domains (défauts + config)`);
       }
     } else {
       console.log(`[Proxy] Config not found at ${CONFIG_PATH}, using defaults`);

@@ -3,6 +3,7 @@ import { cached } from '../cache';
 import { makeEndpointConfig } from '../endpoint-config';
 import { ExtractorConfig, detectExtractor, extractStream } from '../extractors';
 import { applyMultiAudio } from '../multiaudio';
+import { probeMp4Quality } from '../mp4probe';
 import { Wanted, pickBest } from '../matching';
 
 // AnimeSama (anime-sama.to) — source ANIME (VOSTFR + VF). HTML scraping :
@@ -104,7 +105,14 @@ async function fetchAnimeSamaStreams(
     for (const u of candidates) {
       const ex = await extractStream(u, extractorConfig).catch(() => null);
       if (ex?.url) {
-        streams.push({ name: 'AnimeSama', url: ex.url, quality: ex.quality || 'HD', language: lang === 'vf' ? 'VF' : 'VOSTFR', headers: ex.headers });
+        // Qualité réelle : HLS -> applyMultiAudio (plus bas) ; MP4 (sibnet) -> sonde
+        // du conteneur (moov/tkhd), sinon 'HD' générique.
+        let quality = ex.quality || 'HD';
+        if (ex.format !== 'hls' && !/\.m3u8/i.test(ex.url)) {
+          const probed = await probeMp4Quality(ex.url, ex.headers).catch(() => null);
+          if (probed) quality = probed;
+        }
+        streams.push({ name: 'AnimeSama', url: ex.url, quality, language: lang === 'vf' ? 'VF' : 'VOSTFR', headers: ex.headers });
         break; // une source suffit par langue
       }
     }

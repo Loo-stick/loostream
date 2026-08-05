@@ -15,7 +15,11 @@
 //   - vmnow / vmeas    : CDN vidmoly = mini-PC perso exposés via Tailscale, cert
 //                        `*.ts.net` invalide/expiré -> Nuvio refuse le TLS en direct.
 //                        Doit passer par le proxy (comme sur `main` avant direct-first).
-export const PROXY_FORCED_HOSTS = ['uqload', 'voe.sx', 'vmnow', 'vmeas'];
+//   - vmpx.online      : CDN d'ansembed (AnimeSama/VoirAnime). Le token HLS est LIÉ
+//                        À L'IP/ASN de l'extracteur (param asn=) -> injouable depuis
+//                        le client en direct ; seul notre serveur (proxy local) a la
+//                        bonne IP. En mode direct pur : écarté (mieux qu'un flux mort).
+export const PROXY_FORCED_HOSTS = ['uqload', 'voe.sx', 'vmnow', 'vmeas', 'vmpx.online'];
 
 /** Un hôte est directable s'il n'est pas dans la liste non-directable ci-dessus. */
 export function isDirectable(streamUrl: string): boolean {
