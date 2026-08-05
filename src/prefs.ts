@@ -54,3 +54,32 @@ export function passesPreferences(
   if (meta.source === 'netmirror') return true;
   return langOrder.includes(normalizeLanguage(meta.language));
 }
+
+/** Rang d'une langue dans l'ordre de préférence (inconnue = tout en bas). */
+function langRank(lang: string, order: string[]): number {
+  const i = order.indexOf(normalizeLanguage(lang));
+  return i === -1 ? 100 : i;
+}
+
+// Comparateur de tri. Deux composantes : LANGUE (rang dans langOrder) et QUALITÉ
+// (proximité à la qualité préférée, puis meilleure en départage). `sortBy` choisit
+// laquelle prime :
+//   - 'language' (défaut) : langue d'abord, qualité en second — « ma langue, puis le
+//     mieux dedans ».
+//   - 'quality'          : qualité d'abord, langue en second — un 4K remonte quelle
+//     que soit sa langue.
+export type SortBy = 'language' | 'quality';
+export function compareStreams(
+  a: { quality: string; language: string },
+  b: { quality: string; language: string },
+  opts: { langOrder: string[]; prefQualityScore: number; sortBy: SortBy },
+): number {
+  const langCmp = langRank(a.language, opts.langOrder) - langRank(b.language, opts.langOrder);
+  const aQ = QUALITY_SCORES[normalizeQuality(a.quality)] || 2;
+  const bQ = QUALITY_SCORES[normalizeQuality(b.quality)] || 2;
+  const diffCmp = Math.abs(aQ - opts.prefQualityScore) - Math.abs(bQ - opts.prefQualityScore);
+  const highCmp = bQ - aQ; // meilleure qualité d'abord
+  return opts.sortBy === 'quality'
+    ? (diffCmp || langCmp || highCmp)
+    : (langCmp || diffCmp || highCmp);
+}

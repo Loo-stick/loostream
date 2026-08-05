@@ -353,6 +353,19 @@
             </div>
 
             <div class="input-group show" style="margin-top: 20px;">
+                <label>Priorité de tri</label>
+                <select id="sort-by">
+                    <option value="language">Langue puis qualité (défaut)</option>
+                    <option value="quality">Qualité puis langue</option>
+                </select>
+                <p style="color: #888; font-size: 0.82em; margin-top: 8px;">
+                    « Langue puis qualité » classe d'abord selon l'ordre de vos langues, puis met la meilleure qualité
+                    en tête de chaque langue. « Qualité puis langue » fait remonter la meilleure qualité (proche de votre
+                    préférence) <em>toutes langues confondues</em> — ex. un 4K VF passe devant une MULTI 1080p.
+                </p>
+            </div>
+
+            <div class="input-group show" style="margin-top: 20px;">
                 <label>Nombre de résultats suffisant (réponse rapide)</label>
                 <select id="min-streams">
                     <option value="3">3 — le plus rapide</option>
@@ -471,6 +484,7 @@
                 return;
             }
             config.minStreams = parseInt(document.getElementById('min-streams').value, 10);
+            config.sortBy = document.getElementById('sort-by').value;
 
             // Clé d'accès optionnelle (seulement si l'hébergeur l'exige)
             const accessKey = document.getElementById('access-key').value.trim();
@@ -622,6 +636,9 @@
                     }
                     if (config.minStreams !== undefined && config.minStreams !== null) {
                         document.getElementById('min-streams').value = String(config.minStreams);
+                    }
+                    if (config.sortBy) {
+                        document.getElementById('sort-by').value = config.sortBy;
                     }
                     if (config.langOrder && Array.isArray(config.langOrder)) {
                         setLangOrder(config.langOrder);

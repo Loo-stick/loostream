@@ -25,7 +25,7 @@ import * as fsSync from 'fs';
 import { ExtractorConfig, reloadExtractorDomains, getExtractorDomains } from './extractors';
 import { getSceneMeta, buildFilename, providerLabel } from './filename';
 import { buildStreamName, buildStreamTitle } from './display';
-import { QUALITY_SCORES, normalizeLanguage, normalizeQuality, passesPreferences } from './prefs';
+import { QUALITY_SCORES, passesPreferences, compareStreams } from './prefs';
 
 // Capture les console.* dans un ring mémoire pour la page Logs de l'admin, le
 // plus tôt possible (avant tout autre log de boot). Délègue ensuite à l'original,
@@ -137,6 +137,7 @@ interface UserConfig {
   prefQuality?: string;  // "1080p", "4K", "720p", "480p"
   langOrder?: string[];  // ["MULTI", "VF", "VOSTFR", "VO"]
   minStreams?: number;   // early exit: stop waiting once this many wanted streams are in (0 = wait for all)
+  sortBy?: 'language' | 'quality'; // priorité de tri : langue d'abord (défaut) ou qualité d'abord
 }
 
 // Stream with metadata for filtering/sorting
@@ -244,6 +245,9 @@ function parseConfig(configStr: string): UserConfig | null {
     if (!Number.isFinite(minStreams) || minStreams < 0) minStreams = DEFAULT_MIN_STREAMS;
     minStreams = Math.min(Math.round(minStreams), 30);
 
+    // Priorité de tri : 'quality' (qualité d'abord) sinon 'language' (défaut).
+    const sortBy: 'language' | 'quality' = parsed.sortBy === 'quality' ? 'quality' : 'language';
+
     // Sanitize strings
     return {
       proxy,
@@ -255,6 +259,7 @@ function parseConfig(configStr: string): UserConfig | null {
       prefQuality,
       langOrder,
       minStreams,
+      sortBy,
     };
   } catch {
     return null;
@@ -387,38 +392,9 @@ function filterAndSortStreams(streams: StreamWithMeta[], config: UserConfig | nu
     filtered = streams;
   }
 
-  // Sort by preference score
-  filtered.sort((a, b) => {
-    const aLang = normalizeLanguage(a._meta.language);
-    const bLang = normalizeLanguage(b._meta.language);
-    const aQuality = normalizeQuality(a._meta.quality);
-    const bQuality = normalizeQuality(b._meta.quality);
-
-    // Language priority (lower index = higher priority)
-    const aLangScore = langOrder.indexOf(aLang);
-    const bLangScore = langOrder.indexOf(bLang);
-    const aLangPriority = aLangScore === -1 ? 100 : aLangScore;
-    const bLangPriority = bLangScore === -1 ? 100 : bLangScore;
-
-    if (aLangPriority !== bLangPriority) {
-      return aLangPriority - bLangPriority;
-    }
-
-    // Quality priority (higher score = better)
-    const aQualityScore = QUALITY_SCORES[aQuality] || 2;
-    const bQualityScore = QUALITY_SCORES[bQuality] || 2;
-
-    // Prefer streams closest to preferred quality
-    const aDiff = Math.abs(aQualityScore - prefQualityScore);
-    const bDiff = Math.abs(bQualityScore - prefQualityScore);
-
-    if (aDiff !== bDiff) {
-      return aDiff - bDiff;
-    }
-
-    // Tie-breaker: higher quality wins
-    return bQualityScore - aQualityScore;
-  });
+  // Tri : langue d'abord (défaut) ou qualité d'abord, selon config.sortBy.
+  const sortBy = config.sortBy || 'language';
+  filtered.sort((a, b) => compareStreams(a._meta, b._meta, { langOrder, prefQualityScore, sortBy }));
 
   return filtered;
 }
