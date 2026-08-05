@@ -158,6 +158,7 @@ interface StreamWithMeta {
     platform?: string;
     sizeBytes?: number;
     subCount?: number;
+    frSubCount?: number; // nb de sous-titres FR externes (OpenSubtitles) dispo pour le titre
   };
 }
 
@@ -793,6 +794,12 @@ async function handleStream(req: express.Request, res: express.Response, type: s
 
     console.log(`[Stream] Title: ${info.title} (${info.year})`);
 
+    // Sous-titres FR externes (OpenSubtitles) : nombre dispo pour le titre, calculé
+    // EN PARALLÈLE des scrapers (caché 12h) et affiché sur chaque carte (🇫🇷 N).
+    const frSubsPromise = info.imdbId
+      ? getFrenchSubtitles(info.imdbId, type === 'series' ? parsed.season : undefined, type === 'series' ? parsed.episode : undefined).catch(() => [])
+      : Promise.resolve([]);
+
     // Fetch from all sources in parallel (with stats tracking)
     stats.requests.total++;
     stats.requests.streams++;
@@ -1238,6 +1245,13 @@ async function handleStream(req: express.Request, res: express.Response, type: s
 
     // Passe centralisée : filename (AIOStreams) + name/title enrichis depuis
     // _meta (src/display.ts). originalLanguage résout le cas "VO" (drapeau).
+    // Ne jamais laisser OpenSubtitles retarder la liste : cap à 2,5s (sinon 0 -> pas
+    // de badge). En pratique la promesse a tourné pendant tout le fan-out -> déjà prête.
+    const frSubs = await Promise.race([
+      frSubsPromise,
+      new Promise<any[]>(resolve => setTimeout(() => resolve([]), 2500)),
+    ]);
+    const frSubCount = frSubs.length;
     const streams: StreamWithMeta[] = drafts.map(d => {
       const filename = buildFilename({
         title: sceneMeta.title,
@@ -1252,7 +1266,7 @@ async function handleStream(req: express.Request, res: express.Response, type: s
         provider: providerLabel(d._meta.source),
       });
       const delivery = computeDelivery(d.url, !!d.behaviorHints?.proxyHeaders, config);
-      const meta = { ...d._meta, delivery };
+      const meta = { ...d._meta, delivery, frSubCount };
       return {
         ...d,
         behaviorHints: { ...d.behaviorHints, filename },

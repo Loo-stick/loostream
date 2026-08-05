@@ -14,6 +14,7 @@ export interface DisplayMeta {
   platform?: string;
   sizeBytes?: number;
   subCount?: number;
+  frSubCount?: number; // sous-titres FR externes (OpenSubtitles) dispo pour le titre
   delivery?: 'direct' | 'local' | 'mediaflow'; // mode de livraison du flux
 }
 
@@ -97,6 +98,7 @@ export function buildStreamTitle(m: DisplayMeta, originalLanguage?: string, file
   const line2: string[] = [];
   if (m.server) line2.push(`▶️ ${m.server}`);
   if (m.subCount && m.subCount > 0) line2.push(`📝 ${m.subCount} sous-titres`);
+  if (m.frSubCount && m.frSubCount > 0) line2.push(`🇫🇷 ${m.frSubCount} ST FR`);
 
   const lines = [line1.join(' · '), line2.join(' · ')];
   if (filename) lines.push(`💾 ${filename}`);

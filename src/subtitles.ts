@@ -8,7 +8,7 @@ import { cached } from './cache';
 const OS_BASE = 'https://rest.opensubtitles.org';
 const OS_UA = 'LooStream/1.0 (+subtitles)'; // l'API legacy exige un User-Agent
 const TTL_MS = 12 * 60 * 60 * 1000;
-const TOP_N = 3;
+const TOP_N = 5;
 
 export interface ExtSub { url: string; name: string; downloads: number }
 
