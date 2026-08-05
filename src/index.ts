@@ -22,6 +22,8 @@ import { installLogCapture, getLogs } from './logbuffer';
 import { getModeRaw, autoWhitelistEnabled, updateSettings, settingsView } from './settings';
 import { canDirect } from './deliver';
 import * as fsSync from 'fs';
+import * as zlib from 'zlib';
+import { getFrenchSubtitles } from './subtitles';
 import { ExtractorConfig, reloadExtractorDomains, getExtractorDomains } from './extractors';
 import { getSceneMeta, buildFilename, providerLabel } from './filename';
 import { buildStreamName, buildStreamTitle } from './display';
@@ -1371,6 +1373,25 @@ async function handleSubtitles(req: express.Request, res: express.Response, type
       console.log('[Subtitles] Videasy:', (e?.message || '').slice(0, 80));
     }
 
+    // Sous-titres FR EXTERNES (OpenSubtitles legacy) — complètent les flux VO
+    // (Videasy…) qui ne portent pas de FR. Toujours proposés ; ignorés sur du VF.
+    try {
+      if (info.imdbId) {
+        const ext = await getFrenchSubtitles(
+          info.imdbId,
+          type === 'series' ? parsed.season : undefined,
+          type === 'series' ? parsed.episode : undefined,
+        );
+        ext.forEach((s, i) => {
+          const su = new URL('/extsub/subtitle', baseUrl);
+          su.searchParams.set('url', s.url);
+          subtitles.push({ id: `opensubtitles-fr-${i}`, url: signUrl(su).toString(), lang: 'fre' });
+        });
+      }
+    } catch (e: any) {
+      console.log('[Subtitles] OpenSubtitles:', (e?.message || '').slice(0, 80));
+    }
+
     console.log(`[Subtitles] ${type}/${id} -> ${subtitles.length} piste(s)`);
     res.json({ subtitles });
   } catch (e) {
@@ -1991,6 +2012,36 @@ app.get('/videasy/subtitle/:label', async (req, res) => {
     if (!/^﻿?WEBVTT/.test(vtt)) vtt = 'WEBVTT\n\n' + vtt;
     res.setHeader('Content-Type', 'text/vtt; charset=utf-8');
     res.setHeader('Cache-Control', 'public, max-age=3600');
+    res.send(vtt);
+  } catch {
+    res.status(502).end();
+  }
+});
+
+// Sous-titres FR externes (OpenSubtitles legacy) : télécharge le SRT (gzippé),
+// gunzip, convertit SRT->VTT, sert text/vtt. SSRF : uniquement *.opensubtitles.org.
+app.get('/extsub/subtitle', async (req, res) => {
+  const u = String(req.query.url || '');
+  let parsed: URL;
+  try { parsed = new URL(u); } catch { res.status(400).end(); return; }
+  if (parsed.protocol !== 'https:' || !/(^|\.)opensubtitles\.org$/i.test(parsed.hostname)) {
+    res.status(403).end();
+    return;
+  }
+  try {
+    const resp = await axios.get<ArrayBuffer>(u, {
+      responseType: 'arraybuffer', timeout: 15000,
+      headers: { 'User-Agent': 'LooStream/1.0 (+subtitles)' },
+      maxContentLength: 5 * 1024 * 1024, maxBodyLength: 5 * 1024 * 1024,
+    });
+    let buf = Buffer.from(resp.data);
+    if (buf[0] === 0x1f && buf[1] === 0x8b) { try { buf = zlib.gunzipSync(buf); } catch { /* pas gzip */ } }
+    const srt = buf.toString('utf-8').replace(/\r+/g, '');
+    const vtt = 'WEBVTT\n\n' + srt
+      .replace(/(\d{2}:\d{2}:\d{2}),(\d{3})/g, '$1.$2')  // décimales SRT (virgule) -> VTT (point)
+      .replace(/[ \t]*-->[ \t]*/g, ' --> ');
+    res.setHeader('Content-Type', 'text/vtt; charset=utf-8');
+    res.setHeader('Cache-Control', 'public, max-age=86400');
     res.send(vtt);
   } catch {
     res.status(502).end();
