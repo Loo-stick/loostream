@@ -375,21 +375,56 @@ function extractIife(js: string): string | null {
   return null;
 }
 
-// `hostname` = domaine de la page embed. vidzy/fsvid dérivent désormais la clé de
-// déchiffrement de `location.hostname` (somme des codes de caractères) : sans un
-// `location` correct, la clé est fausse et l'IIFE retombe sur l'URL /troll/. On
-// fournit donc un `location` minimal calé sur le vrai hostname.
-export function evalObfuscatedUrl(js: string, hostname?: string): string | null {
+// Environnement NAVIGATEUR minimal pour le sandbox `vm`. vidzy/fsvid (et consorts
+// P.A.C.K.E.R.) dérivent leur clé de déchiffrement de variables du navigateur — hier
+// `location.hostname`, demain peut-être `window`/`document`/`navigator`. Fournir un
+// faux navigateur cohérent (calé sur l'URL de l'embed) fait tourner leur IIFE « comme
+// dans un iframe » -> vrai flux, sans avoir à re-patcher à chaque changement d'obfuscation.
+function browserEnv(embedUrl?: string): Record<string, unknown> {
+  let u: URL | null = null;
+  try { u = embedUrl ? new URL(embedUrl) : null; } catch { u = null; }
+  const location = {
+    href: u ? u.href : '', origin: u ? u.origin : '', protocol: u ? u.protocol : 'https:',
+    host: u ? u.host : '', hostname: u ? u.hostname : '', port: u ? u.port : '',
+    pathname: u ? u.pathname : '/', search: u ? u.search : '', hash: '',
+    toString() { return this.href; }, replace() { /* no-op */ }, assign() { /* no-op */ }, reload() { /* no-op */ },
+  };
+  const atob = (s: string) => Buffer.from(s, 'base64').toString('binary');
+  const btoa = (s: string) => Buffer.from(s, 'binary').toString('base64');
+  const navigator = {
+    userAgent: IFRAME_HEADERS['User-Agent'], platform: 'Win32', vendor: 'Google Inc.',
+    language: 'fr-FR', languages: ['fr-FR', 'fr', 'en'], appVersion: '5.0', appName: 'Netscape',
+    cookieEnabled: true, onLine: true, maxTouchPoints: 0,
+  };
+  const el = () => ({ style: {}, setAttribute() { /**/ }, getAttribute: () => null, appendChild() { /**/ }, remove() { /**/ }, addEventListener() { /**/ } });
+  const document = {
+    cookie: '', title: '', referrer: '', readyState: 'complete', location, hidden: false,
+    createElement: el, createElementNS: el, getElementById: () => null, querySelector: () => null,
+    querySelectorAll: () => [], getElementsByTagName: () => [], getElementsByClassName: () => [],
+    addEventListener() { /**/ }, removeEventListener() { /**/ }, write() { /**/ }, writeln() { /**/ },
+    body: el(), documentElement: el(), head: el(),
+  };
+  const screen = { width: 1920, height: 1080, availWidth: 1920, availHeight: 1040, colorDepth: 24, pixelDepth: 24 };
+  const win: Record<string, unknown> = {
+    location, atob, btoa, navigator, document, screen,
+    innerWidth: 1920, innerHeight: 1080, outerWidth: 1920, outerHeight: 1080, devicePixelRatio: 1,
+    setTimeout: () => 0, clearTimeout() { /**/ }, setInterval: () => 0, clearInterval() { /**/ },
+    requestAnimationFrame: () => 0, cancelAnimationFrame() { /**/ },
+    addEventListener() { /**/ }, removeEventListener() { /**/ }, postMessage() { /**/ }, dispatchEvent: () => true,
+    console: { log() { /**/ }, error() { /**/ }, warn() { /**/ }, info() { /**/ } },
+    performance: { now: () => 0 }, localStorage: {}, sessionStorage: {},
+  };
+  // Auto-références (window/self/top/parent/globalThis pointent sur l'env) — attendu
+  // par le code navigateur ; top===self simule une page « pas en iframe ».
+  win.window = win; win.self = win; win.top = win; win.parent = win; win.globalThis = win; win.frames = win;
+  return win;
+}
+
+export function evalObfuscatedUrl(js: string, embedUrl?: string): string | null {
   const iife = extractIife(js);
   if (!iife) return null;
   try {
-    const h = hostname || '';
-    const location = { hostname: h, host: h, protocol: 'https:', href: h ? `https://${h}/` : '', search: '', pathname: '/' };
-    const out = vm.runInNewContext(
-      iife,
-      { atob: (s: string) => Buffer.from(s, 'base64').toString('binary'), location },
-      { timeout: 1000 }
-    );
+    const out = vm.runInNewContext(iife, browserEnv(embedUrl), { timeout: 1000 });
     return typeof out === 'string' && /^https?:\/\//.test(out) ? out : null;
   } catch {
     return null;
@@ -423,8 +458,7 @@ async function packedJsOnce(embedUrl: string, origin: string): Promise<string | 
   // Deux candidats : l'URL calculée par l'IIFE obfusquée (vidzy, et le VRAI flux
   // de fsvid) et l'URL en clair. fsvid met le vrai flux dans l'IIFE À CÔTÉ d'un
   // leurre /troll/ en clair -> on préfère toute URL NON-leurre (obfusquée d'abord).
-  let host = ''; try { host = new URL(embedUrl).hostname; } catch { /* embedUrl valide en amont */ }
-  const decoded = evalObfuscatedUrl(js, host);
+  const decoded = evalObfuscatedUrl(js, embedUrl);
   const plain = findStreamUrl(js);
   const url = [decoded, plain].find(u => u && !isDecoyUrl(u)) || null;
   if (url) return url;
