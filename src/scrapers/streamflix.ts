@@ -1,6 +1,7 @@
 import axios from 'axios';
 import { cached } from '../cache';
 import { makeEndpointConfig } from '../endpoint-config';
+import { probeMp4Quality } from '../mp4probe';
 
 // StreamFlix V2 (streamflix.mom) — API REST publique keyée TMDB, zéro auth.
 //   Film  : GET /api/movies/{tmdbId}            -> { id (interne), title, video_quality, has_video }
@@ -94,15 +95,25 @@ async function fetchStreamFlixStreams(
     return [];
   }
 
+  // Qualité RÉELLE : l'API ne renvoie qu'un 'HD' grossier (rien pour les séries).
+  // StreamFlix est du MP4 progressif -> on lit la résolution dans le conteneur
+  // (moov/tkhd, requêtes Range bornées) pour un libellé ET un tri justes. Échec ou
+  // HLS -> on garde le label d'origine.
+  let realQuality = quality;
+  if (!v.isHls) {
+    const probed = await probeMp4Quality(direct, { Referer: `${base}/` });
+    if (probed) realQuality = probed;
+  }
+
   let host = '';
   try { host = new URL(direct).host; } catch { /* garde vide */ }
-  console.log(`[StreamFlix] ${title} -> ${host} (${quality}, ${v.isHls ? 'hls' : 'mp4'})`);
+  console.log(`[StreamFlix] ${title} -> ${host} (${realQuality}, ${v.isHls ? 'hls' : 'mp4'})`);
 
   return [{
     name: 'StreamFlix',
     title: `${title}${year ? ` (${year})` : ''}`,
     url: direct,
-    quality,
+    quality: realQuality,
     language: 'VF', // site FR, contenu doublé (chemins .../VF/...) ; has_vo non exploité ici
     // Le CDN 302 vers cheksum.lol ; certains hôtes exigent le Referer streamflix.
     headers: { Referer: `${base}/` },

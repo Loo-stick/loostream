@@ -55,7 +55,8 @@ async function probeMaster(url: string, headers?: Record<string, string>): Promi
 
 // Hauteur de la meilleure variante -> libellé de qualité (affichage + tri). Remplace
 // le générique 'HD' des extracteurs par la vraie résolution lue dans le manifest.
-function resLabel(h: number): string | null {
+// Exporté : réutilisé par la sonde MP4 (src/mp4probe.ts) pour les sources non-HLS.
+export function resLabel(h: number): string | null {
   if (h >= 1400) return '4K';
   if (h >= 1000) return '1080p';
   if (h >= 650) return '720p';
