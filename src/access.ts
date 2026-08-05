@@ -1,5 +1,6 @@
 import { timingSafeEqual } from 'crypto';
 import type { Request, Response, NextFunction } from 'express';
+import { getOwnerKeyValue } from './settings';
 
 // Clé d'accès OPTIONNELLE. `ACCESS_KEY` vide/absente => l'addon reste en libre
 // accès (comportement historique). Renseignée => tout le périmètre streaming
@@ -37,10 +38,13 @@ export function keyMatches(candidate: unknown): boolean {
 // (ex. MODE=DIRECT;MFP pour ne pas offrir le proxy local à ses potes) tout en se
 // gardant le proxy local via un lien portant `ownerKey`.
 
-/** La clé propriétaire configurée, ou undefined si non renseignée. */
+/**
+ * La clé propriétaire effective, ou undefined si non renseignée. Lue via les
+ * réglages runtime (config/runtime-settings.json) avec repli sur OWNER_KEY du
+ * .env — l'admin peut donc la poser/retirer à chaud sans redémarrage.
+ */
 export function ownerKey(): string | undefined {
-  const k = process.env.OWNER_KEY;
-  return k && k.length > 0 ? k : undefined;
+  return getOwnerKeyValue();
 }
 
 /** true si une clé propriétaire est configurée. */

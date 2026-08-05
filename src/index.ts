@@ -16,13 +16,20 @@ import { getFrenchStreamStreams, reloadFrenchStreamEndpoints, getFrenchStreamEnd
 import { cached, getCacheStats } from './cache';
 import { recordOutcome, getAllMetrics } from './metrics';
 import crypto from 'crypto';
-import proxyRouter, { isAllowedUrl, addAllowedDomain, getAllowedDomains, AUTO_WHITELIST } from './proxy';
+import proxyRouter, { isAllowedUrl, addAllowedDomain, getAllowedDomains } from './proxy';
 import { accessEnabled, keyMatches, signUrl, requireQueryKey, ownerKeyMatches, ownerKeyEnabled } from './access';
+import { installLogCapture, getLogs } from './logbuffer';
+import { getModeRaw, autoWhitelistEnabled, updateSettings, settingsView } from './settings';
 import { canDirect } from './deliver';
 import * as fsSync from 'fs';
 import { ExtractorConfig, reloadExtractorDomains, getExtractorDomains } from './extractors';
 import { getSceneMeta, buildFilename, providerLabel } from './filename';
 import { buildStreamName, buildStreamTitle } from './display';
+
+// Capture les console.* dans un ring mémoire pour la page Logs de l'admin, le
+// plus tôt possible (avant tout autre log de boot). Délègue ensuite à l'original,
+// donc les logs Docker restent intacts.
+installLogCapture();
 
 const app = express();
 
@@ -175,7 +182,7 @@ const MODE_ALIAS: Record<string, 'direct' | 'mediaflow' | 'local'> = {
   direct: 'direct', mfp: 'mediaflow', mediaflow: 'mediaflow', local: 'local',
 };
 function allowedModes(): ('direct' | 'mediaflow' | 'local')[] {
-  const raw = (process.env.MODE || '').trim();
+  const raw = getModeRaw().trim();
   if (!raw) return ['direct', 'mediaflow', 'local'];
   const list = raw.split(/[;,]/).map(s => MODE_ALIAS[s.trim().toLowerCase()]).filter(Boolean);
   return list.length ? [...new Set(list)] as ('direct' | 'mediaflow' | 'local')[] : ['direct', 'mediaflow', 'local'];
@@ -513,7 +520,7 @@ function buildProxyUrl(
   // d'extraction (pas d'une requête client), on l'apprend AVANT le contrôle
   // d'allowlist pour qu'un nouveau CDN de source passe sans intervention. Le
   // blocage des IP privées (dans isAllowedUrl) reste la garde SSRF.
-  if (AUTO_WHITELIST) {
+  if (autoWhitelistEnabled()) {
     try { addAllowedDomain(new URL(streamUrl).hostname); } catch { /* url invalide -> isAllowedUrl tranche */ }
   }
 
@@ -1672,7 +1679,7 @@ for (const src of singleBaseSources) {
 
 // Whitelist des domaines : lecture (+ statut auto), ajout manuel (authentifié).
 app.get('/api/whitelist', (_req, res) => {
-  res.json({ domains: getAllowedDomains(), autoWhitelist: process.env.AUTO_WHITELIST === 'true' });
+  res.json({ domains: getAllowedDomains(), autoWhitelist: autoWhitelistEnabled() });
 });
 app.post('/api/whitelist', requireAdminSession, jsonBody, (req, res) => {
   const domain = typeof req.body?.domain === 'string' ? req.body.domain.trim().toLowerCase() : '';
@@ -1681,6 +1688,46 @@ app.post('/api/whitelist', requireAdminSession, jsonBody, (req, res) => {
   }
   const added = addAllowedDomain(domain);
   return res.json({ ok: true, added, domains: getAllowedDomains() });
+});
+
+// Réglages runtime (Paramétrage > Partage). GET non sensible (aucune clé en clair,
+// cf. settingsView) ; POST derrière la session admin. Applique à chaud : mode,
+// autoWhitelist et ownerKey sont relus par leurs getters à chaque usage.
+app.get('/api/settings', (_req, res) => {
+  res.json(settingsView());
+});
+app.post('/api/settings', requireAdminSession, jsonBody, (req, res) => {
+  const b = req.body || {};
+  const patch: { mode?: string | null; ownerKey?: string | null; autoWhitelist?: boolean | null } = {};
+
+  if ('mode' in b) {
+    if (b.mode === null) patch.mode = null;
+    else if (typeof b.mode === 'string') {
+      // valide : sous-ensemble de {DIRECT,MFP,LOCAL} séparé par ; ou ,
+      const toks = b.mode.split(/[;,]/).map((s: string) => s.trim().toLowerCase()).filter(Boolean);
+      if (!toks.length || !toks.every((t: string) => t in MODE_ALIAS)) {
+        return res.status(400).json({ ok: false, error: 'mode invalide (DIRECT/MFP/LOCAL)' });
+      }
+      // Normalise vers les libellés canoniques via MODE_ALIAS (direct/mediaflow/local),
+      // puis re-affiche en étiquettes utilisateur.
+      const LABEL: Record<string, string> = { direct: 'DIRECT', mediaflow: 'MFP', local: 'LOCAL' };
+      patch.mode = [...new Set(toks.map((t: string) => LABEL[MODE_ALIAS[t]]))].join(';');
+    }
+  }
+  if ('autoWhitelist' in b) {
+    if (b.autoWhitelist === null) patch.autoWhitelist = null;
+    else if (typeof b.autoWhitelist === 'boolean') patch.autoWhitelist = b.autoWhitelist;
+    else return res.status(400).json({ ok: false, error: 'autoWhitelist doit être un booléen' });
+  }
+  if ('ownerKey' in b) {
+    if (b.ownerKey === null || b.ownerKey === '') patch.ownerKey = null;
+    else if (typeof b.ownerKey === 'string' && b.ownerKey.length >= 8 && b.ownerKey.length <= 128) {
+      patch.ownerKey = b.ownerKey;
+    } else return res.status(400).json({ ok: false, error: 'ownerKey : 8 à 128 caractères' });
+  }
+
+  updateSettings(patch);
+  return res.json({ ok: true, ...settingsView() });
 });
 
 // ── NetMirror : manifestes RECONSTRUITS (méthode Onyx) ─────────────────────────
@@ -1803,6 +1850,19 @@ app.get('/api/stats', (_req, res) => {
 // Cache stats standalone
 app.get('/api/cache/stats', (_req, res) => {
   res.json(getCacheStats());
+});
+
+// Logs live pour l'admin — lit le ring mémoire (secrets déjà masqués à l'écriture).
+app.get('/api/logs', requireAdminSession, (req, res) => {
+  const num = (v: unknown) => (typeof v === 'string' && /^\d+$/.test(v) ? parseInt(v, 10) : undefined);
+  const str = (v: unknown) => (typeof v === 'string' && v ? v : undefined);
+  res.json(getLogs({
+    sinceSeq: num(req.query.sinceSeq),
+    source: str(req.query.source),
+    level: str(req.query.level),
+    q: str(req.query.q),
+    limit: num(req.query.limit),
+  }));
 });
 
 // Retry a probe request on transient network/TLS errors. Some CDN edge nodes

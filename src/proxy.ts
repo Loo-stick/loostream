@@ -3,6 +3,7 @@ import axios from 'axios';
 import * as fs from 'fs';
 import * as path from 'path';
 import { requireQueryKey, accessEnabled, accessKey } from './access';
+import { autoWhitelistEnabled } from './settings';
 
 const router = Router();
 
@@ -28,7 +29,9 @@ let ALLOWED_DOMAINS: string[] = [...DEFAULT_DOMAINS];
 // seul au lieu de bloquer le stream. Alternative au bot Telegram pour les
 // self-hosters. ⚠️ Ne relâche QUE l'allowlist de domaines — le blocage des IP
 // privées (protection SSRF critique) s'exécute avant et reste actif.
-export const AUTO_WHITELIST = process.env.AUTO_WHITELIST === 'true';
+// L'état est lu à chaque usage via `autoWhitelistEnabled()` (réglages runtime :
+// l'admin peut le basculer sans redémarrage — repli sur AUTO_WHITELIST du .env).
+export { autoWhitelistEnabled };
 
 /** Domaine enregistrable approximatif (2 derniers labels) — couvre les subdomains. */
 function baseDomain(hostname: string): string {
@@ -188,7 +191,7 @@ function rewriteManifest(
   // donc légitimes — on apprend leur hôte pour survivre à une rotation de CDN de
   // segments sans intervention. Un client ne peut pas injecter ici : la chaîne
   // est enracinée sur un domaine autorisé.
-  const learn = AUTO_WHITELIST
+  const learn = autoWhitelistEnabled()
     ? (u: string) => { try { addAllowedDomain(new URL(u).hostname); } catch { /* url invalide */ } }
     : (_u: string) => { /* no-op */ };
 
