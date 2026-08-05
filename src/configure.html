@@ -329,6 +329,15 @@
             </div>
         </div>
 
+        <div class="section" id="owner-key-section" style="display:none;">
+            <h2>👑 Clé propriétaire</h2>
+            <p style="color: #aaa; font-size: 0.9em; margin-bottom: 15px;">Réservé à l'hébergeur. Débloque le <strong>proxy local</strong> pour VOUS même si les modes sont restreints pour les partages (variable <code>MODE</code>). Les liens de vos amis, sans cette clé, restent limités. Laissez vide pour un partage normal.</p>
+            <div class="input-group show">
+                <label>Clé propriétaire (optionnel)</label>
+                <input type="text" id="owner-key" placeholder="Laissez vide si vous n'êtes pas l'hébergeur" oninput="onOwnerKeyChange()">
+            </div>
+        </div>
+
         <div class="card">
             <h2>⚙️ Préférences</h2>
             <p style="color: #aaa; font-size: 0.9em; margin-bottom: 15px;">Filtrer et trier les streams selon vos préférences.</p>
@@ -467,6 +476,10 @@
             const accessKey = document.getElementById('access-key').value.trim();
             if (accessKey) config.accessKey = accessKey;
 
+            // Clé propriétaire optionnelle (débloque le proxy local malgré MODE)
+            const ownerKey = document.getElementById('owner-key').value.trim();
+            if (ownerKey) config.ownerKey = ownerKey;
+
             const configStr = btoa(JSON.stringify(config));
             const installUrl = `${baseUrl}/${configStr}/manifest.json`;
 
@@ -582,6 +595,12 @@
                         document.getElementById('access-key').value = config.accessKey;
                     }
 
+                    // Pre-fill owner key (rend visible la section + débloquera le local via init)
+                    if (config.ownerKey) {
+                        document.getElementById('owner-key').value = config.ownerKey;
+                        document.getElementById('owner-key-section').style.display = '';
+                    }
+
                     // Pre-fill proxy mode
                     if (config.proxy === 'local') {
                         selectMode('local');
@@ -645,26 +664,41 @@
             updatePositions();
         }
 
-        // Init : les modes proposés sont pilotés par MODE (.env) via /api/modes.
-        async function init() {
+        // Modes proposés : pilotés par MODE (.env) via /api/modes. Une clé propriétaire
+        // valide débloque les 3 (dont le proxy local) pour l'hébergeur.
+        let allowedModes = ['direct', 'mediaflow', 'local'];
+        async function applyModes(ownerKeyVal) {
             let modes = ['direct', 'mediaflow', 'local'];
-            let def = 'mediaflow';
+            let def = 'mediaflow', ownerKeyAvailable = false;
             try {
-                const j = await (await fetch('/api/modes')).json();
+                const url = '/api/modes' + (ownerKeyVal ? ('?ownerKey=' + encodeURIComponent(ownerKeyVal)) : '');
+                const j = await (await fetch(url)).json();
                 if (Array.isArray(j.modes) && j.modes.length) { modes = j.modes; def = j.default || modes[0]; }
+                ownerKeyAvailable = !!j.ownerKeyAvailable;
             } catch (e) { /* fallback : tous */ }
-
-            // Masquer les options non autorisées par l'hébergeur.
+            allowedModes = modes;
             document.querySelectorAll('.option[data-mode]').forEach(opt => {
-                if (!modes.includes(opt.dataset.mode)) opt.style.display = 'none';
+                opt.style.display = modes.includes(opt.dataset.mode) ? '' : 'none';
             });
-
-            selectMode(def);
-            initDragAndDrop();
-            loadExistingConfig();
-            setupLangToggles();
-            // Si le config de l'URL demande un mode désormais interdit, revenir au défaut.
+            // Champ propriétaire visible seulement si l'hébergeur a configuré OWNER_KEY.
+            if (ownerKeyAvailable) document.getElementById('owner-key-section').style.display = '';
             if (!modes.includes(currentMode)) selectMode(def);
+            return def;
+        }
+
+        let ownerKeyDebounce;
+        function onOwnerKeyChange() {
+            clearTimeout(ownerKeyDebounce);
+            ownerKeyDebounce = setTimeout(() => applyModes(document.getElementById('owner-key').value.trim()), 350);
+        }
+
+        async function init() {
+            await applyModes('');
+            initDragAndDrop();
+            setupLangToggles();
+            loadExistingConfig();
+            const ok = document.getElementById('owner-key').value.trim();
+            if (ok) await applyModes(ok); // débloque le local si la clé du lien est valide
         }
         init();
     </script>

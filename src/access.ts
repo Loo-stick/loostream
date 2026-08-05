@@ -32,6 +32,36 @@ export function keyMatches(candidate: unknown): boolean {
   return timingSafeEqual(a, b);
 }
 
+// Clé PROPRIÉTAIRE OPTIONNELLE. Distincte d'ACCESS_KEY : elle ne garde pas l'accès,
+// elle BYPASSE le gate `MODE`. Un hébergeur peut restreindre les modes proposés
+// (ex. MODE=DIRECT;MFP pour ne pas offrir le proxy local à ses potes) tout en se
+// gardant le proxy local via un lien portant `ownerKey`.
+
+/** La clé propriétaire configurée, ou undefined si non renseignée. */
+export function ownerKey(): string | undefined {
+  const k = process.env.OWNER_KEY;
+  return k && k.length > 0 ? k : undefined;
+}
+
+/** true si une clé propriétaire est configurée. */
+export function ownerKeyEnabled(): boolean {
+  return ownerKey() !== undefined;
+}
+
+/**
+ * true si `candidate` correspond à OWNER_KEY (temps constant). false si aucune clé
+ * propriétaire n'est configurée, si le candidat n'est pas une string, ou si les
+ * longueurs diffèrent. Un porteur de cette clé bypasse le gate MODE.
+ */
+export function ownerKeyMatches(candidate: unknown): boolean {
+  const key = ownerKey();
+  if (!key || typeof candidate !== 'string') return false;
+  const a = Buffer.from(candidate);
+  const b = Buffer.from(key);
+  if (a.length !== b.length) return false;
+  return timingSafeEqual(a, b);
+}
+
 /**
  * Ajoute `&k=<clé>` à une URL auto-générée (proxy, netmirror, moviebox…) quand
  * la protection est active. No-op sinon. Renvoie l'URL pour chaînage.

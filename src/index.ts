@@ -17,7 +17,7 @@ import { cached, getCacheStats } from './cache';
 import { recordOutcome, getAllMetrics } from './metrics';
 import crypto from 'crypto';
 import proxyRouter, { isAllowedUrl, addAllowedDomain, getAllowedDomains, AUTO_WHITELIST } from './proxy';
-import { accessEnabled, keyMatches, signUrl, requireQueryKey } from './access';
+import { accessEnabled, keyMatches, signUrl, requireQueryKey, ownerKeyMatches, ownerKeyEnabled } from './access';
 import { canDirect } from './deliver';
 import * as fsSync from 'fs';
 import { ExtractorConfig, reloadExtractorDomains, getExtractorDomains } from './extractors';
@@ -125,6 +125,7 @@ interface UserConfig {
   mfPass?: string;
   tmdbKey?: string;
   accessKey?: string;    // clé d'accès (si l'hébergeur a activé ACCESS_KEY)
+  ownerKey?: string;     // clé propriétaire : bypasse le gate MODE (garde le proxy local)
   prefQuality?: string;  // "1080p", "4K", "720p", "480p"
   langOrder?: string[];  // ["MULTI", "VF", "VOSTFR", "VO"]
   minStreams?: number;   // early exit: stop waiting once this many wanted streams are in (0 = wait for all)
@@ -198,9 +199,12 @@ function parseConfig(configStr: string): UserConfig | null {
       return null;
     }
     // Garde MODE : si l'hébergeur restreint les modes (env MODE) et que le config
-    // en demande un non autorisé, on le ramène au 1er mode autorisé.
+    // en demande un non autorisé, on le ramène au 1er mode autorisé. EXCEPTION : un
+    // config portant une `ownerKey` valide BYPASSE le gate (l'hébergeur garde ainsi
+    // le proxy local pour lui tout en n'offrant que DIRECT/MFP à ses partages).
+    const isOwner = ownerKeyMatches(parsed.ownerKey);
     const allowed = allowedModes();
-    const proxy: 'local' | 'mediaflow' | 'direct' = allowed.includes(parsed.proxy) ? parsed.proxy : allowed[0];
+    const proxy: 'local' | 'mediaflow' | 'direct' = (isOwner || allowed.includes(parsed.proxy)) ? parsed.proxy : allowed[0];
 
     // Validate MediaFlow URL if provided
     if (parsed.mfUrl && !isValidUrl(parsed.mfUrl)) {
@@ -239,6 +243,7 @@ function parseConfig(configStr: string): UserConfig | null {
       mfPass: parsed.mfPass ? sanitizeString(parsed.mfPass, 100) : undefined,
       tmdbKey: parsed.tmdbKey ? sanitizeString(parsed.tmdbKey, 64) : undefined,
       accessKey: parsed.accessKey ? sanitizeString(parsed.accessKey, 128) : undefined,
+      ownerKey: parsed.ownerKey ? sanitizeString(parsed.ownerKey, 128) : undefined,
       prefQuality,
       langOrder,
       minStreams,
@@ -1769,9 +1774,13 @@ app.get('/netmirror/video.m3u8', (req, res) => {
 });
 
 // Modes de livraison proposés (pilotés par MODE du .env) — lu par /configure.
-app.get('/api/modes', (_req, res) => {
-  const modes = allowedModes();
-  res.json({ modes, default: modes[0] });
+// Une `ownerKey` valide en query débloque les 3 modes (le propriétaire garde le
+// proxy local même si MODE le restreint pour les partages). `ownerKeyRequired`
+// indique à l'UI d'afficher le champ (seulement si OWNER_KEY est configurée).
+app.get('/api/modes', (req, res) => {
+  const isOwner = ownerKeyMatches(req.query.ownerKey);
+  const modes = isOwner ? ['direct', 'mediaflow', 'local'] : allowedModes();
+  res.json({ modes, default: modes[0], owner: isOwner, ownerKeyAvailable: ownerKeyEnabled() });
 });
 
 // Stats endpoint
