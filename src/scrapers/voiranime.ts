@@ -3,6 +3,7 @@ import { extractStream, detectExtractor, ExtractorConfig } from '../extractors';
 import { cached } from '../cache';
 import { applyMultiAudio } from '../multiaudio';
 import { makeEndpointConfig } from '../endpoint-config';
+import { titlesMatch } from '../matching';
 
 // VoirAnime — anime VOSTFR/VF (voir-anime.to). Provider Onyx VoirAnimeProvider.
 // Site WordPress/Madara, structure identique à VoirDrama :
@@ -114,10 +115,9 @@ function slugBasesFor(titles: string[], season?: number): string[] {
   return [...new Set(out)];
 }
 
-async function searchSite(title: string): Promise<Candidate[]> {
-  const html = await getHtml(`${SITE_BASE()}/?s=${encodeURIComponent(title)}&post_type=wp-manga`);
+async function searchSite(keyword: string, wantedTitles: string[]): Promise<Candidate[]> {
+  const html = await getHtml(`${SITE_BASE()}/?s=${encodeURIComponent(keyword)}&post_type=wp-manga`);
   if (!html) return [];
-  const target = normalizeTitle(title);
   const out: Candidate[] = [];
   const seen = new Set<string>();
   for (const m of html.matchAll(SEARCH_ITEM_RX)) {
@@ -125,8 +125,9 @@ async function searchSite(title: string): Promise<Candidate[]> {
     const name = m[2].trim();
     if (seen.has(url)) continue;
     seen.add(url);
-    const norm = normalizeTitle(name);
-    if (!norm || (norm !== target && !norm.startsWith(target) && !target.startsWith(norm))) continue;
+    // Match STRICT token-set contre titre FR + original (l'anime n'expose pas
+    // d'année fiable) — fini le match par préfixe (« Naruto » ⊄ « Naruto Shippuden »).
+    if (!titlesMatch(wantedTitles, name)) continue;
     out.push({ url, title: name, language: languageOf(url, name) });
   }
   // Une fiche par langue, la correspondance la plus proche d'abord.
@@ -281,7 +282,7 @@ async function fetchVoirAnimeStreams(
   // Repli recherche (S1 uniquement — pas de ciblage de saison fiable).
   if (!season || season <= 1) {
     for (const t of titles) {
-      const cands = await searchSite(t);
+      const cands = await searchSite(t, titles);
       const groups = await Promise.all(cands.map(async c => {
         const html = await getHtml(c.url);
         const reading = html ? episodePageFromHtml(html, ep) : null;

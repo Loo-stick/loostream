@@ -1,5 +1,6 @@
 import axios from 'axios';
 import { cached } from '../cache';
+import { titlesMatch } from '../matching';
 
 // NetMirror v3 (2026-07) — méthode ONYX : on IGNORE le master et on RECONSTRUIT
 // le manifeste en sondant le CDN. Reverse-engineering de l'APK Onyx v1.7.235
@@ -148,13 +149,9 @@ async function searchPlatform(
     const results: { id: string; t: string }[] = Array.isArray(data?.searchResult) ? data.searchResult : [];
     if (results.length === 0) return null;
 
-    const target = normalizeTitle(title);
-    // Prefer an exact normalized-title match, else a prefix/contains match.
-    let best = results.find(r => normalizeTitle(r.t) === target);
-    if (!best) best = results.find(r => {
-      const n = normalizeTitle(r.t);
-      return n.startsWith(target) || target.startsWith(n);
-    });
+    // Match STRICT token-set (catalogue anglophone -> titre unique ; les résultats
+    // n'exposent pas d'année). Fini le repli préfixe/contains qui ramenait un voisin.
+    const best = results.find(r => titlesMatch([title], r.t));
     return best?.id || null;
   } catch (e: any) {
     console.log(`[Netmirror] search (${platform.ott}) failed: ${e.message}`);

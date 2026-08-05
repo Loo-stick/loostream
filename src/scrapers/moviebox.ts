@@ -1,6 +1,7 @@
 import axios from 'axios';
 import crypto from 'crypto';
 import { cached } from '../cache';
+import { accepts } from '../matching';
 
 // MovieBox / aoneroom — the mobile "wefeed" API used by Onyx's CloudstreamProvider.
 // One of the largest international catalogues (Netflix originals, K-dramas…),
@@ -138,12 +139,6 @@ async function ensureBearer(force = false): Promise<string | null> {
 }
 
 // --- title → subjectId ---
-function normalize(s: string): string {
-  return (s || '').normalize('NFD').replace(/[̀-ͯ]/g, '')
-    .toLowerCase().replace(/\[[^\]]*\]/g, '')
-    .replace(/[^a-z0-9]+/g, ' ').trim();
-}
-
 async function findSubjectId(
   bearer: string, title: string, year: string, mediaType: 'movie' | 'series'
 ): Promise<string | null> {
@@ -156,24 +151,20 @@ async function findSubjectId(
   for (const grp of (r.data.data?.results || [])) {
     if (Array.isArray(grp?.subjects)) subjects.push(...grp.subjects);
   }
-  const target = normalize(title);
-  const scored = subjects
+  // Sélection STRICTE via le matcher partagé (titre token-set + année), puis dub
+  // anglais en dernier (MovieBox expose des variantes doublées « ... English »).
+  const wanted = { titles: [title], year: year ? Number(year) : undefined };
+  const cands = subjects
     .filter(s => s?.subjectId && Number(s.subjectType) === wantType)
-    .map(s => {
-      const n = normalize(s.title);
-      const yr = String(s.releaseDate || s.year || '').match(/\d{4}/)?.[0] || '';
-      const yearOk = !year || !yr || Math.abs(Number(yr) - Number(year)) <= 1;
-      // exact match > startsWith > includes ; english-dub variants sort after.
-      let score = 0;
-      if (n === target) score = 3; else if (n.startsWith(target) || target.startsWith(n)) score = 2;
-      else if (n.includes(target)) score = 1;
-      if (/\benglish\b/.test(String(s.title).toLowerCase())) score -= 1;
-      return { s, score, yearOk };
-    })
-    .filter(x => x.score > 0 && x.yearOk)
-    .sort((a, b) => b.score - a.score);
+    .map(s => ({
+      s,
+      year: Number(String(s.releaseDate || s.year || '').match(/\d{4}/)?.[0]) || undefined,
+      english: /\benglish\b/.test(String(s.title).toLowerCase()),
+    }))
+    .filter(c => accepts(wanted, { title: c.s.title, year: c.year, item: c.s }))
+    .sort((a, b) => Number(a.english) - Number(b.english)); // dub anglais en dernier
 
-  return scored[0]?.s?.subjectId || null;
+  return cands[0]?.s?.subjectId || null;
 }
 
 // Language variants — /subject-api/get returns dubs[], each a SEPARATE subjectId:
