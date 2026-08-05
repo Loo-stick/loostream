@@ -25,6 +25,7 @@ import * as fsSync from 'fs';
 import { ExtractorConfig, reloadExtractorDomains, getExtractorDomains } from './extractors';
 import { getSceneMeta, buildFilename, providerLabel } from './filename';
 import { buildStreamName, buildStreamTitle } from './display';
+import { QUALITY_SCORES, normalizeLanguage, normalizeQuality, passesPreferences } from './prefs';
 
 // Capture les console.* dans un ring mémoire pour la page Logs de l'admin, le
 // plus tôt possible (avant tout autre log de boot). Délègue ensuite à l'original,
@@ -362,58 +363,12 @@ function collectSources(
  * Any accepted language and any accepted quality counts: 3 VF + 2 VOSTFR is
  * five results, and so is 3×1080p + 2×720p.
  */
-function passesPreferences(
-  meta: { quality: string; language: string; source: string },
-  langOrder: string[],
-  prefQualityScore: number
-): boolean {
-  // NetMirror ships multi-language HLS — exempt, as it always has been.
-  if (meta.source === 'netmirror') return true;
-  if (!langOrder.includes(normalizeLanguage(meta.language))) return false;
-  const streamQualityScore = QUALITY_SCORES[normalizeQuality(meta.quality)] || 2;
-  return streamQualityScore >= prefQualityScore - 1; // one step lower is still fine
-}
-
-/** Counts a source's results that pass the user's language AND quality prefs. */
-function wantedCounter(source: string, langOrder: string[], prefQualityScore: number) {
+/** Counts a source's results that pass the user's LANGUAGE prefs (quality doesn't filter). */
+function wantedCounter(source: string, langOrder: string[]) {
   return (results: { language?: string; quality?: string }[]) =>
     results.filter(r =>
-      passesPreferences(
-        { quality: r.quality || '', language: r.language || '', source },
-        langOrder,
-        prefQualityScore
-      )
+      passesPreferences({ quality: r.quality || '', language: r.language || '', source }, langOrder)
     ).length;
-}
-const QUALITY_SCORES: Record<string, number> = {
-  '4K': 4,
-  '1080p': 3,
-  '720p': 2,
-  '576p': 1.5,
-  '480p': 1,
-  '360p': 0.6,
-  'HD': 2, // repli si la résolution n'a pas pu être mesurée (label générique)
-};
-
-function normalizeLanguage(lang: string): string {
-  const upper = lang.toUpperCase();
-  if (upper.includes('MULTI')) return 'MULTI';
-  if (upper.includes('VOSTFR') || upper.includes('VOST')) return 'VOSTFR';
-  if (upper.includes('VF') || upper === 'FRENCH' || upper === 'FRANÇAIS') return 'VF';
-  if (upper.includes('VO') || upper === 'ORIGINAL' || upper === 'EN' || upper === 'ENGLISH') return 'VO';
-  return 'VO'; // Default to VO for unknown
-}
-
-function normalizeQuality(quality: string): string {
-  const upper = quality.toUpperCase();
-  if (upper.includes('4K') || upper.includes('2160')) return '4K';
-  if (upper.includes('1080')) return '1080p';
-  if (upper.includes('720')) return '720p';
-  if (upper.includes('576')) return '576p';
-  if (upper.includes('480') || upper.includes('SD')) return '480p';
-  if (upper.includes('360')) return '360p';
-  if (upper.includes('HD') || upper.includes('FULL')) return '1080p';
-  return '720p'; // Default
 }
 
 function filterAndSortStreams(streams: StreamWithMeta[], config: UserConfig | null): StreamWithMeta[] {
@@ -423,8 +378,9 @@ function filterAndSortStreams(streams: StreamWithMeta[], config: UserConfig | nu
   const langOrder = config.langOrder || DEFAULT_LANG_ORDER;
   const prefQualityScore = QUALITY_SCORES[prefQuality] || 3;
 
-  // Filter streams based on preferences (same predicate the early exit counts with)
-  let filtered = streams.filter(s => passesPreferences(s._meta, langOrder, prefQualityScore));
+  // Filter streams based on preferences (same predicate the early exit counts with).
+  // Langue seulement — la qualité ne filtre pas, elle départage au tri ci-dessous.
+  let filtered = streams.filter(s => passesPreferences(s._meta, langOrder));
 
   // If filtering removed everything, return original streams sorted
   if (filtered.length === 0) {
@@ -712,7 +668,7 @@ function getManifest(req: express.Request) {
 
   return {
     id: 'community.loostream.stremio',
-    version: '1.12.0',
+    version: '1.12.1',
     name: 'LooStream',
     logo: `${baseUrl}/logo.png`,
     description: 'Netflix, Prime, Disney+ mirrors + StreamFlix + Movix VF/VOSTFR',
@@ -873,7 +829,6 @@ async function handleStream(req: express.Request, res: express.Response, type: s
     };
 
     const langOrder = config?.langOrder || DEFAULT_LANG_ORDER;
-    const prefQualityScore = QUALITY_SCORES[config?.prefQuality || '1080p'] || 3;
     const minStreams = config?.minStreams ?? DEFAULT_MIN_STREAMS;
 
     const sourcePromises = [
@@ -926,7 +881,7 @@ async function handleStream(req: express.Request, res: express.Response, type: s
       sourcePromises.map((promise, i) => ({
         name: SOURCE_NAMES[i],
         promise,
-        countWanted: wantedCounter(SOURCE_NAMES[i], langOrder, prefQualityScore),
+        countWanted: wantedCounter(SOURCE_NAMES[i], langOrder),
       })),
       minStreams,
       (reason, ms) => console.log(`[Stream] Fan-out terminé: ${reason}${ms ? ` en ${(ms / 1000).toFixed(2)}s` : ''}`)
