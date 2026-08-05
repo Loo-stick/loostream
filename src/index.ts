@@ -1143,6 +1143,7 @@ async function handleStream(req: express.Request, res: express.Response, type: s
           language: vd.language,
           source: 'videasy',
           server: vd.server,
+          subCount: (vd.subtitles || []).length,
         },
       });
     }
