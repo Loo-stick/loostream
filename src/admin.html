@@ -6,203 +6,289 @@
     <title>LooStream - Admin</title>
     <style>
         * { box-sizing: border-box; margin: 0; padding: 0; }
+        :root {
+            --bg1: #1a1a2e; --bg2: #16213e; --accent: #7f5af0; --accent-h: #6b46e0;
+            --ok: #2cb67d; --warn: #ff8906; --down: #e53170; --muted: #a0a0b0; --dim: #7a7a8a;
+        }
         body {
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
-            min-height: 100vh;
-            color: #fff;
-            padding: 20px;
+            background: linear-gradient(135deg, var(--bg1) 0%, var(--bg2) 100%);
+            min-height: 100vh; color: #fff; display: flex;
         }
-        .container { max-width: 1200px; margin: 0 auto; }
-        .header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            margin-bottom: 30px;
-            flex-wrap: wrap;
-            gap: 15px;
+
+        /* --- Sidebar --- */
+        .sidebar {
+            width: 230px; flex-shrink: 0; padding: 24px 16px;
+            background: rgba(0,0,0,0.22); border-right: 1px solid rgba(255,255,255,0.06);
+            display: flex; flex-direction: column; min-height: 100vh; position: sticky; top: 0;
         }
-        .header h1 { font-size: 1.8em; }
-        .header .meta { color: #a0a0b0; font-size: 0.9em; }
+        .sidebar .logo { font-size: 1.3em; font-weight: 700; margin-bottom: 4px; }
+        .sidebar .logo small { display:block; font-size:0.55em; color: var(--muted); font-weight: 400; margin-top: 2px; }
+        .nav { margin-top: 28px; display: flex; flex-direction: column; gap: 4px; flex: 1; }
+        .nav a {
+            display: flex; align-items: center; gap: 10px; padding: 11px 14px; border-radius: 10px;
+            color: var(--muted); text-decoration: none; font-size: 0.95em; cursor: pointer; transition: all 0.15s;
+        }
+        .nav a:hover { background: rgba(255,255,255,0.06); color: #fff; }
+        .nav a.active { background: var(--accent); color: #fff; font-weight: 600; }
+        .sidebar .foot { margin-top: auto; }
+        .sidebar .meta { color: var(--dim); font-size: 0.75em; margin-bottom: 12px; line-height: 1.5; }
+
+        /* --- Main --- */
+        main { flex: 1; padding: 28px 32px; max-width: 1300px; }
+        .view { display: none; }
+        .view.active { display: block; animation: fade 0.15s ease; }
+        @keyframes fade { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+        .view-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 22px; flex-wrap: wrap; gap: 12px; }
+        .view-head h1 { font-size: 1.5em; }
+
         .btn {
-            background: #7f5af0;
-            color: #fff;
-            border: none;
-            padding: 10px 20px;
-            border-radius: 8px;
-            cursor: pointer;
-            font-size: 0.9em;
-            transition: background 0.2s;
+            background: var(--accent); color: #fff; border: none; padding: 10px 18px; border-radius: 9px;
+            cursor: pointer; font-size: 0.88em; transition: background 0.15s;
         }
-        .btn:hover { background: #6b46e0; }
+        .btn:hover { background: var(--accent-h); }
         .btn.secondary { background: rgba(255,255,255,0.1); }
-        .btn.secondary:hover { background: rgba(255,255,255,0.15); }
+        .btn.secondary:hover { background: rgba(255,255,255,0.16); }
+        .btn.danger { background: rgba(229,49,112,0.18); color: #ff8fb0; }
+        .btn.danger:hover { background: rgba(229,49,112,0.28); }
+        .btn.small { padding: 7px 12px; font-size: 0.82em; }
 
-        .grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-            gap: 20px;
-            margin-bottom: 20px;
-        }
+        .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 18px; margin-bottom: 20px; }
         .card {
-            background: rgba(255, 255, 255, 0.06);
-            border: 1px solid rgba(255, 255, 255, 0.08);
-            border-radius: 12px;
-            padding: 20px;
-            backdrop-filter: blur(10px);
+            background: rgba(255, 255, 255, 0.06); border: 1px solid rgba(255, 255, 255, 0.08);
+            border-radius: 12px; padding: 20px;
         }
-        .card h2 {
-            font-size: 1em;
-            margin-bottom: 12px;
-            color: #a0a0b0;
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
-        }
+        .card h2 { font-size: 0.82em; margin-bottom: 14px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; }
 
-        .scraper-card {
-            border-left: 4px solid #888;
-            position: relative;
-        }
-        .scraper-card.status-ok { border-left-color: #4ade80; }
-        .scraper-card.status-warning { border-left-color: #facc15; }
-        .scraper-card.status-down { border-left-color: #f87171; }
-        .scraper-card .name {
-            font-size: 1.2em;
-            font-weight: 600;
-            margin-bottom: 6px;
-            display: flex;
-            align-items: center;
-            gap: 8px;
-        }
-        .scraper-card .reason {
-            color: #facc15;
-            font-size: 0.85em;
-            margin-bottom: 10px;
-        }
-        .bars {
-            display: flex;
-            gap: 3px;
-            margin: 10px 0;
-            height: 6px;
-        }
+        /* KPIs */
+        .kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 16px; margin-bottom: 24px; }
+        .kpi { background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.08); border-radius: 12px; padding: 18px 20px; }
+        .kpi .val { font-size: 1.8em; font-weight: 700; }
+        .kpi .lbl { color: var(--muted); font-size: 0.82em; margin-top: 4px; }
+
+        /* Scraper cards */
+        .scraper-card { border-left: 4px solid #888; }
+        .scraper-card.status-ok { border-left-color: var(--ok); }
+        .scraper-card.status-warning { border-left-color: var(--warn); }
+        .scraper-card.status-down { border-left-color: var(--down); }
+        .scraper-card .name { font-size: 1.1em; font-weight: 600; margin-bottom: 6px; display: flex; align-items: center; gap: 8px; }
+        .scraper-card .reason { color: var(--warn); font-size: 0.82em; margin-bottom: 8px; }
+        .bars { display: flex; gap: 3px; margin: 10px 0; height: 6px; }
         .bars > div { flex: 1; border-radius: 2px; }
-        .bar-s { background: #4ade80; }
-        .bar-e { background: #facc15; }
-        .bar-x { background: #f87171; }
-        .stats-row {
-            display: flex;
-            justify-content: space-between;
-            color: #a0a0b0;
-            font-size: 0.85em;
-            margin-top: 8px;
-        }
+        .bar-s { background: var(--ok); } .bar-e { background: var(--warn); } .bar-x { background: var(--down); }
+        .stats-row { display: flex; justify-content: space-between; color: var(--muted); font-size: 0.82em; margin-top: 8px; }
         .stats-row strong { color: #fff; }
 
         .kv { display: grid; grid-template-columns: 1fr auto; row-gap: 6px; font-size: 0.9em; }
-        .kv .k { color: #a0a0b0; }
-        .kv .v { font-weight: 600; color: #fff; }
+        .kv .k { color: var(--muted); } .kv .v { font-weight: 600; color: #fff; }
 
-        .health-box, .sources-box, .whitelist-box { margin-top: 20px; }
         .health-source {
-            padding: 10px 14px;
-            background: rgba(255, 255, 255, 0.04);
-            border-radius: 8px;
-            margin-bottom: 8px;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
+            padding: 10px 14px; background: rgba(255, 255, 255, 0.04); border-radius: 8px; margin-bottom: 8px;
+            display: flex; justify-content: space-between; align-items: center;
         }
-        .health-source.up { border-left: 3px solid #4ade80; }
-        .health-source.down { border-left: 3px solid #f87171; }
-        .health-source.degraded { border-left: 3px solid #facc15; }
-        .loader { color: #a0a0b0; font-size: 0.9em; font-style: italic; }
-        .error { color: #f87171; font-size: 0.9em; }
+        .health-source.up { border-left: 3px solid var(--ok); }
+        .health-source.down { border-left: 3px solid var(--down); }
+        .health-source.degraded { border-left: 3px solid var(--warn); }
+        .loader { color: var(--muted); font-size: 0.9em; font-style: italic; }
+        .error { color: #ff8fb0; font-size: 0.9em; }
 
-        @media (max-width: 600px) {
-            .header { flex-direction: column; align-items: flex-start; }
+        /* Config rows */
+        .cfg-row { display:flex; gap:8px; align-items:center; margin-bottom:10px; flex-wrap:wrap; }
+        .cfg-row label { min-width:100px; color:var(--muted); font-size:0.9em; }
+        .cfg-row input[type=text], .cfg-row input:not([type]) {
+            flex:1; min-width:180px; padding:8px 10px; border:1px solid rgba(255,255,255,0.15);
+            border-radius:8px; background:rgba(0,0,0,0.25); color:#fff; font-size:0.9em;
+        }
+        .cfg-msg { font-size:0.82em; margin-left:6px; }
+        .cfg-msg.ok { color:var(--ok); } .cfg-msg.err { color:#ff8fb0; }
+        .badge { font-size:0.72em; padding:3px 9px; border-radius:20px; }
+        .badge.on { background:rgba(44,182,125,0.2); color:var(--ok); }
+        .badge.off { background:rgba(160,160,176,0.2); color:var(--muted); }
+        .badge.src { background:rgba(127,90,240,0.2); color:#c0aaff; margin-left:6px; }
+
+        /* Tabs (Paramétrage) */
+        .tabs { display: flex; gap: 6px; margin-bottom: 20px; border-bottom: 1px solid rgba(255,255,255,0.08); }
+        .tabs button {
+            background: none; border: none; color: var(--muted); padding: 10px 16px; cursor: pointer;
+            font-size: 0.9em; border-bottom: 2px solid transparent; margin-bottom: -1px;
+        }
+        .tabs button.active { color: #fff; border-bottom-color: var(--accent); font-weight: 600; }
+        .tab-pane { display: none; } .tab-pane.active { display: block; }
+
+        /* Logs */
+        .logbar { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 14px; }
+        .logbar select, .logbar input {
+            padding: 8px 10px; border:1px solid rgba(255,255,255,0.15); border-radius:8px;
+            background:rgba(0,0,0,0.25); color:#fff; font-size:0.85em;
+        }
+        .logbar input.search { flex: 1; min-width: 160px; }
+        .switch { display:flex; align-items:center; gap:6px; color: var(--muted); font-size: 0.85em; cursor: pointer; }
+        #logview {
+            background: rgba(0,0,0,0.35); border: 1px solid rgba(255,255,255,0.08); border-radius: 10px;
+            padding: 10px 12px; height: 62vh; overflow-y: auto; font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+            font-size: 0.8em; line-height: 1.55;
+        }
+        .logline { display: flex; gap: 10px; padding: 1px 0; white-space: pre-wrap; word-break: break-word; }
+        .logline .lt { color: var(--dim); flex-shrink: 0; }
+        .logline .ls { color: #c0aaff; flex-shrink: 0; min-width: 90px; }
+        .logline.warn .lm { color: var(--warn); }
+        .logline.error .lm { color: #ff8fb0; }
+        .logline .lm { color: #d8d8e0; }
+
+        @media (max-width: 760px) {
+            body { flex-direction: column; }
+            .sidebar { width: 100%; min-height: auto; position: static; flex-direction: row; align-items: center; flex-wrap: wrap; }
+            .nav { flex-direction: row; flex-wrap: wrap; margin-top: 0; }
+            .sidebar .foot, .sidebar .logo small { display: none; }
+            main { padding: 20px 16px; }
         }
     </style>
 </head>
 <body>
-<div class="container">
-    <div class="header">
-        <div>
-            <h1>⚙️ LooStream Admin</h1>
-            <div class="meta" id="meta">Chargement...</div>
-        </div>
-        <div style="display: flex; gap: 10px;">
-            <button class="btn secondary" onclick="checkHealth()">Health check</button>
-            <button class="btn" onclick="refreshAll()">Refresh</button>
-            <form action="/admin/logout" method="post" style="display: inline;">
-                <button type="submit" class="btn secondary">Déconnexion</button>
+    <aside class="sidebar">
+        <div class="logo">⚙️ LooStream<small>Espace admin</small></div>
+        <nav class="nav">
+            <a data-view="dashboard" class="active">📊 Dashboard</a>
+            <a data-view="stats">📈 Stats</a>
+            <a data-view="logs">📜 Logs</a>
+            <a data-view="settings">🛠️ Paramétrage</a>
+        </nav>
+        <div class="foot">
+            <div class="meta" id="meta">Chargement…</div>
+            <form action="/admin/logout" method="post">
+                <button type="submit" class="btn secondary small" style="width:100%;">Déconnexion</button>
             </form>
         </div>
-    </div>
+    </aside>
 
-    <h2 style="margin-bottom: 12px; font-size: 1.1em; color: #a0a0b0;">Scrapers</h2>
-    <div class="grid" id="scrapers"><div class="loader">Chargement...</div></div>
+    <main>
+        <!-- ============ DASHBOARD ============ -->
+        <section class="view active" data-view="dashboard">
+            <div class="view-head">
+                <h1>Dashboard</h1>
+                <div style="display:flex;gap:10px;">
+                    <button class="btn secondary" onclick="checkHealth()">Health-check live</button>
+                    <button class="btn" onclick="refreshAll()">Rafraîchir</button>
+                </div>
+            </div>
+            <div class="kpis" id="kpis"><div class="loader">Chargement…</div></div>
+            <h2 style="font-size:0.82em;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:12px;">Santé des sources</h2>
+            <div class="grid" id="dash-sources"><div class="loader">Chargement…</div></div>
+            <div class="card">
+                <h2>Health-check live</h2>
+                <div id="health"><div class="loader">Clique « Health-check live » pour lancer une sonde.</div></div>
+            </div>
+        </section>
 
-    <div class="grid" style="grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));">
-        <div class="card">
-            <h2>Cache</h2>
-            <div class="kv" id="cache"></div>
-        </div>
-        <div class="card">
-            <h2>Requêtes</h2>
-            <div class="kv" id="requests"></div>
-        </div>
-        <div class="card">
-            <h2>Streams servis</h2>
-            <div class="kv" id="served"></div>
-        </div>
-    </div>
+        <!-- ============ STATS ============ -->
+        <section class="view" data-view="stats">
+            <div class="view-head"><h1>Stats</h1><button class="btn" onclick="loadStats()">Rafraîchir</button></div>
+            <div class="grid" style="grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));">
+                <div class="card"><h2>Cache</h2><div class="kv" id="cache"></div></div>
+                <div class="card"><h2>Requêtes</h2><div class="kv" id="requests"></div></div>
+                <div class="card"><h2>Streams servis</h2><div class="kv" id="served"></div></div>
+            </div>
+            <h2 style="font-size:0.82em;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin:8px 0 12px;">Détail par source (20 dernières requêtes)</h2>
+            <div class="grid" id="scrapers"><div class="loader">Chargement…</div></div>
+        </section>
 
-    <div class="card health-box">
-        <h2>Live health check</h2>
-        <div id="health"><div class="loader">Clique "Health check" pour lancer une sonde</div></div>
-    </div>
+        <!-- ============ LOGS ============ -->
+        <section class="view" data-view="logs">
+            <div class="view-head"><h1>Logs</h1>
+                <label class="switch"><input type="checkbox" id="log-auto" checked> Auto-refresh (3s)</label>
+            </div>
+            <div class="logbar">
+                <select id="log-source"><option value="">Toutes sources</option></select>
+                <select id="log-level">
+                    <option value="">Tous niveaux</option>
+                    <option value="info">info</option>
+                    <option value="warn">warn</option>
+                    <option value="error">error</option>
+                </select>
+                <input class="search" id="log-q" placeholder="Recherche texte…">
+                <button class="btn secondary small" onclick="resetLogs()">Effacer l'affichage</button>
+            </div>
+            <div id="logview"><div class="loader">Chargement…</div></div>
+        </section>
 
-    <div class="card sources-box">
-        <h2>URLs des sources <span style="font-size:0.7em;color:#a0a0b0;font-weight:normal;">— édition à chaud, sans rebuild</span></h2>
-        <div id="endpoints"><div class="loader">Chargement...</div></div>
-    </div>
+        <!-- ============ PARAMÉTRAGE ============ -->
+        <section class="view" data-view="settings">
+            <div class="view-head"><h1>Paramétrage</h1></div>
+            <div class="tabs">
+                <button data-tab="sources" class="active">Sources</button>
+                <button data-tab="whitelist">Whitelist</button>
+                <button data-tab="partage">Partage</button>
+            </div>
 
-    <div class="card whitelist-box">
-        <h2>Whitelist des domaines</h2>
-        <div id="whitelist"><div class="loader">Chargement...</div></div>
-    </div>
-</div>
+            <div class="tab-pane active" data-tab="sources">
+                <div class="card">
+                    <h2>URLs des sources <span style="font-size:0.85em;color:var(--dim);text-transform:none;letter-spacing:0;">— édition à chaud, sans rebuild</span></h2>
+                    <div id="endpoints"><div class="loader">Chargement…</div></div>
+                </div>
+            </div>
 
-<style>
-    .cfg-row { display:flex; gap:8px; align-items:center; margin-bottom:10px; flex-wrap:wrap; }
-    .cfg-row label { min-width:100px; color:#a0a0b0; font-size:0.9em; }
-    .cfg-row input { flex:1; min-width:180px; padding:8px 10px; border:1px solid rgba(255,255,255,0.15);
-        border-radius:8px; background:rgba(0,0,0,0.25); color:#fff; font-size:0.9em; }
-    .cfg-save { padding:8px 14px; }
-    .cfg-msg { font-size:0.82em; margin-left:6px; }
-    .cfg-msg.ok { color:#4ade80; } .cfg-msg.err { color:#f87171; }
-    .badge { font-size:0.72em; padding:3px 9px; border-radius:20px; }
-    .badge.on { background:rgba(74,222,128,0.2); color:#4ade80; }
-    .badge.off { background:rgba(160,160,176,0.2); color:#a0a0b0; }
-</style>
+            <div class="tab-pane" data-tab="whitelist">
+                <div class="card"><h2>Whitelist des domaines (anti-SSRF)</h2>
+                    <div id="whitelist"><div class="loader">Chargement…</div></div>
+                </div>
+            </div>
+
+            <div class="tab-pane" data-tab="partage">
+                <div class="card"><h2>Partage — modes de livraison & clés</h2>
+                    <div id="partage"><div class="loader">Chargement…</div></div>
+                </div>
+            </div>
+        </section>
+    </main>
 
 <script>
 const fmtPct = n => (n * 100).toFixed(0) + '%';
 const fmtAge = ts => {
     if (!ts) return 'jamais';
     const s = Math.floor((Date.now() - ts) / 1000);
-    if (s < 60) return s + 's';
-    if (s < 3600) return Math.floor(s / 60) + 'min';
-    if (s < 86400) return Math.floor(s / 3600) + 'h';
-    return Math.floor(s / 86400) + 'j';
+    if (s < 60) return s + 's'; if (s < 3600) return Math.floor(s / 60) + 'min';
+    if (s < 86400) return Math.floor(s / 3600) + 'h'; return Math.floor(s / 86400) + 'j';
 };
 const fmtBytes = b => {
     if (b < 1024) return b + ' B';
     if (b < 1024 * 1024) return (b / 1024).toFixed(1) + ' KB';
     return (b / 1024 / 1024).toFixed(2) + ' MB';
 };
+const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;' }[c]));
 const EMOJI = { ok: '🟢', warning: '🟡', down: '🔴' };
 
+// --- Navigation entre vues ---
+function showView(name) {
+    document.querySelectorAll('.nav a').forEach(a => a.classList.toggle('active', a.dataset.view === name));
+    document.querySelectorAll('.view').forEach(v => v.classList.toggle('active', v.dataset.view === name));
+    if (location.hash !== '#' + name) history.replaceState(null, '', '#' + name);
+    if (name === 'logs') { resetLogs(); startLogPoll(); } else { stopLogPoll(); }
+    if (name === 'settings') loadSettingsTab();
+}
+document.querySelectorAll('.nav a').forEach(a => a.addEventListener('click', () => showView(a.dataset.view)));
+
+// --- Onglets Paramétrage ---
+let currentTab = 'sources';
+document.querySelectorAll('.tabs button').forEach(b => b.addEventListener('click', () => {
+    currentTab = b.dataset.tab;
+    document.querySelectorAll('.tabs button').forEach(x => x.classList.toggle('active', x === b));
+    document.querySelectorAll('.tab-pane').forEach(p => p.classList.toggle('active', p.dataset.tab === currentTab));
+    loadSettingsTab();
+}));
+function loadSettingsTab() {
+    if (currentTab === 'sources') loadEndpoints();
+    else if (currentTab === 'whitelist') loadWhitelist();
+    else if (currentTab === 'partage') loadPartage();
+}
+
+// --- Détection d'expiration de session (fetch renvoie du HTML de login) ---
+async function api(url, opts) {
+    const r = await fetch(url, opts);
+    if (r.status === 401 || r.redirected && r.url.includes('/admin/login')) { location = '/admin/login'; throw new Error('session'); }
+    return r;
+}
+
+// ============ Cartes scraper ============
 function buildScraperCard(name, m) {
     const bars = [];
     const pad = 20 - m.window;
@@ -210,35 +296,50 @@ function buildScraperCard(name, m) {
     for (let i = 0; i < m.success; i++) bars.push('<div class="bar-s"></div>');
     for (let i = 0; i < m.empty; i++) bars.push('<div class="bar-e"></div>');
     for (let i = 0; i < m.errors; i++) bars.push('<div class="bar-x"></div>');
-
-    return `
-        <div class="card scraper-card status-${m.status}">
-            <div class="name">${EMOJI[m.status]} ${name}</div>
-            ${m.statusReason ? `<div class="reason">${m.statusReason}</div>` : ''}
-            <div class="bars">${bars.join('')}</div>
-            <div class="stats-row">
-                <span>Fenêtre <strong>${m.window}/20</strong></span>
-                <span>Empty <strong>${fmtPct(m.emptyRate)}</strong></span>
-                <span>Erreurs <strong>${fmtPct(m.errorRate)}</strong></span>
-            </div>
-            <div class="stats-row">
-                <span>Dernier succès</span>
-                <span><strong>${fmtAge(m.lastSuccessAt)}</strong></span>
-            </div>
-            ${m.lastError ? `<div class="stats-row"><span>Dernière erreur</span><span><strong title="${m.lastError}">${m.lastError.substring(0, 30)}...</strong></span></div>` : ''}
-        </div>
-    `;
+    return `<div class="card scraper-card status-${m.status}">
+        <div class="name">${EMOJI[m.status]} ${name}</div>
+        ${m.statusReason ? `<div class="reason">${esc(m.statusReason)}</div>` : ''}
+        <div class="bars">${bars.join('')}</div>
+        <div class="stats-row"><span>Fenêtre <strong>${m.window}/20</strong></span>
+            <span>Empty <strong>${fmtPct(m.emptyRate)}</strong></span>
+            <span>Erreurs <strong>${fmtPct(m.errorRate)}</strong></span></div>
+        <div class="stats-row"><span>Dernier succès</span><span><strong>${fmtAge(m.lastSuccessAt)}</strong></span></div>
+        ${m.lastError ? `<div class="stats-row"><span>Dernière erreur</span><span><strong title="${esc(m.lastError)}">${esc(m.lastError.substring(0, 30))}…</strong></span></div>` : ''}
+    </div>`;
+}
+// Carte compacte pour le dashboard (santé synthétique).
+function buildHealthCard(name, m) {
+    return `<div class="card scraper-card status-${m.status}">
+        <div class="name">${EMOJI[m.status]} ${name}</div>
+        ${m.statusReason ? `<div class="reason">${esc(m.statusReason)}</div>` : `<div style="color:var(--muted);font-size:0.82em;margin-bottom:8px;">OK · dernier succès ${fmtAge(m.lastSuccessAt)}</div>`}
+        <div class="bars">${(() => { const b = []; const pad = 20 - m.window;
+            for (let i=0;i<pad;i++) b.push('<div style="background:rgba(255,255,255,0.05)"></div>');
+            for (let i=0;i<m.success;i++) b.push('<div class="bar-s"></div>');
+            for (let i=0;i<m.empty;i++) b.push('<div class="bar-e"></div>');
+            for (let i=0;i<m.errors;i++) b.push('<div class="bar-x"></div>'); return b.join(''); })()}</div>
+    </div>`;
 }
 
+// ============ Stats / Dashboard ============
 async function loadStats() {
     try {
-        const r = await fetch('/api/stats');
-        if (!r.ok) throw new Error('HTTP ' + r.status);
+        const r = await api('/api/stats');
         const s = await r.json();
+        document.getElementById('meta').textContent = `Uptime ${s.uptime} · MAJ ${new Date().toLocaleTimeString('fr-FR')}`;
 
-        document.getElementById('meta').textContent =
-            `Uptime ${s.uptime} · Dernière MAJ ${new Date().toLocaleTimeString('fr-FR')}`;
+        // KPIs
+        const served = Object.values(s.streamsServed).reduce((a, b) => a + b, 0);
+        document.getElementById('kpis').innerHTML = `
+            <div class="kpi"><div class="val">${s.uptime}</div><div class="lbl">Uptime</div></div>
+            <div class="kpi"><div class="val">${s.requests.total}</div><div class="lbl">Requêtes</div></div>
+            <div class="kpi"><div class="val">${served}</div><div class="lbl">Streams servis</div></div>
+            <div class="kpi"><div class="val">${fmtPct(s.cache.hitRate)}</div><div class="lbl">Cache hit-rate</div></div>`;
 
+        // Dashboard : cartes santé compactes
+        document.getElementById('dash-sources').innerHTML = Object.entries(s.metrics)
+            .map(([name, m]) => buildHealthCard(name, m)).join('');
+
+        // Stats : cartes détaillées
         document.getElementById('scrapers').innerHTML = Object.entries(s.metrics)
             .map(([name, m]) => buildScraperCard(name, m)).join('');
 
@@ -248,86 +349,101 @@ async function loadStats() {
             <span class="k">Hits / Misses</span><span class="v">${c.hits} / ${c.misses}</span>
             <span class="k">Entrées actives</span><span class="v">${c.liveEntries}</span>
             <span class="k">Taille DB</span><span class="v">${fmtBytes(c.fileSizeBytes)}</span>
-            ${Object.entries(c.byScope).map(([sc, n]) => `<span class="k">└ ${sc}</span><span class="v">${n}</span>`).join('')}
-        `;
-
+            ${Object.entries(c.byScope).map(([sc, n]) => `<span class="k">└ ${sc}</span><span class="v">${n}</span>`).join('')}`;
         document.getElementById('requests').innerHTML = `
             <span class="k">Total</span><span class="v">${s.requests.total}</span>
             <span class="k">Streams</span><span class="v">${s.requests.streams}</span>
-            <span class="k">Proxy</span><span class="v">${s.requests.proxy}</span>
-        `;
-
+            <span class="k">Proxy</span><span class="v">${s.requests.proxy}</span>`;
         document.getElementById('served').innerHTML = Object.entries(s.streamsServed)
             .map(([k, v]) => `<span class="k">${k}</span><span class="v">${v}</span>`).join('');
     } catch (e) {
-        document.getElementById('meta').innerHTML = `<span class="error">Erreur: ${e.message}</span>`;
+        if (e.message !== 'session') document.getElementById('meta').innerHTML = `<span class="error">Erreur: ${esc(e.message)}</span>`;
     }
 }
 
 async function checkHealth() {
     const box = document.getElementById('health');
-    box.innerHTML = '<div class="loader">Vérification en cours...</div>';
+    box.innerHTML = '<div class="loader">Vérification en cours…</div>';
     try {
-        const r = await fetch('/api/health');
+        const r = await api('/api/health');
         const h = await r.json();
         box.innerHTML = Object.entries(h.sources).map(([src, d]) => `
-            <div class="health-source ${d.status}">
-                <span><strong>${src}</strong></span>
-                <span>${d.status.toUpperCase()} · ${d.latency ? d.latency + 'ms' : ''} ${d.error ? '— ' + d.error : ''}</span>
-            </div>
-        `).join('');
-    } catch (e) {
-        box.innerHTML = `<div class="error">Erreur: ${e.message}</div>`;
-    }
+            <div class="health-source ${d.status}"><span><strong>${src}</strong></span>
+            <span>${d.status.toUpperCase()} · ${d.latency ? d.latency + 'ms' : ''} ${d.error ? '— ' + esc(d.error) : ''}</span></div>`).join('');
+    } catch (e) { if (e.message !== 'session') box.innerHTML = `<div class="error">Erreur: ${esc(e.message)}</div>`; }
 }
 
-function refreshAll() {
-    loadStats();
-    loadEndpoints();
-    loadWhitelist();
+function refreshAll() { loadStats(); }
+
+// ============ Logs ============
+let logSince = 0, logTimer = null;
+function resetLogs() { logSince = 0; document.getElementById('logview').innerHTML = ''; loadLogs(); }
+function startLogPoll() { stopLogPoll(); logTimer = setInterval(() => { if (document.getElementById('log-auto').checked) loadLogs(); }, 3000); }
+function stopLogPoll() { if (logTimer) { clearInterval(logTimer); logTimer = null; } }
+['log-source','log-level'].forEach(id => document.getElementById(id).addEventListener('change', resetLogs));
+let logQTimer; document.getElementById('log-q').addEventListener('input', () => { clearTimeout(logQTimer); logQTimer = setTimeout(resetLogs, 300); });
+
+async function loadLogs() {
+    const src = document.getElementById('log-source').value;
+    const lvl = document.getElementById('log-level').value;
+    const q = document.getElementById('log-q').value.trim();
+    const params = new URLSearchParams({ sinceSeq: String(logSince), limit: '500' });
+    if (src) params.set('source', src); if (lvl) params.set('level', lvl); if (q) params.set('q', q);
+    try {
+        const r = await api('/api/logs?' + params);
+        const d = await r.json();
+        // maj du sélecteur de sources
+        const sel = document.getElementById('log-source'); const cur = sel.value;
+        const known = new Set([...sel.options].map(o => o.value));
+        d.sources.forEach(s => { if (!known.has(s)) { const o = document.createElement('option'); o.value = o.textContent = s; sel.appendChild(o); } });
+        sel.value = cur;
+
+        const view = document.getElementById('logview');
+        if (logSince === 0) view.innerHTML = '';
+        const atBottom = view.scrollHeight - view.scrollTop - view.clientHeight < 40;
+        const frag = document.createDocumentFragment();
+        d.lines.forEach(l => {
+            const div = document.createElement('div');
+            div.className = 'logline ' + l.level;
+            const t = new Date(l.ts).toLocaleTimeString('fr-FR');
+            div.innerHTML = `<span class="lt">${t}</span><span class="ls">${esc(l.source)}</span><span class="lm">${esc(l.msg)}</span>`;
+            frag.appendChild(div);
+        });
+        view.appendChild(frag);
+        while (view.childElementCount > 1000) view.removeChild(view.firstChild);
+        if (logSince === 0 && !d.lines.length) view.innerHTML = '<div class="loader">Aucune ligne pour ces filtres.</div>';
+        logSince = d.lastSeq;
+        if (atBottom) view.scrollTop = view.scrollHeight;
+    } catch (e) { if (e.message !== 'session') document.getElementById('logview').innerHTML = `<div class="error">Erreur: ${esc(e.message)}</div>`; }
 }
 
-// --- URLs des sources (édition à chaud) ---
-// Movix a 3 champs (api/referer/origin) ; les autres une seule base.
+// ============ Paramétrage > Sources ============
 const SOURCES = [
     { path: 'movix', label: 'Movix', fields: ['api', 'referer', 'origin'], note: 'pilote aussi Wiflix, VoirDrama (API) et FrenchStream (API)' },
     { path: 'frenchstream', label: 'FrenchStream', fields: ['base'] },
     { path: 'streamflix', label: 'StreamFlix', fields: ['base'] },
+    { path: 'videasy', label: 'Videasy', fields: ['base'], note: 'VO + sous-titres ; domaine d\'API tournant' },
     { path: 'voirdrama', label: 'VoirDrama', fields: ['base'], note: 'scraping du site ; les dramas passent par Movix' },
     { path: 'voiranime', label: 'VoirAnime', fields: ['base'], note: 'scraping du site (anime, gaté sur les titres japonais)' },
     { path: 'nabistream', label: 'Nabistream', fields: ['base'], note: 'API dramas asiatiques VOSTFR (keyée TMDB, HLS direct + subs FR)' },
     { path: 'coflix', label: 'Coflix', fields: ['base'], note: 'scraping FR généraliste VF+VOSTFR (domaine tournant, fallbacks intégrés)' },
 ];
-
 async function loadEndpoints() {
     const box = document.getElementById('endpoints');
     try {
-        const data = await Promise.all(SOURCES.map(async s => {
-            const r = await fetch('/api/' + s.path + '/endpoints');
-            return { s, v: await r.json() };
-        }));
+        const data = await Promise.all(SOURCES.map(async s => ({ s, v: await (await api('/api/' + s.path + '/endpoints')).json() })));
         box.innerHTML = data.map(({ s, v }) => {
-            // Un label par champ (essentiel pour Movix : api / referer / origin).
-            const rows = s.fields.map(f => `
-                <div class="cfg-row">
-                    <label>${f}</label>
-                    <input id="ep-${s.path}-${f}" placeholder="${f}" value="${(v[f] || '').replace(/"/g, '&quot;')}">
-                </div>`).join('');
+            const rows = s.fields.map(f => `<div class="cfg-row"><label>${f}</label>
+                <input id="ep-${s.path}-${f}" placeholder="${f}" value="${esc(v[f] || '')}"></div>`).join('');
             return `<div style="margin-bottom:16px;padding-bottom:12px;border-bottom:1px solid rgba(255,255,255,0.06);">
-                <div style="font-weight:600;margin-bottom:8px;">${s.label}</div>
-                ${rows}
+                <div style="font-weight:600;margin-bottom:8px;">${s.label}</div>${rows}
                 <div class="cfg-row" style="margin-left:108px;">
-                    <button class="btn cfg-save" onclick="saveEndpoint('${s.path}')">Enregistrer</button>
-                    <span class="cfg-msg" id="msg-${s.path}"></span>
-                </div>
-                ${s.note ? `<div style="font-size:0.78em;color:#7a7a8a;margin-left:108px;">${s.note}</div>` : ''}
-            </div>`;
+                    <button class="btn cfg-save small" onclick="saveEndpoint('${s.path}')">Enregistrer</button>
+                    <span class="cfg-msg" id="msg-${s.path}"></span></div>
+                ${s.note ? `<div style="font-size:0.78em;color:var(--dim);margin-left:108px;">${s.note}</div>` : ''}</div>`;
         }).join('');
-    } catch (e) {
-        box.innerHTML = `<div class="error">Erreur: ${e.message}</div>`;
-    }
+    } catch (e) { if (e.message !== 'session') box.innerHTML = `<div class="error">Erreur: ${esc(e.message)}</div>`; }
 }
-
 async function saveEndpoint(path) {
     const src = SOURCES.find(s => s.path === path);
     const msg = document.getElementById('msg-' + path);
@@ -335,64 +451,135 @@ async function saveEndpoint(path) {
     for (const f of src.fields) body[f] = document.getElementById('ep-' + path + '-' + f).value.trim();
     msg.textContent = '…'; msg.className = 'cfg-msg';
     try {
-        const r = await fetch('/api/' + path + '/endpoints', {
-            method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
-        });
+        const r = await api('/api/' + path + '/endpoints', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
         const j = await r.json();
         if (!r.ok || j.ok === false) throw new Error(j.error || ('HTTP ' + r.status));
         msg.textContent = '✓ appliqué'; msg.className = 'cfg-msg ok';
-    } catch (e) {
-        msg.textContent = '✗ ' + e.message; msg.className = 'cfg-msg err';
-    }
+    } catch (e) { if (e.message !== 'session') { msg.textContent = '✗ ' + e.message; msg.className = 'cfg-msg err'; } }
 }
 
-// --- Whitelist ---
+// ============ Paramétrage > Whitelist ============
 async function loadWhitelist() {
     const box = document.getElementById('whitelist');
     try {
-        const r = await fetch('/api/whitelist');
-        const w = await r.json();
-        const badge = w.autoWhitelist
-            ? '<span class="badge on">AUTO_WHITELIST activé</span>'
-            : '<span class="badge off">AUTO_WHITELIST désactivé</span>';
+        const [w, st] = await Promise.all([
+            (await api('/api/whitelist')).json(),
+            (await api('/api/settings')).json(),
+        ]);
+        const toggle = w.autoWhitelist
+            ? `<button class="btn small" onclick="setAutoWl(false)">Désactiver AUTO_WHITELIST</button>`
+            : `<button class="btn small" onclick="setAutoWl(true)">Activer AUTO_WHITELIST</button>`;
+        const badge = w.autoWhitelist ? '<span class="badge on">AUTO_WHITELIST activé</span>' : '<span class="badge off">AUTO_WHITELIST désactivé</span>';
+        const srcBadge = `<span class="badge src">source : ${st.autoWhitelistSource === 'file' ? 'admin' : '.env'}</span>`;
         box.innerHTML = `
-            <div style="margin-bottom:10px;">${badge}
-                <span style="color:#a0a0b0;font-size:0.85em;margin-left:8px;">${w.domains.length} domaines autorisés</span>
+            <div style="margin-bottom:14px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+                ${badge}${srcBadge}${toggle}
+                <span style="color:var(--muted);font-size:0.85em;">${w.domains.length} domaines autorisés</span>
+                <span class="cfg-msg" id="msg-awl"></span>
             </div>
+            <div style="font-size:0.8em;color:var(--dim);margin-bottom:12px;">Apprend automatiquement les CDN de tes sources (extraction + segments des masters déjà autorisés). Le blocage des IP privées reste actif.</div>
             <div class="cfg-row">
                 <input id="wl-domain" placeholder="exemple.com (couvre les sous-domaines)">
-                <button class="btn cfg-save" onclick="addDomain()">Ajouter</button>
-                <span class="cfg-msg" id="msg-wl"></span>
-            </div>
-            <details style="margin-top:8px;"><summary style="cursor:pointer;color:#a0a0b0;font-size:0.85em;">Voir la liste</summary>
-                <div style="font-size:0.8em;color:#7a7a8a;margin-top:6px;word-break:break-all;">${w.domains.join(' · ')}</div>
-            </details>`;
-    } catch (e) {
-        box.innerHTML = `<div class="error">Erreur: ${e.message}</div>`;
-    }
+                <button class="btn cfg-save small" onclick="addDomain()">Ajouter</button>
+                <span class="cfg-msg" id="msg-wl"></span></div>
+            <details style="margin-top:8px;"><summary style="cursor:pointer;color:var(--muted);font-size:0.85em;">Voir la liste (${w.domains.length})</summary>
+                <div style="font-size:0.8em;color:var(--dim);margin-top:6px;word-break:break-all;">${w.domains.map(esc).join(' · ')}</div></details>`;
+    } catch (e) { if (e.message !== 'session') box.innerHTML = `<div class="error">Erreur: ${esc(e.message)}</div>`; }
 }
-
+async function setAutoWl(on) {
+    const msg = document.getElementById('msg-awl'); msg.textContent = '…'; msg.className = 'cfg-msg';
+    try {
+        const r = await api('/api/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ autoWhitelist: on }) });
+        const j = await r.json(); if (!r.ok || j.ok === false) throw new Error(j.error || 'HTTP ' + r.status);
+        loadWhitelist();
+    } catch (e) { if (e.message !== 'session') { msg.textContent = '✗ ' + e.message; msg.className = 'cfg-msg err'; } }
+}
 async function addDomain() {
     const msg = document.getElementById('msg-wl');
     const domain = document.getElementById('wl-domain').value.trim();
     msg.textContent = '…'; msg.className = 'cfg-msg';
     try {
-        const r = await fetch('/api/whitelist', {
-            method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ domain }),
-        });
-        const j = await r.json();
-        if (!r.ok || j.ok === false) throw new Error(j.error || ('HTTP ' + r.status));
+        const r = await api('/api/whitelist', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ domain }) });
+        const j = await r.json(); if (!r.ok || j.ok === false) throw new Error(j.error || 'HTTP ' + r.status);
         msg.textContent = j.added ? '✓ ajouté' : '✓ déjà présent'; msg.className = 'cfg-msg ok';
         loadWhitelist();
-    } catch (e) {
-        msg.textContent = '✗ ' + e.message; msg.className = 'cfg-msg err';
-    }
+    } catch (e) { if (e.message !== 'session') { msg.textContent = '✗ ' + e.message; msg.className = 'cfg-msg err'; } }
 }
 
+// ============ Paramétrage > Partage ============
+async function loadPartage() {
+    const box = document.getElementById('partage');
+    try {
+        const st = await (await api('/api/settings')).json();
+        const modes = st.mode ? st.mode.split(/[;,]/).map(m => m.trim().toUpperCase()) : ['DIRECT', 'MFP', 'LOCAL'];
+        const chk = m => modes.includes(m) ? 'checked' : '';
+        const ok = st.ownerKey.configured;
+        const owner = ok
+            ? `<span class="badge on">configurée (${st.ownerKey.length} car.)</span><span class="badge src">source : ${st.ownerKey.source === 'file' ? 'admin' : '.env'}</span>`
+            : `<span class="badge off">non configurée</span>`;
+        const access = st.accessKeyConfigured ? '<span class="badge on">activée</span>' : '<span class="badge off">désactivée</span>';
+        box.innerHTML = `
+            <div style="margin-bottom:22px;">
+                <div style="font-weight:600;margin-bottom:6px;">Modes de livraison proposés <span class="badge src">source : ${st.modeSource === 'file' ? 'admin' : (st.modeSource === 'env' ? '.env' : 'défaut (tous)')}</span></div>
+                <div style="font-size:0.8em;color:var(--dim);margin-bottom:10px;">Ce que voient les utilisateurs dans /configure. Le direct est toujours prioritaire ; le mode ne choisit que le repli des flux non-directables. Le 1er coché est le défaut.</div>
+                <label class="switch" style="margin-right:16px;"><input type="checkbox" id="m-direct" ${chk('DIRECT')}> DIRECT</label>
+                <label class="switch" style="margin-right:16px;"><input type="checkbox" id="m-mfp" ${chk('MFP')}> MFP (MediaFlow)</label>
+                <label class="switch"><input type="checkbox" id="m-local" ${chk('LOCAL')}> LOCAL (proxy serveur)</label>
+                <div class="cfg-row" style="margin-top:12px;">
+                    <button class="btn small" onclick="saveMode()">Enregistrer les modes</button>
+                    <button class="btn secondary small" onclick="resetMode()">Revenir au .env</button>
+                    <span class="cfg-msg" id="msg-mode"></span></div>
+            </div>
+            <div style="margin-bottom:22px;border-top:1px solid rgba(255,255,255,0.08);padding-top:18px;">
+                <div style="font-weight:600;margin-bottom:6px;">Clé propriétaire (OWNER_KEY) ${owner}</div>
+                <div style="font-size:0.8em;color:var(--dim);margin-bottom:10px;">Bypasse le gate des modes : ton lien /configure portant cette clé garde le proxy local même si tu ne l'offres pas aux autres. La valeur n'est jamais affichée.</div>
+                <div class="cfg-row">
+                    <input id="owner-key" placeholder="nouvelle clé (8 à 128 caractères)">
+                    <button class="btn secondary small" onclick="genOwnerKey()">🎲 Générer</button>
+                    <button class="btn cfg-save small" onclick="saveOwnerKey()">Enregistrer</button>
+                    ${ok ? '<button class="btn danger small" onclick="removeOwnerKey()">Retirer</button>' : ''}
+                    <span class="cfg-msg" id="msg-owner"></span></div>
+            </div>
+            <div style="border-top:1px solid rgba(255,255,255,0.08);padding-top:18px;">
+                <div style="font-weight:600;margin-bottom:6px;">Clé d'accès (ACCESS_KEY) ${access}</div>
+                <div style="font-size:0.8em;color:var(--dim);">Garde tout l'addon derrière une clé. Gérée uniquement dans le .env (lecture seule ici) — modifie-la côté serveur puis redémarre.</div>
+            </div>`;
+    } catch (e) { if (e.message !== 'session') box.innerHTML = `<div class="error">Erreur: ${esc(e.message)}</div>`; }
+}
+async function postSettings(patch, msgId) {
+    const msg = document.getElementById(msgId); msg.textContent = '…'; msg.className = 'cfg-msg';
+    try {
+        const r = await api('/api/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(patch) });
+        const j = await r.json(); if (!r.ok || j.ok === false) throw new Error(j.error || 'HTTP ' + r.status);
+        msg.textContent = '✓ appliqué'; msg.className = 'cfg-msg ok';
+        loadPartage();
+    } catch (e) { if (e.message !== 'session') { msg.textContent = '✗ ' + e.message; msg.className = 'cfg-msg err'; } }
+}
+function saveMode() {
+    const sel = [];
+    if (document.getElementById('m-direct').checked) sel.push('DIRECT');
+    if (document.getElementById('m-mfp').checked) sel.push('MFP');
+    if (document.getElementById('m-local').checked) sel.push('LOCAL');
+    if (!sel.length) { const m = document.getElementById('msg-mode'); m.textContent = '✗ coche au moins un mode'; m.className = 'cfg-msg err'; return; }
+    postSettings({ mode: sel.join(';') }, 'msg-mode');
+}
+function resetMode() { postSettings({ mode: null }, 'msg-mode'); }
+function genOwnerKey() {
+    const a = new Uint8Array(16); crypto.getRandomValues(a);
+    document.getElementById('owner-key').value = [...a].map(b => b.toString(16).padStart(2, '0')).join('');
+}
+function saveOwnerKey() {
+    const v = document.getElementById('owner-key').value.trim();
+    if (v.length < 8) { const m = document.getElementById('msg-owner'); m.textContent = '✗ 8 caractères minimum'; m.className = 'cfg-msg err'; return; }
+    postSettings({ ownerKey: v }, 'msg-owner');
+}
+function removeOwnerKey() { if (confirm('Retirer la clé propriétaire (retour au .env) ?')) postSettings({ ownerKey: null }, 'msg-owner'); }
+
+// ============ Boot ============
 loadStats();
-loadEndpoints();
-loadWhitelist();
-setInterval(loadStats, 30000);
+setInterval(() => { if (document.querySelector('.view[data-view="dashboard"]').classList.contains('active') || document.querySelector('.view[data-view="stats"]').classList.contains('active')) loadStats(); }, 30000);
+const initial = (location.hash || '#dashboard').slice(1);
+showView(['dashboard','stats','logs','settings'].includes(initial) ? initial : 'dashboard');
 </script>
 </body>
 </html>

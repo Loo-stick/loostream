@@ -1,3 +1,0 @@
-{
-  "_comment": "Réglages runtime éditables depuis l'admin (Paramétrage > Partage). Surchargent le .env. Géré par l'app — édition manuelle possible mais l'admin réécrit ce fichier."
-}

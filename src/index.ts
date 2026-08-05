@@ -1694,7 +1694,9 @@ app.post('/api/whitelist', requireAdminSession, jsonBody, (req, res) => {
 // cf. settingsView) ; POST derrière la session admin. Applique à chaud : mode,
 // autoWhitelist et ownerKey sont relus par leurs getters à chaque usage.
 app.get('/api/settings', (_req, res) => {
-  res.json(settingsView());
+  // accessKeyConfigured : ACCESS_KEY est gérée uniquement dans le .env (garde
+  // l'accès) ; l'admin l'affiche en lecture seule, jamais sa valeur.
+  res.json({ ...settingsView(), accessKeyConfigured: accessEnabled() });
 });
 app.post('/api/settings', requireAdminSession, jsonBody, (req, res) => {
   const b = req.body || {};
