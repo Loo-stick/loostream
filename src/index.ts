@@ -373,8 +373,10 @@ const QUALITY_SCORES: Record<string, number> = {
   '4K': 4,
   '1080p': 3,
   '720p': 2,
+  '576p': 1.5,
   '480p': 1,
-  'HD': 2, // Treat HD as 720p equivalent
+  '360p': 0.6,
+  'HD': 2, // repli si la résolution n'a pas pu être mesurée (label générique)
 };
 
 function normalizeLanguage(lang: string): string {
@@ -391,7 +393,9 @@ function normalizeQuality(quality: string): string {
   if (upper.includes('4K') || upper.includes('2160')) return '4K';
   if (upper.includes('1080')) return '1080p';
   if (upper.includes('720')) return '720p';
+  if (upper.includes('576')) return '576p';
   if (upper.includes('480') || upper.includes('SD')) return '480p';
+  if (upper.includes('360')) return '360p';
   if (upper.includes('HD') || upper.includes('FULL')) return '1080p';
   return '720p'; // Default
 }

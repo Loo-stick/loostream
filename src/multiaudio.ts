@@ -17,9 +17,11 @@ const PROBE_TTL_MS = 15 * 60 * 1000; // aligné sur le cache des scrapers
 const BLOCKED = -403; // sentinelle : CDN qui refuse les IP serveur
 const UNKNOWN = -1;    // erreur passagère : ne pas cacher, ne rien changer
 
-// Résultat de sonde : nb de langues audio (>=0), BLOCKED (-403) ou UNKNOWN (-1).
-async function probeMaster(url: string, headers?: Record<string, string>): Promise<number> {
-  return cached<number>(
+// Résultat de sonde EN UN SEUL fetch : nb de langues audio (langs >=0, ou BLOCKED
+// /UNKNOWN) + hauteur de la variante la plus haute (résolution réelle, ou null).
+interface Probe { langs: number; height: number | null; }
+async function probeMaster(url: string, headers?: Record<string, string>): Promise<Probe> {
+  return cached<Probe>(
     `multiaudio:${url}`,
     PROBE_TTL_MS,
     async () => {
@@ -32,25 +34,41 @@ async function probeMaster(url: string, headers?: Record<string, string>): Promi
           validateStatus: () => true,
           maxRedirects: 3,
         });
-        if ([401, 403, 451].includes(resp.status)) return BLOCKED; // anti-datacenter confirmé
-        if (resp.status < 200 || resp.status >= 400) return UNKNOWN; // 5xx/4xx divers : incertain
+        if ([401, 403, 451].includes(resp.status)) return { langs: BLOCKED, height: null }; // anti-datacenter confirmé
+        if (resp.status < 200 || resp.status >= 400) return { langs: UNKNOWN, height: null }; // divers : incertain
+        const body = String(resp.data);
         const langs = new Set(
-          [...String(resp.data).matchAll(/#EXT-X-MEDIA:TYPE=AUDIO[^\n]*?LANGUAGE="([^"]+)"/gi)]
+          [...body.matchAll(/#EXT-X-MEDIA:TYPE=AUDIO[^\n]*?LANGUAGE="([^"]+)"/gi)]
             .map(m => m[1].toLowerCase().trim())
             .filter(Boolean)
         );
-        return langs.size;
+        // RESOLUTION=WxH de toutes les variantes -> hauteur MAX = meilleure qualité offerte.
+        const heights = [...body.matchAll(/RESOLUTION=\d+x(\d+)/gi)].map(m => parseInt(m[1], 10)).filter(h => h > 0);
+        return { langs: langs.size, height: heights.length ? Math.max(...heights) : null };
       } catch {
-        return UNKNOWN; // timeout/réseau : passager
+        return { langs: UNKNOWN, height: null }; // timeout/réseau : passager
       }
     },
-    { scope: 'multiaudio', shouldCache: n => n >= 0 || n === BLOCKED } // ne cache pas l'incertain
+    { scope: 'multiaudio', shouldCache: r => r.langs >= 0 || r.langs === BLOCKED } // ne cache pas l'incertain
   );
+}
+
+// Hauteur de la meilleure variante -> libellé de qualité (affichage + tri). Remplace
+// le générique 'HD' des extracteurs par la vraie résolution lue dans le manifest.
+function resLabel(h: number): string | null {
+  if (h >= 1400) return '4K';
+  if (h >= 1000) return '1080p';
+  if (h >= 650) return '720p';
+  if (h >= 520) return '576p';
+  if (h >= 340) return '480p';
+  if (h >= 200) return '360p';
+  return null;
 }
 
 interface Labellable {
   url: string;
   language: string;
+  quality?: string;
   headers?: Record<string, string>;
 }
 
@@ -79,13 +97,24 @@ export function probeTarget(url: string, headers?: Record<string, string>): { ur
  * MediaFlow qui livre (autre IP), on ne préjuge pas de sa capacité — on garde.
  */
 export async function applyMultiAudio<T extends Labellable>(streams: T[]): Promise<T[]> {
+  const t0 = Date.now();
+  let probed = 0;
   const kept = await Promise.all(streams.map(async s => {
     if (!/\.m3u8(\?|$)/i.test(s.url)) return s;           // non-HLS : tel quel
     const t = probeTarget(s.url, s.headers);
-    const n = await probeMaster(t.url, t.headers);
-    if (n === BLOCKED && !t.viaMediaFlow) return null;    // CDN 403 en local -> drop
-    if (n >= 2 && !/multi/i.test(s.language)) s.language = 'MULTI'; // upgrade sur confirmation
-    return s;                                              // UNKNOWN ou mono : inchangé
+    const { langs, height } = await probeMaster(t.url, t.headers);
+    probed++;
+    if (langs === BLOCKED && !t.viaMediaFlow) return null; // CDN 403 en local -> drop
+    if (langs >= 2 && !/multi/i.test(s.language)) s.language = 'MULTI'; // upgrade sur confirmation
+    // Qualité RÉELLE : le master est déjà téléchargé -> on remplace le 'HD' générique
+    // par la résolution mesurée (coût ~0, juste un regex). Zéro fetch en plus.
+    if (height && s.quality !== undefined) {
+      const lbl = resLabel(height);
+      if (lbl) s.quality = lbl;
+    }
+    return s;                                              // UNKNOWN ou mono : label inchangé
   }));
-  return kept.filter(s => s !== null) as T[];
+  const out = kept.filter(s => s !== null) as T[];
+  if (probed) console.log(`[MultiAudio] ${probed} master(s) sondé(s) en ${Date.now() - t0}ms (résolution + langues)`);
+  return out;
 }
