@@ -21,10 +21,15 @@
 //                        bonne IP. En mode direct pur : écarté (mieux qu'un flux mort).
 export const PROXY_FORCED_HOSTS = ['uqload', 'voe.sx', 'vmnow', 'vmeas', 'vmpx.online'];
 
-/** Un hôte est directable s'il n'est pas dans la liste non-directable ci-dessus. */
+/** Un hôte est directable s'il n'est pas dans la liste non-directable ci-dessus ET si
+ * son token n'est pas LIÉ À L'ASN de l'extracteur. Un CDN qui met `asn=<ASN serveur>`
+ * dans le token (dramiyos-cdn/filelions, vmpx…) rejette toute autre ASN -> injouable
+ * en direct depuis le client. Il DOIT passer par le proxy (le serveur a la bonne ASN ;
+ * MediaFlow tourne sur le même serveur -> token valide). En direct pur : écarté. */
 export function isDirectable(streamUrl: string): boolean {
   let host: string;
   try { host = new URL(streamUrl).hostname; } catch { return false; }
+  if (/[?&]asn=/i.test(streamUrl)) return false; // token ASN-bound -> jamais directable
   return !PROXY_FORCED_HOSTS.some(p => host.includes(p));
 }
 
