@@ -12,11 +12,19 @@ const TOP_N = 5;
 
 export interface ExtSub { url: string; name: string; downloads: number }
 
-/** Pur : filtre srt, mappe, trie par téléchargements décroissants, top N. */
+/** Pur : filtre srt/ass/ssa, mappe, trie par téléchargements décroissants, top N.
+ * L'anime est quasi toujours en .ass (SubStation Alpha) -> on l'accepte (converti
+ * en VTT à la livraison, cf. subtitleToVtt). SubFormat peut être vide : on retombe
+ * sur l'extension du nom de fichier. */
 export function parseOpenSubtitles(data: any[]): ExtSub[] {
   if (!Array.isArray(data)) return [];
+  const isTextSub = (s: any) => {
+    const fmt = String(s?.SubFormat || '');
+    const name = String(s?.SubFileName || '');
+    return /(srt|ass|ssa|vtt)/i.test(fmt) || /\.(srt|ass|ssa|vtt)$/i.test(name);
+  };
   return data
-    .filter(s => s?.SubDownloadLink && /srt/i.test(String(s.SubFormat || '')))
+    .filter(s => s?.SubDownloadLink && isTextSub(s))
     .map(s => ({
       url: String(s.SubDownloadLink),
       name: String(s.SubFileName || s.MovieReleaseName || 'OpenSubtitles'),
@@ -43,4 +51,66 @@ export async function getFrenchSubtitles(imdbId: string, season?: number, episod
     },
     { scope: 'extsub', shouldCache: r => r.length > 0 },
   );
+}
+
+/** Timecode ASS (`H:MM:SS.cc`, centisecondes) -> VTT (`HH:MM:SS.mmm`). */
+function assTime(t: string): string | null {
+  const m = String(t || '').trim().match(/^(\d+):(\d{2}):(\d{2})[.,](\d{2})$/);
+  if (!m) return null;
+  return `${m[1].padStart(2, '0')}:${m[2]}:${m[3]}.${m[4]}0`; // cc -> mmm
+}
+
+/**
+ * ASS/SSA -> VTT. Garde le TEXTE des dialogues (lisible), jette le stylage (pos,
+ * karaoké, fontes) que le player ne rend pas. On lit le `Format:` de `[Events]`
+ * pour localiser Start/End/Text, puis on nettoie les balises override `{\…}`, les
+ * sauts `\N`/`\n` et les espaces `\h`.
+ */
+export function assToVtt(ass: string): string {
+  const lines = ass.split(/\r?\n/);
+  let format: string[] | null = null;
+  let inEvents = false;
+  const cues: string[] = [];
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (/^\[[^\]]+\]$/.test(trimmed)) { inEvents = /^\[events\]$/i.test(trimmed); continue; }
+    if (!inEvents) continue;
+    if (/^Format:/i.test(trimmed)) {
+      format = trimmed.replace(/^Format:\s*/i, '').split(',').map(s => s.trim().toLowerCase());
+      continue;
+    }
+    if (/^Dialogue:/i.test(trimmed) && format) {
+      const startIdx = format.indexOf('start');
+      const endIdx = format.indexOf('end');
+      const textIdx = format.indexOf('text');
+      if (startIdx < 0 || endIdx < 0 || textIdx < 0) continue;
+      const parts = trimmed.replace(/^Dialogue:\s*/i, '').split(',');
+      const start = assTime(parts[startIdx]);
+      const end = assTime(parts[endIdx]);
+      if (!start || !end) continue;
+      // 'Text' est le dernier champ ASS -> rejoindre pour ne pas perdre ses virgules.
+      const text = parts.slice(textIdx).join(',')
+        .replace(/\{[^}]*\}/g, '')   // balises override
+        .replace(/\\[nN]/g, '\n')    // \N (dur) et \n (doux) -> saut de ligne
+        .replace(/\\h/gi, ' ')       // espace insécable ASS
+        .trim();
+      if (text) cues.push(`${start} --> ${end}\n${text}`);
+    }
+  }
+  return 'WEBVTT\n\n' + cues.join('\n\n') + (cues.length ? '\n' : '');
+}
+
+/** SRT -> VTT : virgule décimale -> point, normalise les flèches. */
+export function srtToVtt(srt: string): string {
+  return 'WEBVTT\n\n' + srt
+    .replace(/(\d{2}:\d{2}:\d{2}),(\d{3})/g, '$1.$2')
+    .replace(/[ \t]*-->[ \t]*/g, ' --> ');
+}
+
+/** Détecte le format (VTT tel quel / ASS / sinon SRT) et renvoie du VTT. */
+export function subtitleToVtt(raw: string): string {
+  const s = raw.replace(/\r+/g, '').replace(/^﻿/, '');
+  if (/^\s*WEBVTT/.test(s)) return s; // déjà du VTT
+  if (/^\s*\[Script Info\]/im.test(s) || /^\s*Dialogue:\s/im.test(s)) return assToVtt(s);
+  return srtToVtt(s);
 }
