@@ -76,6 +76,58 @@ function buildHeaders() {
   };
 }
 
+// Headers pour les SOURCES PurStream (CDN finepulfe/pulse), à NE PAS confondre avec
+// ceux de l'API : leur Cloudflare BLOQUE le `Referer: movix.cash` (périmé — movix a
+// migré vers .fun). PROUVÉ : Referer movix.cash -> 403 (page « Attention Required! ») ;
+// UA navigateur complet SANS ce referer -> 200 (vrai manifeste MULTI). On sert donc le
+// m3u8 CDN avec un UA complet et AUCUN referer movix — pour la vérif de vie ET la livraison.
+function purstreamSourceHeaders(): Record<string, string> {
+  return {
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+    'Accept': '*/*',
+    'Accept-Language': 'fr-FR,fr;q=0.9',
+  };
+}
+
+/**
+ * Le master PurStream déclare un groupe AUDIO ALTERNÉ (`audio_fr`/`audio_en`) sur une
+ * variante qui contient DÉJÀ l'audio muxé (PID vidéo+audio dans le même .ts). Ce HLS
+ * ambigu casse le rendu vidéo sur ExoPlayer/Nuvio (on entend le son, pas d'image). On
+ * contourne en livrant directement la MEILLEURE VARIANTE (auto-suffisante, A/V muxés)
+ * au lieu du master -> plus de groupe alterné conflictuel. Renvoie {url, quality} ou
+ * null (pas un master / échec -> on garde le master en repli).
+ */
+async function resolvePurstreamVariant(
+  masterUrl: string,
+  headers: Record<string, string>,
+): Promise<{ url: string; quality?: string } | null> {
+  try {
+    const { data } = await axios.get<string>(masterUrl, {
+      headers, timeout: 10000, responseType: 'text', transformResponse: r => r,
+    });
+    const text = String(data || '');
+    if (!/#EXT-X-STREAM-INF/i.test(text)) return null; // déjà une media playlist
+    const base = masterUrl.substring(0, masterUrl.lastIndexOf('/') + 1);
+    const lines = text.split('\n');
+    let best: { url: string; height: number; bw: number; res?: string } | null = null;
+    for (let i = 0; i < lines.length; i++) {
+      if (!/^#EXT-X-STREAM-INF/i.test(lines[i].trim())) continue;
+      const uri = (lines[i + 1] || '').trim();
+      if (!uri || uri.startsWith('#')) continue;
+      const resM = lines[i].match(/RESOLUTION=(\d+)x(\d+)/i);
+      const bw = parseInt(lines[i].match(/BANDWIDTH=(\d+)/i)?.[1] || '0', 10);
+      const height = resM ? parseInt(resM[2], 10) : 0;
+      const abs = /^https?:\/\//i.test(uri) ? uri : new URL(uri, base).toString();
+      if (!best || height > best.height || (height === best.height && bw > best.bw)) {
+        best = { url: abs, height, bw, res: resM ? `${resM[2]}p` : undefined };
+      }
+    }
+    return best ? { url: best.url, quality: best.res } : null;
+  } catch {
+    return null;
+  }
+}
+
 export interface MovixStream {
   name: string;
   title: string;
@@ -124,7 +176,8 @@ async function fetchPurstream(
       return [];
     }
 
-    const candidates: MovixStream[] = data.sources
+    const srcHeaders = purstreamSourceHeaders();
+    const rawCandidates: MovixStream[] = data.sources
       .filter((source: any) => source?.url)
       .map((source: any) => ({
         name: 'Movix',
@@ -134,7 +187,16 @@ async function fetchPurstream(
         language: extractLanguage(source.name || ''),
         format: source.format || 'm3u8',
         server: (source.name || '').split('|')[0].trim().toLowerCase() || 'purstream',
+        headers: srcHeaders, // CDN Cloudflare : UA complet, PAS de referer movix
       }));
+
+    // Master -> meilleure variante auto-suffisante (contourne le groupe audio alterné
+    // qui casse la vidéo sur Nuvio). En repli, on garde le master tel quel.
+    const candidates: MovixStream[] = await Promise.all(rawCandidates.map(async c => {
+      if (c.format !== 'm3u8' && !/\.m3u8(\?|$)/i.test(c.url)) return c;
+      const v = await resolvePurstreamVariant(c.url, srcHeaders);
+      return v ? { ...c, url: v.url, quality: v.quality || c.quality } : c;
+    }));
 
     // The API answering 200 does not mean the CDN still serves the file: it has
     // returned URLs to a dead bucket (404 / 403 WAF) while reporting success.
@@ -144,7 +206,7 @@ async function fetchPurstream(
     const liveness = await Promise.all(
       candidates.map(c => isStreamLive(c.url, {
         isHls: c.format === 'm3u8' || /\.m3u8(\?|$)/i.test(c.url),
-        headers: buildHeaders(),
+        headers: c.headers, // headers CDN (sans referer movix) — sinon 403 Cloudflare
       }))
     );
     const live = candidates.filter((_, i) => liveness[i]);
