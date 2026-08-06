@@ -2,6 +2,7 @@ import axios from 'axios';
 import * as https from 'https';
 import * as vm from 'vm';
 import { unpackFromHtml, findStreamUrl } from './unpack';
+import { isStreamLive } from '../live-check';
 import * as fs from 'fs';
 import * as path from 'path';
 
@@ -548,6 +549,18 @@ export async function extractPackedJs(embedUrl: string): Promise<ExtractedStream
       console.log(`[Extractor] pas de flux (non-leurre) après dépack: ${embedUrl}`);
       return null;
     }
+    // URL RELATIVE (ex. minochinos/filelions "/stream/…/master.m3u8") : le host CDN se
+    // perd au dépack -> injouable telle quelle (le proxy/MediaFlow ne peut pas la
+    // résoudre : "relative URL without a base"). On la résout contre l'origine PUIS on
+    // VÉRIFIE qu'elle joue -> morte = DROP. On ne propose JAMAIS un flux mort.
+    if (!/^https?:\/\//i.test(url)) {
+      let abs: string;
+      try { abs = new URL(url, `${origin}/`).toString(); }
+      catch { console.log(`[Extractor] URL relative non résolvable -> drop: ${embedUrl}`); return null; }
+      const alive = await isStreamLive(abs, { isHls: /\.m3u8/i.test(abs), headers: { Referer: `${origin}/`, Origin: origin } });
+      if (!alive) { console.log(`[Extractor] flux relatif mort -> drop: ${abs.slice(0, 70)}`); return null; }
+      url = abs;
+    }
     return {
       url,
       quality: 'HD',
@@ -830,10 +843,14 @@ export async function extractStream(
     return null;
   }
 
-  // fsvid/vidzy : extracteurs locaux uniquement (MediaFlow ne les connaît pas) —
-  // inutile de payer un aller-retour qui échouera.
-  // MediaFlow renvoie 502 sur ces hôtes ; notre extraction locale est fiable.
-  const LOCAL_ONLY: string[] = ['fsvid', 'vidzy', 'mailru', 'sibnet'];
+  // Hôtes où NOTRE extraction locale est plus fiable que MediaFlow -> on l'utilise
+  // même en mode MFP (le flux résolu est ensuite livré/relayé normalement).
+  //  - fsvid/vidzy/mailru/sibnet : MediaFlow renvoie 502/ne les connaît pas.
+  //  - famille StreamWish/KVS (lulustream/streamwish/filelions incl. minochinos) :
+  //    MediaFlow sort une URL RELATIVE cassée ("/stream/…/master.m3u8" -> "relative URL
+  //    without a base") ; notre voie /dl (extractStreamWishFamily) donne une URL CDN
+  //    absolue fraîche. Extraction locale, puis livraison via le proxy du mode.
+  const LOCAL_ONLY: string[] = ['fsvid', 'vidzy', 'mailru', 'sibnet', 'lulustream', 'streamwish', 'filelions'];
 
   // Try MediaFlow first if configured
   if (config?.useMediaFlow && config.mediaFlowUrl && !LOCAL_ONLY.includes(extractor)) {
