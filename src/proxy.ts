@@ -352,9 +352,13 @@ router.get('/segment', requireQueryKey, async (req: Request, res: Response) => {
     });
     const ttfb = Date.now() - t0;
 
-    // Set content type (transform .jpg to .ts)
+    // Content-type : forcer video/mp2t UNIQUEMENT sur les segments réellement déguisés
+    // en TS (extension .jpg OU content-type image/* renvoyé par le CDN — NetMirror,
+    // ancien Videasy). NE JAMAIS mislabeliser un fMP4 (.m4s / video/mp4, Videasy actuel)
+    // en mp2t : le player casserait la vidéo (audio seul). On ne se fie donc PAS au flag
+    // `transform` en aveugle, mais à la nature réelle du segment.
     let contentType = response.headers['content-type'];
-    if (transform || url.endsWith('.jpg')) {
+    if (url.endsWith('.jpg') || /^image\//i.test(String(contentType || ''))) {
       contentType = 'video/mp2t';
     }
 
