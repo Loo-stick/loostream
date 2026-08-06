@@ -232,7 +232,8 @@ export async function getVoirAnimeStreams(
   season: number | undefined,
   episode: number | undefined,
   title: string,
-  originalTitle?: string
+  originalTitle?: string,
+  altTitles: string[] = []
 ): Promise<VoirAnimeStream[]> {
   if (!title) return [];
   if (mediaType === 'series' && !episode) return [];
@@ -240,8 +241,9 @@ export async function getVoirAnimeStreams(
   const key = mediaType === 'series'
     ? `voiranime:${mode}:series:${id}:${season || 1}:${episode}`
     : `voiranime:${mode}:movie:${id || normalizeTitle(title)}`;
-  // Titre original (romaji) en priorité, puis affiché.
-  const titles = [...new Set([originalTitle, title].filter(Boolean) as string[])];
+  // Titre ROMAJI (AniList) d'abord — voir-anime indexe en romaji —, puis original
+  // (kanji) et affiché. Le matcher strict tranche ensuite (token-set exact).
+  const titles = [...new Set([...altTitles, originalTitle, title].filter(Boolean) as string[])];
   return cached(
     key, STREAMS_TTL_MS,
     async () => { const s = await fetchVoirAnimeStreams(mediaType, titles, season, episode, extractorConfig); return applyMultiAudio(s); },
