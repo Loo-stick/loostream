@@ -1171,10 +1171,14 @@ async function handleStream(req: express.Request, res: express.Response, type: s
     // segments sont des .jpg = TS déguisé (servis image/jpeg, comme NetMirror) ->
     // forceLocal + useTransformer (transformer .jpg->video/mp2t, proxy local only).
     for (const vd of videasyResults) {
+      // Videasy sert maintenant du MP4 progressif (emberforge) ; historiquement du HLS
+      // à segments .jpg (moon.ironwallnet). MP4 -> directable (Range, 0 bande passante).
+      // HLS -> forceLocal + transform (.jpg -> video/mp2t).
+      const isHls = /\.m3u8/i.test(vd.url);
       const d = await deliver(vd.url, {
         ...(vd.headers || {}),
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-      }, { forceHls: true, forceLocal: true, useTransformer: true }, req, config);
+      }, isHls ? { forceHls: true, forceLocal: true, useTransformer: true } : { forceHls: false }, req, config);
 
       if (!d) continue; // Skip blocked URLs
 

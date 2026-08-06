@@ -133,7 +133,9 @@ async function fetchVideasyStreams(
       .map((s: any) => ({ lang: String(s.lang || s.language || 'und'), url: String(s.url) }));
     for (const s of sources) {
       const url = String(s?.url || '');
-      if (!url || !url.includes('.m3u8') || seenUrls.has(url)) continue;
+      // Videasy a migré HLS -> MP4 (emberforge.site/mp4/…/720p.mp4) : accepter les
+      // deux (.m3u8 historique + .mp4 actuel). Le format se déduit de l'URL à la livraison.
+      if (!url || !/\.(m3u8|mp4)(\?|$)/i.test(url) || seenUrls.has(url)) continue;
       seenUrls.add(url);
       streams.push({
         name: `Videasy ${name}`,
