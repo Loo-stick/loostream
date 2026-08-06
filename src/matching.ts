@@ -43,12 +43,19 @@ export function titlesMatch(wantedTitles: string[], candidateTitle: string): boo
 // TMDB nomme souvent « X: Jobless Reincarnation » là où un site FR/anime n'a que
 // « X » -> sans ça le matcher strict rejette. On ajoute juste des variantes exactes
 // candidates (la précision reste : on compare toujours en token-set exact).
+//
+// Séparateurs de sous-titre (chacun DOIT être borné par un espace du bon côté,
+// sinon on couperait un titre où la ponctuation fait partie du nom) :
+//   • « : » suivi d'un espace   -> « Mushoku Tensei: Jobless » = « Mushoku Tensei »
+//     (mais PAS « Re:Zero » : le « : » collé fait partie du nom).
+//   • un espace puis un tiret   -> « Re:ZERO -Starting Life… » = « Re:ZERO »
+//     (mais PAS « Spider-Man » : tiret collé).
 export function expandTitles(titles: string[]): string[] {
   const out = new Set<string>();
   for (const t of titles) {
     if (!t) continue;
     out.add(t);
-    const base = t.split(/\s*[:–—]\s*|\s+-\s+/)[0].trim();
+    const base = t.split(/\s*[:–—]\s+|\s+[-–—]\s*/)[0].trim();
     if (base && base.length >= 3) out.add(base);
   }
   return [...out];
