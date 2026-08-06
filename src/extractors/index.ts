@@ -710,8 +710,14 @@ async function extractAnsembed(embedUrl: string): Promise<ExtractedStream | null
 
 /**
  * Sibnet (video.sibnet.ru/shell.php?videoid=X) — host russe simple, non obfusqué.
- * La page expose directement le MP4 : `player.src([{src: "/v/{hash}/{id}.mp4" …`.
- * Le CDN exige un Referer (403 sinon) → on renvoie l'embed en Referer.
+ * La page expose le MP4 : `player.src([{src: "/v/{hash}/{id}.mp4" …`.
+ *
+ * ⚠️ Cette URL `/v/…` est un REDIRECTEUR : elle exige le Referer et renvoie un 302
+ * (x2, hôtes dynamiques dvNN/cvnNN) vers le CDN final avec un token auto-porteur
+ * (`noip=1`, expirable). Les players (Nuvio/Stremio) NE SUIVENT PAS ces 302 sur une
+ * vidéo → « ne se lance pas ». On résout donc la chaîne ICI et on renvoie l'URL
+ * FINALE, qui joue en 206 SANS Referer ni UA (token porteur) → directable pure,
+ * 0 bande passante. Repli : l'URL redirectrice + Referer si la résolution échoue.
  */
 async function extractSibnet(embedUrl: string): Promise<ExtractedStream | null> {
   try {
@@ -728,8 +734,25 @@ async function extractSibnet(embedUrl: string): Promise<ExtractedStream | null> 
       return null;
     }
     const rel = m[1];
-    const url = rel.startsWith('http') ? rel : `https://video.sibnet.ru${rel.startsWith('/') ? '' : '/'}${rel}`;
-    return { url, quality: 'HD', format: 'mp4', headers: { Referer: embedUrl } };
+    const redirector = rel.startsWith('http') ? rel : `https://video.sibnet.ru${rel.startsWith('/') ? '' : '/'}${rel}`;
+
+    // Résoudre la chaîne de 302 -> URL finale (token porteur, sans Referer).
+    // Range 0-1 + stream pour ne rien télécharger ; on ne veut que l'URL effective.
+    try {
+      const res = await axios.get(redirector, {
+        headers: { ...HEADERS, Referer: embedUrl, Range: 'bytes=0-1' },
+        timeout: 15000, maxRedirects: 5, responseType: 'stream', validateStatus: () => true,
+      });
+      const finalUrl: string | undefined = res.request?.res?.responseUrl || (res.request as any)?.responseURL;
+      res.data?.destroy?.();
+      if (finalUrl && /sibnet\.ru/i.test(finalUrl) && finalUrl !== redirector) {
+        // URL finale jouable telle quelle (aucun header requis).
+        return { url: finalUrl, quality: 'HD', format: 'mp4' };
+      }
+    } catch { /* résolution KO -> repli redirecteur ci-dessous */ }
+
+    // Repli : l'URL redirectrice avec Referer (fonctionne via proxy/proxyHeaders).
+    return { url: redirector, quality: 'HD', format: 'mp4', headers: { Referer: embedUrl } };
   } catch (e: any) {
     console.log(`[Extractor] Sibnet error: ${(e.message || '').slice(0, 80)}`);
     return null;
