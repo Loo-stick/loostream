@@ -108,7 +108,10 @@ interface Candidate { url: string; title: string; language: string; }
 
 /** Saison portée par une fiche ("…-saison-2"), 1 par défaut. */
 function seasonOf(url: string, title: string): number {
-  const m = `${url} ${title}`.match(/sais?on[\s-]*0*(\d+)/i) || `${url} ${title}`.match(/season[\s-]*0*(\d+)/i);
+  const hay = `${url} ${title}`;
+  const m = hay.match(/sais?on[\s-]*0*(\d+)/i)
+    || hay.match(/season[\s-]*0*(\d+)/i)
+    || hay.match(/\bclass[\s-]*0*(\d+)/i); // certains dramas encodent la saison en « Class N » (Weak Hero Class 1/2)
   return m ? Number(m[1]) : 1;
 }
 
@@ -304,13 +307,23 @@ async function fetchEmbeds(tmdbId: string, season: number, episode: number): Pro
   }
 }
 
+// Langues des dramas asiatiques servis par voirdrama.to. Sert UNIQUEMENT à décider
+// si on tente le repli scraping quand l'API Movix drama répond « pas trouvé » : son
+// matching par DATE rate une partie du catalogue (ex. TMDB « Weak Hero » existe sur
+// le site sous « Weak Hero Class 1 »). Pour du non-asiatique, le 404 reste définitif.
+const ASIAN_DRAMA_LANGS = new Set(['ko', 'zh', 'cn', 'ja', 'th', 'tl', 'id', 'vi']);
+function isAsianDramaLang(lang?: string): boolean {
+  return !!lang && ASIAN_DRAMA_LANGS.has(lang.toLowerCase());
+}
+
 export async function getVoirDramaStreams(
   tmdbId: string,
   mediaType: 'movie' | 'series',
   extractorConfig: ExtractorConfig,
   season?: number,
   episode?: number,
-  title?: string
+  title?: string,
+  originalLanguage?: string
 ): Promise<VoirDramaStream[]> {
   if (mediaType === 'series' && (!tmdbId || !season || !episode)) return [];
   if (mediaType === 'movie' && !title) return [];
@@ -321,7 +334,7 @@ export async function getVoirDramaStreams(
   return cached(
     key,
     STREAMS_TTL_MS,
-    async () => { const s = await fetchVoirDramaStreams(tmdbId, mediaType, extractorConfig, season, episode, title); return applyMultiAudio(s); },
+    async () => { const s = await fetchVoirDramaStreams(tmdbId, mediaType, extractorConfig, season, episode, title, originalLanguage); return applyMultiAudio(s); },
     { scope: 'voirdrama', shouldCache: r => r.length > 0, negativeTtlMs: EMPTY_TTL_MS }
   );
 }
@@ -382,7 +395,8 @@ async function fetchVoirDramaStreams(
   extractorConfig: ExtractorConfig,
   season?: number,
   episode?: number,
-  title?: string
+  title?: string,
+  originalLanguage?: string
 ): Promise<VoirDramaStream[]> {
   // Séries : l'API d'abord — keyée par tmdbId, une seule requête, aucun risque de
   // mauvaise correspondance de titre. On ne scrape qu'en cas de trou (l'API rate
@@ -396,10 +410,13 @@ async function fetchVoirDramaStreams(
         return streams;
       }
     }
-    // 404 "pas trouvé" = définitif -> on n'appelle pas le scraping (temps perdu).
-    // Le repli scraping ne sert qu'en cas de vraie panne API.
-    if (definitive) return [];
-    console.log(`[VoirDrama] API indispo pour TMDB ${tmdbId} S${season}E${episode}, repli sur le scraping`);
+    // 404 "pas trouvé" : définitif pour du NON-asiatique (pas un drama voirdrama) ->
+    // on ne scrape pas (temps perdu). Pour de l'asiatique (ko/zh/ja/th…), l'API rate
+    // souvent la DATE alors que le drama EXISTE sous un autre nom (« Weak Hero » ->
+    // « Weak Hero Class 1 ») -> on tente le scraping par titre. Additif : n'enlève
+    // aucun flux existant (ce cas renvoyait [] avant).
+    if (definitive && !isAsianDramaLang(originalLanguage)) return [];
+    console.log(`[VoirDrama] ${definitive ? 'API sans correspondance (contenu asiatique)' : 'API indispo'} pour TMDB ${tmdbId} S${season}E${episode}, repli scraping`);
   }
 
   if (!title) return [];
