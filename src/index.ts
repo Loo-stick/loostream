@@ -8,6 +8,7 @@ import { getVoirDramaStreams, reloadVoirDramaEndpoints, getVoirDramaEndpoints } 
 import { getMovieboxStreams, movieboxProbe, resolveMovieboxUrl, resolveMovieboxSubtitle } from './scrapers/moviebox';
 import { getVoirAnimeStreams, getVoirAnimeEndpoints, reloadVoirAnimeEndpoints } from './scrapers/voiranime';
 import { getAnimeSamaStreams, getAnimesamaEndpoints, reloadAnimesamaEndpoints } from './scrapers/animesama';
+import { getAnimeAltTitles } from './anime-titles';
 import { getNabistreamStreams, getNabistreamEndpoints, reloadNabistreamEndpoints } from './scrapers/nabistream';
 import { getCoflixStreams, getCoflixEndpoints, reloadCoflixEndpoints } from './scrapers/coflix';
 import { getStreamFlixStreams, reloadStreamflixEndpoints, getStreamflixEndpoints } from './scrapers/streamflix';
@@ -24,7 +25,7 @@ import { getModeRaw, autoWhitelistEnabled, updateSettings, settingsView } from '
 import { canDirect } from './deliver';
 import * as fsSync from 'fs';
 import * as zlib from 'zlib';
-import { getFrenchSubtitles } from './subtitles';
+import { getFrenchSubtitles, subtitleToVtt } from './subtitles';
 import { ExtractorConfig, reloadExtractorDomains, getExtractorDomains } from './extractors';
 import { getSceneMeta, buildFilename, providerLabel } from './filename';
 import { buildStreamName, buildStreamTitle } from './display';
@@ -315,7 +316,8 @@ interface SourceTask<T> {
 function collectSources(
   tasks: SourceTask<any>[],
   minStreams: number,
-  onDone: (reason: string, elapsedMs: number) => void
+  onDone: (reason: string, elapsedMs: number) => void,
+  waitFor: number[] = []
 ): Promise<any[][]> {
   const results: any[][] = tasks.map(() => []);
   // minStreams === 0 means the user opted out of the early exit.
@@ -331,6 +333,10 @@ function collectSources(
     let pending = tasks.length;
     let wanted = 0;
     let settled = false;
+    // Indices de tâches DÉJÀ réglées : l'early-exit est bloqué tant que toutes les
+    // tâches `waitFor` (sources anime, lentes mais essentielles) ne sont pas réglées.
+    const settledIdx = new Set<number>();
+    const mustWaitReady = () => waitFor.every(i => settledIdx.has(i));
 
     const finish = (reason: string) => {
       if (settled) return;
@@ -346,7 +352,7 @@ function collectSources(
     const check = () => {
       if (settled) return;
       if (pending === 0) return finish('toutes les sources');
-      if (wanted >= minStreams && Date.now() - started >= EARLY_EXIT_GRACE_MS) {
+      if (wanted >= minStreams && Date.now() - started >= EARLY_EXIT_GRACE_MS && mustWaitReady()) {
         finish(`early exit (${wanted} streams voulus)`);
       }
     };
@@ -358,7 +364,7 @@ function collectSources(
           wanted += task.countWanted(r);
         })
         .catch(() => { /* per-source catch already returns [] upstream */ })
-        .then(() => { pending--; check(); });
+        .then(() => { pending--; settledIdx.add(i); check(); });
     });
 
     const graceTimer = setTimeout(check, EARLY_EXIT_GRACE_MS);
@@ -553,7 +559,11 @@ const BROWSER_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36
 // renvoient 200 sur une page-gate (ex. citron-edge de StreamFlix -> redirige vers un
 // lien Telegram t.me) que la sonde prend pour "header-free". PROUVÉ citron-edge :
 // sans Referer -> gate t.me ; avec Referer streamflix.mom -> 206 video/mp4.
-const UA_GATED_HOSTS = ['fsvid', 'citron-edge'];
+// mailru (my.mail.ru, VoirAnime) : la sonde 2-octets voit un 206 sans Referer, mais le
+// CDN BRIDE le download soutenu sans lui (mesuré : 7,3 Mbps sans Referer vs 10,7 avec).
+// Livré en URL brute -> le client rame sur un 1080p ~5,8 Mbps. Reste DIRECT (0 bande
+// passante serveur), juste servi AVEC le Referer d'extraction en proxyHeaders.
+const UA_GATED_HOSTS = ['fsvid', 'citron-edge', 'my.mail.ru'];
 function isUaGatedHost(host: string): boolean {
   return UA_GATED_HOSTS.some(p => host.includes(p));
 }
@@ -580,16 +590,34 @@ async function hostNeedsHeaders(streamUrl: string): Promise<boolean> {
   );
 }
 
+// Hôtes « directables » à relayer quand un PROXY est actif (local/mediaflow) car
+// injouables depuis une IP cliente — en direct pur, best-effort (direct+Referer).
+// Vérifié sur ligne stable (2026-08-06) : SEUL mail.ru rame vraiment en direct (CDN
+// russe, gros fichiers ~5,8 Mbps, peering lointain). fsvid/vidzy (troll UA, réglé) et
+// sibnet (chaîne 302 résolue) jouent NICKEL en direct -> volontairement absents ici.
+const PREFER_PROXY_HOSTS: string[] = ['mail.ru'];
+function isPreferProxyHost(streamUrl: string): boolean {
+  let host: string;
+  try { host = new URL(streamUrl).hostname; } catch { return false; }
+  return PREFER_PROXY_HOSTS.some(d => host === d || host.endsWith('.' + d));
+}
+
 async function deliver(
   streamUrl: string,
   headers: Record<string, string>,
-  opts: { forceLocal?: boolean; forceHls?: boolean; useTransformer?: boolean },
+  opts: { forceLocal?: boolean; forceHls?: boolean; useTransformer?: boolean; forceProxy?: boolean },
   req: express.Request,
   config: UserConfig | null,
 ): Promise<{ url: string; proxyHeaders?: Record<string, string> } | null> {
-  // Direct TOUJOURS prioritaire, quel que soit le mode : tout hôte directable
-  // est livré en direct (0 bande passante serveur).
-  if (canDirect(streamUrl, !!opts.forceLocal)) {
+  // Hôte russe + l'utilisateur a un proxy (local/mediaflow) : relayer plutôt que servir
+  // en direct (qui rame côté client). En direct pur, on retombe sur le direct+Referer.
+  const preferProxy = isPreferProxyHost(streamUrl) && !!config && config.proxy !== 'direct';
+
+  // forceProxy : le flux DOIT passer par le proxy DU MODE (Videasy header-gaté) — jamais
+  // en direct. En MFP -> MediaFlow, en local -> proxy local, en direct pur -> écarté
+  // (return null plus bas). Contrairement à forceLocal, il NE force PAS le proxy local :
+  // il respecte le mode -> pas de fuite « proxy local » quand seul MFP/direct est autorisé.
+  if (!opts.forceProxy && !preferProxy && canDirect(streamUrl, !!opts.forceLocal)) {
     // Hôte header-free -> URL brute (lecteur natif Stremio, rapide). Sinon
     // proxyHeaders (nécessaire, mais passe par le serveur interne Stremio, lent).
     const needsHdr = await hostNeedsHeaders(streamUrl);
@@ -820,8 +848,22 @@ async function handleStream(req: express.Request, res: express.Response, type: s
     const langOrder = config?.langOrder || DEFAULT_LANG_ORDER;
     const minStreams = config?.minStreams ?? DEFAULT_MIN_STREAMS;
 
+    // Titre ROMAJI (AniList, keyless) pour l'anime : les sites FR indexent souvent en
+    // romaji. Lancé EN PARALLÈLE du fan-out (seuls VoirAnime/AnimeSama l'attendent),
+    // gaté ja -> zéro coût pour le reste. [] si non-anime ou lookup KO.
+    const animeAltsPromise: Promise<string[]> = info.originalLanguage === 'ja'
+      ? getAnimeAltTitles(info.title, info.originalTitle).catch(() => [])
+      : Promise.resolve([]);
+
+    // Le proxy LOCAL est-il autorisé pour ce config ? local ∈ MODE OU ownerKey valide.
+    // NetMirror (livrable QUE en local) n'est même pas SCRAPÉ si non — inutile (jusqu'à
+    // 9 aller-retours). RÈGLE : jamais de proxy local si seuls MFP/direct sont permis (hors owner).
+    const localProxyAllowed = allowedModes().includes('local') || ownerKeyMatches(config?.ownerKey);
+
     const sourcePromises = [
-      getNetmirrorStreams(info.title, info.year, type as 'movie' | 'series', parsed.season, parsed.episode, info.originalLanguage)
+      (localProxyAllowed
+        ? getNetmirrorStreams(info.title, info.year, type as 'movie' | 'series', parsed.season, parsed.episode, info.originalLanguage)
+        : Promise.resolve([]))
         .then(r => { trackSourceResult('netmirror', true, r.length); recordOutcome('netmirror', r.length > 0 ? 'success' : 'empty'); return r; })
         .catch(e => { console.log('[NetMirror] Error:', e); trackSourceResult('netmirror', false); recordOutcome('netmirror', 'error', e?.message); return []; }),
       getStreamFlixStreams(info.tmdbId, type as 'movie' | 'series', parsed.season, parsed.episode, config?.tmdbKey || DEFAULT_TMDB_KEY)
@@ -836,7 +878,7 @@ async function handleStream(req: express.Request, res: express.Response, type: s
       getWiflixStreams(info.tmdbId, type as 'movie' | 'series', extractorConfig, parsed.season, parsed.episode)
         .then(r => { trackSourceResult('wiflix', true, r.length); recordOutcome('wiflix', r.length > 0 ? 'success' : 'empty'); return r; })
         .catch(e => { console.log('[Wiflix] Error:', e); trackSourceResult('wiflix', false); recordOutcome('wiflix', 'error', e?.message); return []; }),
-      getVoirDramaStreams(info.tmdbId, type as 'movie' | 'series', extractorConfig, parsed.season, parsed.episode, info.title)
+      getVoirDramaStreams(info.tmdbId, type as 'movie' | 'series', extractorConfig, parsed.season, parsed.episode, info.title, info.originalLanguage)
         .then(r => { trackSourceResult('voirdrama', true, r.length); recordOutcome('voirdrama', r.length > 0 ? 'success' : 'empty'); return r; })
         .catch(e => { console.log('[VoirDrama] Error:', e); trackSourceResult('voirdrama', false); recordOutcome('voirdrama', 'error', e?.message); return []; }),
       getMovieboxStreams(info.tmdbId, type as 'movie' | 'series', info.title, info.year, parsed.season, parsed.episode)
@@ -845,7 +887,7 @@ async function handleStream(req: express.Request, res: express.Response, type: s
       // VoirAnime : uniquement pour l'anime (originalLanguage japonais) — évite de
       // scraper voir-anime.to pour chaque film/série occidental.
       (info.originalLanguage === 'ja'
-        ? getVoirAnimeStreams(parsed.baseId, type as 'movie' | 'series', extractorConfig, parsed.season, parsed.episode, info.title, info.originalTitle)
+        ? animeAltsPromise.then(alts => getVoirAnimeStreams(parsed.baseId, type as 'movie' | 'series', extractorConfig, parsed.season, parsed.episode, info.title, info.originalTitle, alts))
         : Promise.resolve([]))
         .then(r => { if (info.originalLanguage === 'ja') { trackSourceResult('voiranime', true, r.length); recordOutcome('voiranime', r.length > 0 ? 'success' : 'empty'); } return r; })
         .catch(e => { console.log('[VoirAnime] Error:', e); trackSourceResult('voiranime', false); recordOutcome('voiranime', 'error', e?.message); return []; }),
@@ -866,7 +908,7 @@ async function handleStream(req: express.Request, res: express.Response, type: s
       // AnimeSama : anime VOSTFR/VF, scraping titre-keyé. Gaté sur l'anime
       // (originalLanguage japonais) — évite de chercher chaque titre occidental.
       (info.originalLanguage === 'ja'
-        ? getAnimeSamaStreams(type as 'movie' | 'series', [info.title, info.originalTitle, info.frenchTitle].filter(Boolean) as string[], parsed.season, parsed.episode, extractorConfig)
+        ? animeAltsPromise.then(alts => getAnimeSamaStreams(type as 'movie' | 'series', [info.title, info.originalTitle, info.frenchTitle, ...alts].filter(Boolean) as string[], parsed.season, parsed.episode, extractorConfig))
         : Promise.resolve([]))
         .then(r => { if (info.originalLanguage === 'ja') { trackSourceResult('animesama', true, r.length); recordOutcome('animesama', r.length > 0 ? 'success' : 'empty'); } return r; })
         .catch(e => { console.log('[AnimeSama] Error:', e); trackSourceResult('animesama', false); recordOutcome('animesama', 'error', e?.message); return []; }),
@@ -880,7 +922,14 @@ async function handleStream(req: express.Request, res: express.Response, type: s
         countWanted: wantedCounter(SOURCE_NAMES[i], langOrder),
       })),
       minStreams,
-      (reason, ms) => console.log(`[Stream] Fan-out terminé: ${reason}${ms ? ` en ${(ms / 1000).toFixed(2)}s` : ''}`)
+      (reason, ms) => console.log(`[Stream] Fan-out terminé: ${reason}${ms ? ` en ${(ms / 1000).toFixed(2)}s` : ''}`),
+      // Anime : les sources anime (VoirAnime/AnimeSama) sont LENTES (scraping) mais
+      // c'est TOUT l'intérêt pour un anime -> l'early-exit doit les attendre, sinon
+      // Videasy (3 flux instantanés) atteint le quota et les coupe. Plafonné par le
+      // deadline (20s). Aucun effet hors anime.
+      info.originalLanguage === 'ja'
+        ? [SOURCE_NAMES.indexOf('voiranime'), SOURCE_NAMES.indexOf('animesama')]
+        : []
     );
 
     // collectSources is order-preserving but untyped (heterogeneous tuple), so
@@ -956,8 +1005,10 @@ async function handleStream(req: express.Request, res: express.Response, type: s
     // the LOCAL proxy: the segment token is IP-bound to the fetcher and the .jpg
     // segments need the local transformer -> video/mp2t. One adaptive stream per
     // platform; the player picks the audio track (VO + VF when available).
-    // Mode 'direct' (« sans proxy ») : NetMirror exige le proxy -> non proposé.
-    for (const r of (config?.proxy === 'direct' ? [] : netmirrorResults)) {
+    // NetMirror ne peut être livré QUE par le proxy LOCAL (manifeste reconstruit +
+    // segments .jpg->TS ; MediaFlow incapable). Déjà écarté en amont si le proxy local
+    // n'est pas autorisé (localProxyAllowed) -> netmirrorResults est vide dans ce cas.
+    for (const r of netmirrorResults) {
       // Master RECONSTRUIT servi par l'addon (le master d'origine = placeholder).
       const mu = new URL('/netmirror/master.m3u8', nmSegBase(req));
       mu.searchParams.set('h', r.cdnHost);
@@ -1140,9 +1191,11 @@ async function handleStream(req: express.Request, res: express.Response, type: s
     }
 
     // Process AnimeSama results (anime VOSTFR/VF, HLS ansembed ou MP4 sibnet).
-    // Le HLS ansembed (vmpx) a un token lié à l'IP/ASN de l'extracteur (param asn=)
-    // -> INJOUABLE en direct depuis le client (autre IP). forceLocal : le serveur
-    // relaie avec la bonne IP (comme Videasy). Le MP4 sibnet, lui, reste directable.
+    // Le HLS ansembed (vmpx) a un token IP/ASN-bound -> non-directable (PROXY_FORCED).
+    // Le MP4 sibnet : sa chaîne 302 est résolue côté extracteur -> URL finale directable
+    // (sans header). Repassé en DIRECT le temps de re-tester sur ligne stable (un souci
+    // de ligne cliente peut avoir mimé le « buffer après 2s »). Réintégrable au proxy
+    // via PREFER_PROXY_HOSTS si le peering russe rame vraiment.
     for (const as of animesamaResults) {
       const isHls = /\.m3u8/i.test(as.url);
       const d = await deliver(as.url, {
@@ -1167,18 +1220,17 @@ async function handleStream(req: express.Request, res: express.Response, type: s
       });
     }
 
-    // Process Videasy results (agrégateur VO anglais + sous-titres). HLS dont les
-    // segments sont des .jpg = TS déguisé (servis image/jpeg, comme NetMirror) ->
-    // forceLocal + useTransformer (transformer .jpg->video/mp2t, proxy local only).
+    // Process Videasy results (agrégateur VO anglais + sous-titres). HLS header-gaté
+    // (segments .m4s sur emberforge, 403 sans Referer) -> doit passer par un PROXY, mais
+    // celui DU MODE (forceProxy), pas forcément le local : en MFP -> MediaFlow, en local
+    // -> proxy local, en direct pur -> écarté. Ça évite la fuite « proxy local » quand
+    // seul MFP/direct est autorisé. (Le MP4 progressif éventuel reste directable.)
     for (const vd of videasyResults) {
-      // Videasy sert maintenant du MP4 progressif (emberforge) ; historiquement du HLS
-      // à segments .jpg (moon.ironwallnet). MP4 -> directable (Range, 0 bande passante).
-      // HLS -> forceLocal + transform (.jpg -> video/mp2t).
       const isHls = /\.m3u8/i.test(vd.url);
       const d = await deliver(vd.url, {
         ...(vd.headers || {}),
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-      }, isHls ? { forceHls: true, forceLocal: true, useTransformer: true } : { forceHls: false }, req, config);
+      }, isHls ? { forceHls: true, forceProxy: true } : { forceHls: false }, req, config);
 
       if (!d) continue; // Skip blocked URLs
 
@@ -1297,6 +1349,11 @@ async function handleStream(req: express.Request, res: express.Response, type: s
     ]);
     const frSubCount = frSubs.length;
     const streams: StreamWithMeta[] = drafts.map(d => {
+      // Videasy = agrégateur anglophone : son audio « VO » est TOUJOURS anglais (le
+      // flux ne porte aucune langue). Pour le drapeau, sa vraie langue d'origine est
+      // donc l'anglais, pas celle de TMDB — sinon on colle « 🇯🇵 VO » sur un doublage
+      // anglais (ex. anime). On force 'en' pour ces flux uniquement.
+      const streamOrigLang = d._meta.source === 'videasy' ? 'en' : info.originalLanguage;
       const filename = buildFilename({
         title: sceneMeta.title,
         year: sceneMeta.year,
@@ -1304,7 +1361,7 @@ async function handleStream(req: express.Request, res: express.Response, type: s
         season: parsed.season,
         episode: parsed.episode,
         lang: d._meta.language,
-        originalLanguage: info.originalLanguage,
+        originalLanguage: streamOrigLang,
         resolution: d._meta.quality,
         codec: d._meta.codec,
         provider: providerLabel(d._meta.source),
@@ -1315,7 +1372,7 @@ async function handleStream(req: express.Request, res: express.Response, type: s
         ...d,
         behaviorHints: { ...d.behaviorHints, filename },
         name: buildStreamName(meta),
-        title: buildStreamTitle(meta, info.originalLanguage, filename),
+        title: buildStreamTitle(meta, streamOrigLang, filename),
       };
     });
 
@@ -2100,10 +2157,12 @@ app.get('/extsub/subtitle', async (req, res) => {
     });
     let buf = Buffer.from(resp.data);
     if (buf[0] === 0x1f && buf[1] === 0x8b) { try { buf = zlib.gunzipSync(buf); } catch { /* pas gzip */ } }
-    const srt = buf.toString('utf-8').replace(/\r+/g, '');
-    const vtt = 'WEBVTT\n\n' + srt
-      .replace(/(\d{2}:\d{2}:\d{2}),(\d{3})/g, '$1.$2')  // décimales SRT (virgule) -> VTT (point)
-      .replace(/[ \t]*-->[ \t]*/g, ' --> ');
+    // Décodage : UTF-8 par défaut ; si caractères de remplacement (fréquent sur les
+    // .srt/.ass FR encodés en Windows-1252), on retente en 1252.
+    let text = buf.toString('utf-8');
+    if (text.includes('�')) { try { text = new TextDecoder('windows-1252').decode(buf); } catch { /* garde utf-8 */ } }
+    // SRT -> VTT (existant) OU ASS/SSA -> VTT (anime). Détection au contenu.
+    const vtt = subtitleToVtt(text);
     res.setHeader('Content-Type', 'text/vtt; charset=utf-8');
     res.setHeader('Cache-Control', 'public, max-age=86400');
     res.send(vtt);
