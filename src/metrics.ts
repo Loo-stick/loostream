@@ -1,5 +1,7 @@
 const WINDOW_SIZE = 20;
 const CONSECUTIVE_ERRORS_DOWN = 5;
+const WARN_MIN_ERRORS = 3;      // il faut au moins ce nb d'erreurs pour un WARNING
+const WARN_ERROR_RATE = 0.25;   // ET ce taux d'erreurs sur la fenêtre
 
 export type Scraper = 'netmirror' | 'streamflix' | 'movix' | 'frenchstream' | 'wiflix' | 'voirdrama' | 'moviebox' | 'voiranime' | 'nabistream' | 'coflix' | 'videasy' | 'animesama';
 export type Outcome = 'success' | 'empty' | 'error';
@@ -46,6 +48,7 @@ export interface ScraperMetrics {
   consecutiveErrors: number;
   status: ScraperStatus;
   statusReason: string | null;
+  recent: Outcome[];   // outcomes de la fenêtre (ancien -> récent), pour la frise admin ●○✕
 }
 
 export function getMetrics(scraper: Scraper): ScraperMetrics {
@@ -82,20 +85,17 @@ export function getMetrics(scraper: Scraper): ScraperMetrics {
   let status: ScraperStatus = 'ok';
   let statusReason: string | null = null;
 
-  // "Empty" is a normal outcome — most content simply isn't on every scraper
-  // (especially series, which several scrapers don't cover). So a high empty
-  // rate is NOT a fault and no longer warns; it just created false alarms on a
-  // low-traffic instance whenever the 20-request window filled with series tests.
-  // We alert only on real failure signals: sustained errors, or a scraper that
-  // has produced zero successes across a full window spanning 2h+ (likely dead).
+  // Le VIDE est un résultat NORMAL — le contenu n'est simplement pas sur toutes les
+  // sources (surtout en séries). Le statut ne dépend donc QUE des ERREURS, jamais
+  // d'une fenêtre tout-vide ni de l'absence de succès (qui déclenchaient de fausses
+  // alertes WARNING en boucle sur une instance à faible trafic). On n'alerte que sur
+  // un vrai signal d'échec : erreurs soutenues (down) ou taux d'erreurs élevé (warning).
   if (consecutiveErrors >= CONSECUTIVE_ERRORS_DOWN) {
     status = 'down';
-    statusReason = `${consecutiveErrors} consecutive errors (last: ${lastError})`;
-  } else if (window >= WINDOW_SIZE && !lastSuccessAt) {
-    // Stable: no time term. A sliding window kept crossing the age threshold back
-    // and forth, flapping OK<->WARNING on every check and spamming Telegram.
+    statusReason = `${consecutiveErrors} erreurs consécutives (dernière : ${lastError})`;
+  } else if (errors >= WARN_MIN_ERRORS && errorRate >= WARN_ERROR_RATE) {
     status = 'warning';
-    statusReason = `No successful stream in last ${window} requests`;
+    statusReason = `${errors} erreurs sur ${window} req (${Math.round(errorRate * 100)}%)`;
   }
 
   return {
@@ -111,6 +111,7 @@ export function getMetrics(scraper: Scraper): ScraperMetrics {
     consecutiveErrors,
     status,
     statusReason,
+    recent: buf.map(e => e.outcome),
   };
 }
 

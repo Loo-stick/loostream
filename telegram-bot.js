@@ -340,7 +340,9 @@ async function sendHealthMessage() {
 const CONFIRM_THRESHOLD = 2;
 // source -> { confirmed, pending, count } — null until first check seeds it.
 const sourceState = {};
-const lastScraperMetricsStatus = { movix: 'ok', netmirror: 'ok', streamflix: 'ok', faklum: 'ok' };
+// Tout scraper inconnu est considéré 'ok' au 1er poll (via `|| 'ok'` plus bas) -> plus
+// de faux « récupère → OK » au démarrage pour les scrapers absents d'un seed figé.
+const lastScraperMetricsStatus = {};
 
 const SCRAPER_EMOJI = { ok: '🟢', warning: '🟡', down: '🔴' };
 function formatAge(ms) {
@@ -358,7 +360,7 @@ async function periodicScraperMetricsCheck() {
     if (!stats?.metrics) return;
 
     for (const [scraper, m] of Object.entries(stats.metrics)) {
-      const prev = lastScraperMetricsStatus[scraper];
+      const prev = lastScraperMetricsStatus[scraper] || 'ok';
       const curr = m.status;
       if (prev === curr) continue;
 

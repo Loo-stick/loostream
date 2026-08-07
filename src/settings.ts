@@ -11,6 +11,7 @@ interface RuntimeSettings {
   ownerKey?: string;
   autoWhitelist?: boolean;
   netfreeSocksPool?: boolean;
+  disabledSources?: string[];
 }
 
 const filePath = process.env.RUNTIME_SETTINGS_CONFIG ||
@@ -30,6 +31,9 @@ function load(): RuntimeSettings {
         ownerKey: typeof raw.ownerKey === 'string' && raw.ownerKey ? raw.ownerKey : undefined,
         autoWhitelist: typeof raw.autoWhitelist === 'boolean' ? raw.autoWhitelist : undefined,
         netfreeSocksPool: typeof raw.netfreeSocksPool === 'boolean' ? raw.netfreeSocksPool : undefined,
+        disabledSources: Array.isArray(raw.disabledSources)
+          ? raw.disabledSources.filter((x: unknown) => typeof x === 'string')
+          : undefined,
       };
     } else {
       cache = {};
@@ -64,8 +68,17 @@ export function netfreeSocksPoolEnabled(): boolean {
   return s.netfreeSocksPool !== undefined ? s.netfreeSocksPool : (process.env.NETFREE_SOCKS_POOL === 'true');
 }
 
+// Sources désactivées manuellement (admin) — skippées dans le fan-out. Persistant, à chaud.
+export function getDisabledSources(): string[] {
+  return load().disabledSources || [];
+}
+export function isSourceEnabled(name: string): boolean {
+  return !getDisabledSources().includes(name);
+}
+
 export function updateSettings(patch: {
-  mode?: string | null; ownerKey?: string | null; autoWhitelist?: boolean | null; netfreeSocksPool?: boolean | null;
+  mode?: string | null; ownerKey?: string | null; autoWhitelist?: boolean | null;
+  netfreeSocksPool?: boolean | null; disabledSources?: string[] | null;
 }): void {
   const current: RuntimeSettings = { ...load() };
   const apply = <K extends keyof RuntimeSettings>(k: K, v: RuntimeSettings[K] | null | undefined) => {
@@ -77,6 +90,7 @@ export function updateSettings(patch: {
   apply('ownerKey', patch.ownerKey === null ? null : (patch.ownerKey || undefined));
   apply('autoWhitelist', patch.autoWhitelist);
   apply('netfreeSocksPool', patch.netfreeSocksPool);
+  apply('disabledSources', patch.disabledSources === null ? null : (patch.disabledSources && patch.disabledSources.length ? patch.disabledSources : null));
   fs.writeFileSync(filePath, JSON.stringify(current, null, 2));
   cache = null; // invalide
 }

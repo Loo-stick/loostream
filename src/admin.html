@@ -149,6 +149,7 @@
         <div class="logo">⚙️ LooStream<small>Espace admin</small></div>
         <nav class="nav">
             <a data-view="dashboard" class="active">📊 Dashboard</a>
+            <a data-view="sources">🎛️ Sources</a>
             <a data-view="stats">📈 Stats</a>
             <a data-view="logs">📜 Logs</a>
             <a data-view="settings">🛠️ Paramétrage</a>
@@ -178,6 +179,13 @@
                 <h2>Health-check live</h2>
                 <div id="health"><div class="loader">Clique « Health-check live » pour lancer une sonde.</div></div>
             </div>
+        </section>
+
+        <!-- ============ SOURCES ============ -->
+        <section class="view" data-view="sources">
+            <div class="view-head"><h1>Sources</h1><button class="btn" onclick="loadSources()">Rafraîchir</button></div>
+            <div id="sources-summary" style="margin-bottom:14px;display:flex;gap:8px;flex-wrap:wrap;"></div>
+            <div id="sources-list"><div class="loader">Chargement…</div></div>
         </section>
 
         <!-- ============ STATS ============ -->
@@ -264,6 +272,7 @@ function showView(name) {
     if (location.hash !== '#' + name) history.replaceState(null, '', '#' + name);
     if (name === 'logs') { resetLogs(); startLogPoll(); } else { stopLogPoll(); }
     if (name === 'settings') loadSettingsTab();
+    if (name === 'sources') loadSources();
 }
 document.querySelectorAll('.nav a').forEach(a => a.addEventListener('click', () => showView(a.dataset.view)));
 
@@ -374,6 +383,55 @@ async function checkHealth() {
 }
 
 function refreshAll() { loadStats(); }
+
+// --- Vue Sources : santé (frise 20 dernières) + on/off ---
+const _dot = o => o === 'success' ? '<span style="color:#4ade80">●</span>'
+    : o === 'error' ? '<span style="color:#f87171">✕</span>'
+    : '<span style="color:#64748b">○</span>';
+async function loadSources() {
+    const box = document.getElementById('sources-list');
+    const sum = document.getElementById('sources-summary');
+    try {
+        const d = await (await api('/api/sources')).json();
+        const rank = { down: 0, warning: 1, ok: 2 };
+        const sorted = d.sources.slice().sort((a, b) =>
+            ((a.enabled ? rank[a.status] : 3) - (b.enabled ? rank[b.status] : 3)) || a.name.localeCompare(b.name));
+        const s = d.summary;
+        sum.innerHTML =
+            `<span class="badge on">${s.ok} OK</span>` +
+            (s.warning ? `<span class="badge" style="background:#f59e0b22;color:#f59e0b">${s.warning} warning</span>` : '') +
+            (s.down ? `<span class="badge off">${s.down} down</span>` : '') +
+            (s.off ? `<span class="badge src">${s.off} coupée${s.off > 1 ? 's' : ''}</span>` : '');
+        box.innerHTML = sorted.map(x => {
+            const badge = !x.enabled ? '<span class="badge off">⚪ OFF</span>'
+                : x.status === 'down' ? '<span class="badge off">🔴 DOWN</span>'
+                : x.status === 'warning' ? '<span class="badge" style="background:#f59e0b22;color:#f59e0b">🟡 WARN</span>'
+                : '<span class="badge on">🟢 OK</span>';
+            const frise = !x.enabled ? '<span style="color:var(--dim)">—</span>'
+                : (x.recent && x.recent.length ? `<span style="letter-spacing:2px">${x.recent.map(_dot).join('')}</span>` : '<span style="color:var(--dim)">aucune requête</span>');
+            const bilan = !x.enabled ? '(désactivée)'
+                : `${x.success}✓ · ${x.empty}∅${x.errors ? ' · ' + x.errors + '✕' : ''}`;
+            const last = !x.enabled ? ''
+                : (x.status !== 'ok' && x.lastError) ? `<span style="color:#f87171" title="${esc(x.lastError)}">✕ ${esc(String(x.lastError).slice(0, 42))}</span>`
+                : (x.lastSuccessAt ? `✓ il y a ${fmtAge(x.lastSuccessAt)}` : '');
+            const cut = (x.enabled && x.status === 'down') ? `<button class="btn danger small" onclick="toggleSource('${x.name}',false)">⏻ Couper</button>` : '';
+            const toggle = `<button class="btn small ${x.enabled ? '' : 'secondary'}" onclick="toggleSource('${x.name}',${!x.enabled})">${x.enabled ? '▮ ON' : 'OFF'}</button>`;
+            return `<div style="display:grid;grid-template-columns:120px 84px minmax(120px,1fr) 130px minmax(120px,1fr) auto;gap:10px;align-items:center;padding:9px 10px;border-bottom:1px solid rgba(255,255,255,0.06);">
+                <b>${esc(x.name)}</b>${badge}<div style="overflow:hidden">${frise}</div>
+                <span style="font-size:0.85em;color:var(--muted)">${bilan}</span>
+                <span style="font-size:0.82em;color:var(--muted)">${last}</span>
+                <div style="display:flex;gap:6px;justify-content:flex-end">${cut}${toggle}</div></div>`;
+        }).join('') +
+        `<div style="font-size:0.78em;color:var(--dim);margin-top:12px;">Légende : <span style="color:#4ade80">●</span> succès · <span style="color:#64748b">○</span> vide (<b>normal</b> : le contenu n'est pas sur toutes les sources) · <span style="color:#f87171">✕</span> erreur. Couper une source = elle est skippée dans le fan-out, à chaud.</div>`;
+    } catch (e) { if (e.message !== 'session') box.innerHTML = `<div class="error">Erreur: ${esc(e.message)}</div>`; }
+}
+async function toggleSource(name, enabled) {
+    try {
+        const r = await api('/api/sources/' + encodeURIComponent(name), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ enabled }) });
+        const j = await r.json(); if (!r.ok || j.ok === false) throw new Error(j.error || 'HTTP ' + r.status);
+        loadSources();
+    } catch (e) { if (e.message !== 'session') alert('Erreur: ' + e.message); }
+}
 
 // ============ Logs ============
 let logSince = 0, logTimer = null;
@@ -606,7 +664,7 @@ function removeOwnerKey() { if (confirm('Retirer la clé propriétaire (retour a
 loadStats();
 setInterval(() => { if (document.querySelector('.view[data-view="dashboard"]').classList.contains('active') || document.querySelector('.view[data-view="stats"]').classList.contains('active')) loadStats(); }, 30000);
 const initial = (location.hash || '#dashboard').slice(1);
-showView(['dashboard','stats','logs','settings'].includes(initial) ? initial : 'dashboard');
+showView(['dashboard','sources','stats','logs','settings'].includes(initial) ? initial : 'dashboard');
 </script>
 </body>
 </html>
