@@ -13,7 +13,7 @@ import { getNabistreamStreams, getNabistreamEndpoints, reloadNabistreamEndpoints
 import { getCoflixStreams, getCoflixEndpoints, reloadCoflixEndpoints } from './scrapers/coflix';
 import { getStreamFlixStreams, reloadStreamflixEndpoints, getStreamflixEndpoints } from './scrapers/streamflix';
 import { getVideasyStreams, reloadVideasyEndpoints, getVideasyEndpoints } from './scrapers/videasy';
-import { getMovixStreams, reloadMovixEndpoints, getMovixEndpoints } from './scrapers/movix';
+import { getMovixStreams, getMovixAnimeStreams, reloadMovixEndpoints, getMovixEndpoints } from './scrapers/movix';
 import { getFrenchStreamStreams, reloadFrenchStreamEndpoints, getFrenchStreamEndpoints } from './scrapers/frenchstream';
 import { cached, getCacheStats } from './cache';
 import { recordOutcome, getAllMetrics } from './metrics';
@@ -21,7 +21,7 @@ import crypto from 'crypto';
 import proxyRouter, { isAllowedUrl, addAllowedDomain, getAllowedDomains } from './proxy';
 import { accessEnabled, keyMatches, signUrl, requireQueryKey, ownerKeyMatches, ownerKeyEnabled } from './access';
 import { installLogCapture, getLogs } from './logbuffer';
-import { getModeRaw, autoWhitelistEnabled, updateSettings, settingsView, netfreeSocksPoolEnabled } from './settings';
+import { getModeRaw, autoWhitelistEnabled, updateSettings, settingsView, netfreeSocksPoolEnabled, isSourceEnabled, getDisabledSources } from './settings';
 import { setPoolEnabled, poolStatus } from './netfree-pool';
 import { canDirect } from './deliver';
 import * as fsSync from 'fs';
@@ -596,7 +596,9 @@ async function hostNeedsHeaders(streamUrl: string): Promise<boolean> {
 // Vérifié sur ligne stable (2026-08-06) : SEUL mail.ru rame vraiment en direct (CDN
 // russe, gros fichiers ~5,8 Mbps, peering lointain). fsvid/vidzy (troll UA, réglé) et
 // sibnet (chaîne 302 résolue) jouent NICKEL en direct -> volontairement absents ici.
-const PREFER_PROXY_HOSTS: string[] = ['mail.ru'];
+// mail.ru retiré (test 2026-08-07) : Stick veut le tester en DIRECT (économise la bande
+// MFP). Le CDN russe peut ramer sur du gros fichier -> réintégrer ici si ça pose souci.
+const PREFER_PROXY_HOSTS: string[] = [];
 function isPreferProxyHost(streamUrl: string): boolean {
   let host: string;
   try { host = new URL(streamUrl).hostname; } catch { return false; }
@@ -727,6 +729,63 @@ const DEFAULT_TMDB_KEY = process.env.TMDB_API_KEY || '';
 
 const TMDB_TTL_MS = 12 * 60 * 60 * 1000;
 
+type MediaInfo = { title: string; originalTitle: string; frenchTitle: string; year: string; tmdbId: string; imdbId: string; originalLanguage: string };
+
+// Repli Cinemeta (métadonnées IMDB de Stremio) quand TMDB ne connaît pas l'IMDB — FRÉQUENT
+// pour l'anime à entrée IMDB séparée (ex. « Bleach: Thousand-Year Blood War » tt14986406,
+// que TMDB range sous la série d'origine). On récupère titre + année et on détecte l'anime
+// (genre Animation + pays Japon) pour que les scrapers titre-keyés (VoirAnime/AnimeSama)
+// tournent. tmdbId reste vide -> les sources tmdb-keyées renvoient simplement vide.
+async function cinemetaInfo(type: string, id: string): Promise<MediaInfo | null> {
+  try {
+    const kind = type === 'movie' ? 'movie' : 'series';
+    const { data } = await axios.get(`https://v3-cinemeta.strem.io/meta/${kind}/${id}.json`, { timeout: 8000 });
+    const m = data?.meta;
+    if (!m?.name) return null;
+    const year = (String(m.year || m.releaseInfo || '').match(/\d{4}/) || [''])[0];
+    const genres = Array.isArray(m.genres) ? m.genres.map((g: any) => String(g).toLowerCase()) : [];
+    const isAnime = genres.includes('animation') && /japan|jp/i.test(String(m.country || ''));
+    console.log(`[Stream] TMDB manquant -> repli Cinemeta: "${m.name}" (${year})${isAnime ? ' [anime]' : ''}`);
+    return {
+      title: m.name, originalTitle: m.name, frenchTitle: '', year,
+      tmdbId: '', imdbId: id, originalLanguage: isAnime ? 'ja' : '',
+    };
+  } catch { return null; }
+}
+
+// Season-mapping ANIME pour les sources tmdb-keyées (Movix…). Nuvio traite un cour d'anime
+// comme SA propre série (ex. « Bleach: TYBW » S1E1), alors que TMDB le range sous la série
+// parente avec des saisons décalées (Bleach tmdb 30984, TYBW = saison 2, 50 ép). On mappe
+// par DATE DE DIFFUSION : date de l'épisode demandé (Cinemeta) -> série parente (recherche
+// titre) -> saison+épisode TMDB de même date. Caché (résultat stable).
+async function resolveAnimeTmdbMapping(imdbId: string, title: string, season: number, episode: number, tmdbKey: string): Promise<{ tmdbId: string; season: number; episode: number } | null> {
+  if (!imdbId || !tmdbKey) return null;
+  return cached(`animemap:${imdbId}:${season}:${episode}`, TMDB_TTL_MS, async () => {
+    try {
+      const { data: cine } = await axios.get(`https://v3-cinemeta.strem.io/meta/series/${imdbId}.json`, { timeout: 8000 });
+      const vid = (cine?.meta?.videos || []).find((v: any) => Number(v.season) === season && Number(v.episode) === episode);
+      const air = String(vid?.released || vid?.firstAired || '').slice(0, 10);
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(air)) return null;
+      const airT = Date.parse(air);
+      const base = (title.split(/\s*[:–—-]\s+/)[0] || title).trim();
+      const { data: search } = await axios.get(`https://api.themoviedb.org/3/search/tv?api_key=${tmdbKey}&query=${encodeURIComponent(base)}`, { timeout: 8000 });
+      const cand = (search?.results || [])[0];
+      if (!cand) return null;
+      const { data: det } = await axios.get(`https://api.themoviedb.org/3/tv/${cand.id}?api_key=${tmdbKey}`, { timeout: 8000 });
+      const seasons = (det?.seasons || []).filter((s: any) => s.season_number > 0 && s.air_date)
+        .sort((a: any, b: any) => Date.parse(a.air_date) - Date.parse(b.air_date));
+      let target: any = null;
+      for (const s of seasons) if (Date.parse(s.air_date) <= airT + 2 * 864e5) target = s; // dernière saison commençant avant la date
+      if (!target) return null;
+      const { data: sd } = await axios.get(`https://api.themoviedb.org/3/tv/${cand.id}/season/${target.season_number}?api_key=${tmdbKey}`, { timeout: 8000 });
+      const ep = (sd?.episodes || []).find((e: any) => e.air_date && Math.abs(Date.parse(e.air_date) - airT) <= 2 * 864e5);
+      if (!ep) return null;
+      console.log(`[Stream] Anime mapping: ${imdbId} S${season}E${episode} -> tmdb ${cand.id} S${target.season_number}E${ep.episode_number} (${air})`);
+      return { tmdbId: String(cand.id), season: target.season_number, episode: ep.episode_number };
+    } catch { return null; }
+  }, { scope: 'tmdb', shouldCache: r => r !== null });
+}
+
 async function getTmdbInfo(type: string, id: string, config?: UserConfig | null): Promise<{ title: string; originalTitle: string; frenchTitle: string; year: string; tmdbId: string; imdbId: string; originalLanguage: string } | null> {
   const tmdbKey = config?.tmdbKey || DEFAULT_TMDB_KEY;
 
@@ -747,7 +806,7 @@ async function getTmdbInfo(type: string, id: string, config?: UserConfig | null)
             `https://api.themoviedb.org/3/find/${id}?api_key=${tmdbKey}&external_source=imdb_id`
           );
           const results = type === 'movie' ? findResp.data.movie_results : findResp.data.tv_results;
-          if (!results || results.length === 0) return null;
+          if (!results || results.length === 0) return await cinemetaInfo(type, id); // TMDB ne mappe pas cet IMDB
           tmdbId = String(results[0].id);
         } else if (id.startsWith('tmdb:')) {
           tmdbId = id.replace('tmdb:', '').split(':')[0];
@@ -861,54 +920,69 @@ async function handleStream(req: express.Request, res: express.Response, type: s
     // 9 aller-retours). RÈGLE : jamais de proxy local si seuls MFP/direct sont permis (hors owner).
     const localProxyAllowed = allowedModes().includes('local') || ownerKeyMatches(config?.ownerKey);
 
+    // Sources désactivées manuellement (admin) -> skippées ici (Promise.resolve([]),
+    // zéro latence, absentes des résultats). isSourceEnabled lit le réglage à chaud.
     const sourcePromises = [
-      (localProxyAllowed
+      (isSourceEnabled('netmirror') && localProxyAllowed
         ? getNetmirrorStreams(info.title, info.year, type as 'movie' | 'series', parsed.season, parsed.episode, info.originalLanguage)
         : Promise.resolve([]))
         .then(r => { trackSourceResult('netmirror', true, r.length); recordOutcome('netmirror', r.length > 0 ? 'success' : 'empty'); return r; })
         .catch(e => { console.log('[NetMirror] Error:', e); trackSourceResult('netmirror', false); recordOutcome('netmirror', 'error', e?.message); return []; }),
-      getStreamFlixStreams(info.tmdbId, type as 'movie' | 'series', parsed.season, parsed.episode, config?.tmdbKey || DEFAULT_TMDB_KEY)
+      (isSourceEnabled('streamflix') ? getStreamFlixStreams(info.tmdbId, type as 'movie' | 'series', parsed.season, parsed.episode, config?.tmdbKey || DEFAULT_TMDB_KEY) : Promise.resolve([]))
         .then(r => { trackSourceResult('streamflix', true, r.length); recordOutcome('streamflix', r.length > 0 ? 'success' : 'empty'); return r; })
         .catch(e => { console.log('[StreamFlix] Error:', e); trackSourceResult('streamflix', false); recordOutcome('streamflix', 'error', e?.message); return []; }),
-      getMovixStreams(info.tmdbId, type as 'movie' | 'series', parsed.season, parsed.episode, extractorConfig)
+      (isSourceEnabled('movix') ? (async () => {
+        const isAnime = info.originalLanguage === 'ja' && type === 'series' && !!parsed.season && !!parsed.episode;
+        // Anime sans tmdb direct (repli Cinemeta) : mappe vers (tmdb parent, saison, ép) par
+        // date de diffusion pour atteindre le Movix (purstream/cpasmal…) rangé sous la série parente.
+        let mvId = info.tmdbId, mvS = parsed.season, mvE = parsed.episode;
+        if (!info.tmdbId && isAnime) {
+          const map = await resolveAnimeTmdbMapping(info.imdbId, info.title, parsed.season!, parsed.episode!, config?.tmdbKey || DEFAULT_TMDB_KEY);
+          if (map) { mvId = map.tmdbId; mvS = map.season; mvE = map.episode; }
+        }
+        // En plus des providers tmdb-keyés : l'API anime de Movix (anime-sama) — atteint les
+        // arcs (TYBW Partie N) qu'anime-sama range sous la franchise, avec sibnet/ansembed VOSTFR+VF.
+        const animePart = isAnime
+          ? animeAltsPromise.then(alts => getMovixAnimeStreams([info.title, info.originalTitle, info.frenchTitle, ...alts].filter(Boolean) as string[], type as 'movie' | 'series', parsed.season, parsed.episode, extractorConfig))
+          : Promise.resolve([] as Awaited<ReturnType<typeof getMovixStreams>>);
+        const tmdbPart = mvId ? getMovixStreams(mvId, type as 'movie' | 'series', mvS, mvE, extractorConfig) : Promise.resolve([] as Awaited<ReturnType<typeof getMovixStreams>>);
+        const [a, b] = await Promise.all([tmdbPart, animePart]);
+        return [...a, ...b];
+      })() : Promise.resolve([]))
         .then(r => { trackSourceResult('movix', true, r.length); recordOutcome('movix', r.length > 0 ? 'success' : 'empty'); return r; })
         .catch(e => { console.log('[Movix] Error:', e); trackSourceResult('movix', false); recordOutcome('movix', 'error', e?.message); return []; }),
-      getFrenchStreamStreams(info.tmdbId, type as 'movie' | 'series', extractorConfig, config?.tmdbKey || DEFAULT_TMDB_KEY, parsed.season, parsed.episode)
+      (isSourceEnabled('frenchstream') ? getFrenchStreamStreams(info.tmdbId, type as 'movie' | 'series', extractorConfig, config?.tmdbKey || DEFAULT_TMDB_KEY, parsed.season, parsed.episode) : Promise.resolve([]))
         .then(r => { trackSourceResult('frenchstream', true, r.length); recordOutcome('frenchstream', r.length > 0 ? 'success' : 'empty'); return r; })
         .catch(e => { console.log('[FrenchStream] Error:', e); trackSourceResult('frenchstream', false); recordOutcome('frenchstream', 'error', e?.message); return []; }),
-      getWiflixStreams(info.tmdbId, type as 'movie' | 'series', extractorConfig, parsed.season, parsed.episode)
+      (isSourceEnabled('wiflix') ? getWiflixStreams(info.tmdbId, type as 'movie' | 'series', extractorConfig, parsed.season, parsed.episode) : Promise.resolve([]))
         .then(r => { trackSourceResult('wiflix', true, r.length); recordOutcome('wiflix', r.length > 0 ? 'success' : 'empty'); return r; })
         .catch(e => { console.log('[Wiflix] Error:', e); trackSourceResult('wiflix', false); recordOutcome('wiflix', 'error', e?.message); return []; }),
-      getVoirDramaStreams(info.tmdbId, type as 'movie' | 'series', extractorConfig, parsed.season, parsed.episode, info.title, info.originalLanguage)
+      (isSourceEnabled('voirdrama') ? getVoirDramaStreams(info.tmdbId, type as 'movie' | 'series', extractorConfig, parsed.season, parsed.episode, info.title, info.originalLanguage) : Promise.resolve([]))
         .then(r => { trackSourceResult('voirdrama', true, r.length); recordOutcome('voirdrama', r.length > 0 ? 'success' : 'empty'); return r; })
         .catch(e => { console.log('[VoirDrama] Error:', e); trackSourceResult('voirdrama', false); recordOutcome('voirdrama', 'error', e?.message); return []; }),
-      getMovieboxStreams(info.tmdbId, type as 'movie' | 'series', info.title, info.year, parsed.season, parsed.episode)
+      (isSourceEnabled('moviebox') ? getMovieboxStreams(info.tmdbId, type as 'movie' | 'series', info.title, info.year, parsed.season, parsed.episode) : Promise.resolve([]))
         .then(r => { trackSourceResult('moviebox', true, r.length); recordOutcome('moviebox', r.length > 0 ? 'success' : 'empty'); return r; })
         .catch(e => { console.log('[MovieBox] Error:', e); trackSourceResult('moviebox', false); recordOutcome('moviebox', 'error', e?.message); return []; }),
-      // VoirAnime : uniquement pour l'anime (originalLanguage japonais) — évite de
-      // scraper voir-anime.to pour chaque film/série occidental.
-      (info.originalLanguage === 'ja'
+      // VoirAnime : anime uniquement (originalLanguage japonais).
+      (isSourceEnabled('voiranime') && info.originalLanguage === 'ja'
         ? animeAltsPromise.then(alts => getVoirAnimeStreams(parsed.baseId, type as 'movie' | 'series', extractorConfig, parsed.season, parsed.episode, info.title, info.originalTitle, alts))
         : Promise.resolve([]))
         .then(r => { if (info.originalLanguage === 'ja') { trackSourceResult('voiranime', true, r.length); recordOutcome('voiranime', r.length > 0 ? 'success' : 'empty'); } return r; })
         .catch(e => { console.log('[VoirAnime] Error:', e); trackSourceResult('voiranime', false); recordOutcome('voiranime', 'error', e?.message); return []; }),
-      // Nabistream : dramas coréens/asiatiques VOSTFR (API keyée TMDB). Non gaté —
-      // une seule requête API, renvoie [] hors catalogue.
-      getNabistreamStreams(info.tmdbId, type as 'movie' | 'series', parsed.season, parsed.episode)
+      // Nabistream : dramas coréens/asiatiques VOSTFR (API keyée TMDB).
+      (isSourceEnabled('nabistream') ? getNabistreamStreams(info.tmdbId, type as 'movie' | 'series', parsed.season, parsed.episode) : Promise.resolve([]))
         .then(r => { trackSourceResult('nabistream', true, r.length); recordOutcome('nabistream', r.length > 0 ? 'success' : 'empty'); return r; })
         .catch(e => { console.log('[Nabistream] Error:', e); trackSourceResult('nabistream', false); recordOutcome('nabistream', 'error', e?.message); return []; }),
-      // Coflix : films/séries FR généralistes, VF ET VOSTFR (scraping titre-keyé).
-      // Site FR -> chercher d'abord le titre FRANÇAIS, puis l'anglais en repli.
-      getCoflixStreams(type as 'movie' | 'series', extractorConfig, parsed.season, parsed.episode, info.frenchTitle || info.title, info.title, info.year ? Number(info.year) : undefined)
+      // Coflix : films/séries FR généralistes (titre FR d'abord, anglais en repli).
+      (isSourceEnabled('coflix') ? getCoflixStreams(type as 'movie' | 'series', extractorConfig, parsed.season, parsed.episode, info.frenchTitle || info.title, info.title, info.year ? Number(info.year) : undefined) : Promise.resolve([]))
         .then(r => { trackSourceResult('coflix', true, r.length); recordOutcome('coflix', r.length > 0 ? 'success' : 'empty'); return r; })
         .catch(e => { console.log('[Coflix] Error:', e); trackSourceResult('coflix', false); recordOutcome('coflix', 'error', e?.message); return []; }),
-      // Videasy : agrégateur VO (anglais) + sous-titres (VOSTFR si FR dispo), keyé TMDB.
-      getVideasyStreams(info.tmdbId, type as 'movie' | 'series', parsed.season, parsed.episode, config?.tmdbKey || DEFAULT_TMDB_KEY)
+      // Videasy : agrégateur VO (anglais) + sous-titres, keyé TMDB.
+      (isSourceEnabled('videasy') ? getVideasyStreams(info.tmdbId, type as 'movie' | 'series', parsed.season, parsed.episode, config?.tmdbKey || DEFAULT_TMDB_KEY) : Promise.resolve([]))
         .then(r => { trackSourceResult('videasy', true, r.length); recordOutcome('videasy', r.length > 0 ? 'success' : 'empty'); return r; })
         .catch(e => { console.log('[Videasy] Error:', e); trackSourceResult('videasy', false); recordOutcome('videasy', 'error', e?.message); return []; }),
-      // AnimeSama : anime VOSTFR/VF, scraping titre-keyé. Gaté sur l'anime
-      // (originalLanguage japonais) — évite de chercher chaque titre occidental.
-      (info.originalLanguage === 'ja'
+      // AnimeSama : anime uniquement (originalLanguage japonais).
+      (isSourceEnabled('animesama') && info.originalLanguage === 'ja'
         ? animeAltsPromise.then(alts => getAnimeSamaStreams(type as 'movie' | 'series', [info.title, info.originalTitle, info.frenchTitle, ...alts].filter(Boolean) as string[], parsed.season, parsed.episode, extractorConfig))
         : Promise.resolve([]))
         .then(r => { if (info.originalLanguage === 'ja') { trackSourceResult('animesama', true, r.length); recordOutcome('animesama', r.length > 0 ? 'success' : 'empty'); } return r; })
@@ -1829,6 +1903,35 @@ app.post('/api/settings', requireAdminSession, jsonBody, (req, res) => {
   // Applique le toggle du pool À CHAUD (démarre/arrête le scan en fond).
   if ('netfreeSocksPool' in b) setPoolEnabled(netfreeSocksPoolEnabled());
   return res.json({ ok: true, ...settingsView(), netfreePool: poolStatus() });
+});
+
+// ── Contrôle des sources : santé (metrics) + état activé/désactivé ──────────────
+// GET : une entrée par source avec statut, fenêtre 20 (recent) et enabled. POST : toggle.
+app.get('/api/sources', (_req, res) => {
+  const metrics = getAllMetrics();
+  const disabled = getDisabledSources();
+  const sources = Object.entries(metrics).map(([name, m]) => ({ name, enabled: !disabled.includes(name), ...m }));
+  const on = sources.filter(s => s.enabled);
+  res.json({
+    sources,
+    summary: {
+      total: sources.length,
+      ok: on.filter(s => s.status === 'ok').length,
+      warning: on.filter(s => s.status === 'warning').length,
+      down: on.filter(s => s.status === 'down').length,
+      off: sources.length - on.length,
+    },
+  });
+});
+app.post('/api/sources/:name', requireAdminSession, jsonBody, (req, res) => {
+  const name = String(req.params.name || '');
+  if (!Object.keys(getAllMetrics()).includes(name)) return res.status(404).json({ ok: false, error: 'source inconnue' });
+  const enabled = (req.body || {}).enabled;
+  if (typeof enabled !== 'boolean') return res.status(400).json({ ok: false, error: 'enabled doit être un booléen' });
+  const set = new Set(getDisabledSources());
+  if (enabled) set.delete(name); else set.add(name);
+  updateSettings({ disabledSources: [...set] });
+  return res.json({ ok: true, name, enabled });
 });
 
 // ── NetMirror : manifestes RECONSTRUITS (méthode Onyx) ─────────────────────────
