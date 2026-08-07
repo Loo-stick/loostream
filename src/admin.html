@@ -519,6 +519,15 @@ async function loadPartage() {
             ? `<span class="badge on">configurée (${st.ownerKey.length} car.)</span><span class="badge src">source : ${st.ownerKey.source === 'file' ? 'admin' : '.env'}</span>`
             : `<span class="badge off">non configurée</span>`;
         const access = st.accessKeyConfigured ? '<span class="badge on">activée</span>' : '<span class="badge off">désactivée</span>';
+        const np = st.netfreePool || { enabled: false, live: 0, current: null, target: 4 };
+        const poolBadge = st.netfreeSocksPool ? '<span class="badge on">activé</span>' : '<span class="badge off">désactivé</span>';
+        const poolSrc = `<span class="badge src">source : ${st.netfreeSocksPoolSource === 'file' ? 'admin' : '.env'}</span>`;
+        const poolToggle = st.netfreeSocksPool
+            ? `<button class="btn small" onclick="setNetfreePool(false)">Désactiver</button>`
+            : `<button class="btn small" onclick="setNetfreePool(true)">Activer</button>`;
+        const poolLive = st.netfreeSocksPool
+            ? `${np.live}/${np.target} SOCKS vivants · courant : ${np.current ? esc(np.current) : 'scan en cours…'}`
+            : '';
         box.innerHTML = `
             <div style="margin-bottom:22px;">
                 <div style="font-weight:600;margin-bottom:6px;">Modes de livraison proposés <span class="badge src">source : ${st.modeSource === 'file' ? 'admin' : (st.modeSource === 'env' ? '.env' : 'défaut (tous)')}</span></div>
@@ -541,11 +550,28 @@ async function loadPartage() {
                     ${ok ? '<button class="btn danger small" onclick="removeOwnerKey()">Retirer</button>' : ''}
                     <span class="cfg-msg" id="msg-owner"></span></div>
             </div>
-            <div style="border-top:1px solid rgba(255,255,255,0.08);padding-top:18px;">
+            <div style="border-top:1px solid rgba(255,255,255,0.08);padding-top:18px;margin-bottom:22px;">
                 <div style="font-weight:600;margin-bottom:6px;">Clé d'accès (ACCESS_KEY) ${access}</div>
                 <div style="font-size:0.8em;color:var(--dim);">Garde tout l'addon derrière une clé. Gérée uniquement dans le .env (lecture seule ici) — modifie-la côté serveur puis redémarre.</div>
+            </div>
+            <div style="border-top:1px solid rgba(255,255,255,0.08);padding-top:18px;">
+                <div style="font-weight:600;margin-bottom:6px;">Pool SOCKS NetMirror ${poolBadge}${poolSrc}</div>
+                <div style="font-size:0.8em;color:var(--dim);margin-bottom:10px;">Débloque NetMirror en hébergement <b>datacenter</b> : l'API netfree bloque les IP datacenter/WARP, mais le CDN de segments reste ouvert → seul le petit handshake passe par un SOCKS résidentiel public, auto-scanné et roté (les publics sont éphémères). <b>Inutile sur un serveur résidentiel</b> (NetMirror marche en direct). La vidéo ne passe jamais par le SOCKS.</div>
+                <div class="cfg-row">
+                    ${poolToggle}
+                    <button class="btn secondary small" onclick="loadPartage()">↻ Rafraîchir l'état</button>
+                    <span style="color:var(--muted);font-size:0.85em;">${poolLive}</span>
+                    <span class="cfg-msg" id="msg-nfpool"></span></div>
             </div>`;
     } catch (e) { if (e.message !== 'session') box.innerHTML = `<div class="error">Erreur: ${esc(e.message)}</div>`; }
+}
+async function setNetfreePool(on) {
+    const msg = document.getElementById('msg-nfpool'); if (msg) { msg.textContent = '…'; msg.className = 'cfg-msg'; }
+    try {
+        const r = await api('/api/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ netfreeSocksPool: on }) });
+        const j = await r.json(); if (!r.ok || j.ok === false) throw new Error(j.error || 'HTTP ' + r.status);
+        loadPartage();
+    } catch (e) { if (e.message !== 'session' && msg) { msg.textContent = '✗ ' + e.message; msg.className = 'cfg-msg err'; } }
 }
 async function postSettings(patch, msgId) {
     const msg = document.getElementById(msgId); msg.textContent = '…'; msg.className = 'cfg-msg';

@@ -21,7 +21,8 @@ import crypto from 'crypto';
 import proxyRouter, { isAllowedUrl, addAllowedDomain, getAllowedDomains } from './proxy';
 import { accessEnabled, keyMatches, signUrl, requireQueryKey, ownerKeyMatches, ownerKeyEnabled } from './access';
 import { installLogCapture, getLogs } from './logbuffer';
-import { getModeRaw, autoWhitelistEnabled, updateSettings, settingsView } from './settings';
+import { getModeRaw, autoWhitelistEnabled, updateSettings, settingsView, netfreeSocksPoolEnabled } from './settings';
+import { setPoolEnabled, poolStatus } from './netfree-pool';
 import { canDirect } from './deliver';
 import * as fsSync from 'fs';
 import * as zlib from 'zlib';
@@ -679,7 +680,7 @@ function getManifest(req: express.Request) {
 
   return {
     id: 'community.loostream.stremio',
-    version: '1.14.0',
+    version: '1.14.1',
     name: 'LooStream',
     logo: `${baseUrl}/logo.png`,
     description: 'Netflix, Prime, Disney+ mirrors + StreamFlix + Movix VF/VOSTFR',
@@ -1787,11 +1788,11 @@ app.post('/api/whitelist', requireAdminSession, jsonBody, (req, res) => {
 app.get('/api/settings', (_req, res) => {
   // accessKeyConfigured : ACCESS_KEY est gérée uniquement dans le .env (garde
   // l'accès) ; l'admin l'affiche en lecture seule, jamais sa valeur.
-  res.json({ ...settingsView(), accessKeyConfigured: accessEnabled() });
+  res.json({ ...settingsView(), accessKeyConfigured: accessEnabled(), netfreePool: poolStatus() });
 });
 app.post('/api/settings', requireAdminSession, jsonBody, (req, res) => {
   const b = req.body || {};
-  const patch: { mode?: string | null; ownerKey?: string | null; autoWhitelist?: boolean | null } = {};
+  const patch: { mode?: string | null; ownerKey?: string | null; autoWhitelist?: boolean | null; netfreeSocksPool?: boolean | null } = {};
 
   if ('mode' in b) {
     if (b.mode === null) patch.mode = null;
@@ -1818,9 +1819,16 @@ app.post('/api/settings', requireAdminSession, jsonBody, (req, res) => {
       patch.ownerKey = b.ownerKey;
     } else return res.status(400).json({ ok: false, error: 'ownerKey : 8 à 128 caractères' });
   }
+  if ('netfreeSocksPool' in b) {
+    if (b.netfreeSocksPool === null) patch.netfreeSocksPool = null;
+    else if (typeof b.netfreeSocksPool === 'boolean') patch.netfreeSocksPool = b.netfreeSocksPool;
+    else return res.status(400).json({ ok: false, error: 'netfreeSocksPool doit être un booléen' });
+  }
 
   updateSettings(patch);
-  return res.json({ ok: true, ...settingsView() });
+  // Applique le toggle du pool À CHAUD (démarre/arrête le scan en fond).
+  if ('netfreeSocksPool' in b) setPoolEnabled(netfreeSocksPoolEnabled());
+  return res.json({ ok: true, ...settingsView(), netfreePool: poolStatus() });
 });
 
 // ── NetMirror : manifestes RECONSTRUITS (méthode Onyx) ─────────────────────────
@@ -2245,4 +2253,6 @@ app.listen(PORT, () => {
   console.log(`LooStream Addon running at http://localhost:${PORT}`);
   console.log(`Install in Stremio: http://localhost:${PORT}/manifest.json`);
   console.log(`Proxy mode: ${DEFAULT_USE_LOCAL_PROXY ? 'LOCAL' : 'MEDIAFLOW (configurable)'}`);
+  // Pool SOCKS netfree : démarre le scan en fond s'il est activé (persisté). OFF = résidentiel.
+  if (netfreeSocksPoolEnabled()) { console.log('[NetfreePool] activé au démarrage'); setPoolEnabled(true); }
 });

@@ -10,6 +10,7 @@ interface RuntimeSettings {
   mode?: string;
   ownerKey?: string;
   autoWhitelist?: boolean;
+  netfreeSocksPool?: boolean;
 }
 
 const filePath = process.env.RUNTIME_SETTINGS_CONFIG ||
@@ -28,6 +29,7 @@ function load(): RuntimeSettings {
         mode: typeof raw.mode === 'string' ? raw.mode : undefined,
         ownerKey: typeof raw.ownerKey === 'string' && raw.ownerKey ? raw.ownerKey : undefined,
         autoWhitelist: typeof raw.autoWhitelist === 'boolean' ? raw.autoWhitelist : undefined,
+        netfreeSocksPool: typeof raw.netfreeSocksPool === 'boolean' ? raw.netfreeSocksPool : undefined,
       };
     } else {
       cache = {};
@@ -55,8 +57,15 @@ export function autoWhitelistEnabled(): boolean {
   return s.autoWhitelist !== undefined ? s.autoWhitelist : (process.env.AUTO_WHITELIST === 'true');
 }
 
+// Pool auto-rotatif de SOCKS publics pour le handshake netfree (hébergement datacenter).
+// OFF par défaut (cas résidentiel : NetMirror marche en direct).
+export function netfreeSocksPoolEnabled(): boolean {
+  const s = load();
+  return s.netfreeSocksPool !== undefined ? s.netfreeSocksPool : (process.env.NETFREE_SOCKS_POOL === 'true');
+}
+
 export function updateSettings(patch: {
-  mode?: string | null; ownerKey?: string | null; autoWhitelist?: boolean | null;
+  mode?: string | null; ownerKey?: string | null; autoWhitelist?: boolean | null; netfreeSocksPool?: boolean | null;
 }): void {
   const current: RuntimeSettings = { ...load() };
   const apply = <K extends keyof RuntimeSettings>(k: K, v: RuntimeSettings[K] | null | undefined) => {
@@ -67,6 +76,7 @@ export function updateSettings(patch: {
   apply('mode', patch.mode);
   apply('ownerKey', patch.ownerKey === null ? null : (patch.ownerKey || undefined));
   apply('autoWhitelist', patch.autoWhitelist);
+  apply('netfreeSocksPool', patch.netfreeSocksPool);
   fs.writeFileSync(filePath, JSON.stringify(current, null, 2));
   cache = null; // invalide
 }
@@ -75,6 +85,7 @@ export function settingsView(): {
   mode: string; modeSource: 'file' | 'env' | 'default';
   ownerKey: { configured: boolean; length: number; source: 'file' | 'env' | 'none' };
   autoWhitelist: boolean; autoWhitelistSource: 'file' | 'env';
+  netfreeSocksPool: boolean; netfreeSocksPoolSource: 'file' | 'env';
 } {
   const s = load();
   const ownerFile = s.ownerKey !== undefined;
@@ -90,5 +101,7 @@ export function settingsView(): {
     },
     autoWhitelist: autoWhitelistEnabled(),
     autoWhitelistSource: s.autoWhitelist !== undefined ? 'file' : 'env',
+    netfreeSocksPool: netfreeSocksPoolEnabled(),
+    netfreeSocksPoolSource: s.netfreeSocksPool !== undefined ? 'file' : 'env',
   };
 }

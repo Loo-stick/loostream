@@ -1,6 +1,32 @@
 import axios from 'axios';
-import { cached } from '../cache';
+import { cached, del } from '../cache';
 import { titlesMatch } from '../matching';
+import { netfreeAgent, currentPoolProxy, reportFailure } from '../netfree-pool';
+
+// Client du SCRAPER netfree : l'agent SOCKS est DYNAMIQUE, injecté par requête via un
+// intercepteur -> soit le pool auto-rotatif (src/netfree-pool.ts), soit NETFREE_SOCKS env
+// (résidentiel payant), soit RIEN (cas résidentiel -> direct). Utile en hébergement
+// DATACENTER : net52.cc bloque l'IP datacenter/WARP mais le CDN de segments reste ouvert
+// -> seul ce petit handshake passe par le SOCKS ; les Go de vidéo (src/proxy.ts) en direct.
+const nf = axios.create({});
+nf.interceptors.request.use(cfg => {
+  // Routage SÉLECTIF : seuls l'API/handshake (verify/search/checknewtv/master = .php,
+  // /newtv/) passent par le SOCKS — ce sont eux que le datacenter voit bloqués. Les sondes
+  // CDN (`/files/…` audio + dichotomie vidéo, ~10 req/titre) tapent le CDN OUVERT -> DIRECT,
+  // rapide. Sans ça, chaque titre traînait toutes ses sondes dans le SOCKS lent.
+  const url = `${cfg.baseURL || ''}${cfg.url || ''}`;
+  const isCdnProbe = /\/files\//.test(url);
+  const agent = isCdnProbe ? undefined : netfreeAgent();
+  if (agent) { cfg.httpsAgent = agent; cfg.httpAgent = agent; (cfg as any).__nfProxy = currentPoolProxy(); }
+  return cfg;
+});
+// Échec RÉSEAU (pas de réponse HTTP = proxy mort) via un proxy du pool -> bascule IMMÉDIATE.
+// Une réponse HTTP (même 403/404) = le proxy a atteint netfree -> on ne le vire pas.
+nf.interceptors.response.use(r => r, err => {
+  const p = err?.config?.__nfProxy;
+  if (p && !err?.response) reportFailure(p);
+  return Promise.reject(err);
+});
 
 // NetMirror v3 (2026-07) — méthode ONYX : on IGNORE le master et on RECONSTRUIT
 // le manifeste en sondant le CDN. Reverse-engineering de l'APK Onyx v1.7.235
@@ -48,7 +74,12 @@ const MOBIDETECT = [
 ];
 const FALLBACK_API_BASE = process.env.NETMIRROR_HLS_BASE || 'https://tv.imgcdn.kim';
 
-const STREAMS_TTL_MS = 15 * 60 * 1000;
+// 2h : le résultat (cdnHost/id/prefix/langues) est stable ; le SEUL truc volatil est le
+// cdnHost (netfree rote ses hôtes). On cache donc longtemps (peu de re-scrapes lents via
+// SOCKS) MAIS on re-vérifie la vivacité du cdnHost au serve (netmirrorAlive) -> jamais de
+// flux mort. Recheck au plus toutes les ALIVE_TTL_MS (sonde directe ~50ms).
+const STREAMS_TTL_MS = 2 * 60 * 60 * 1000;
+const ALIVE_TTL_MS = 5 * 60 * 1000;
 const EMPTY_TTL_MS = 5 * 60 * 1000;
 const COOKIE_TTL_MS = 30 * 60 * 1000;
 const API_BASE_TTL_MS = 60 * 60 * 1000;
@@ -96,7 +127,7 @@ async function getGuestCookie(): Promise<string | null> {
   return cached('netmirror:cookie', COOKIE_TTL_MS, async () => {
     try {
       const uuid = `${Math.random().toString(16).slice(2)}-${Date.now().toString(16)}`;
-      const resp = await axios.post(
+      const resp = await nf.post(
         `${NET52_BASE}/verify.php`,
         `g-recaptcha-response=${uuid}`,
         {
@@ -133,7 +164,7 @@ async function searchPlatform(
 ): Promise<string | null> {
   try {
     const ts = Math.floor(Date.now() / 1000);
-    const { data } = await axios.get(
+    const { data } = await nf.get(
       `${NET52_BASE}/mobile/${platform.prefix}search.php`,
       {
         params: { s: title, t: ts },
@@ -165,7 +196,7 @@ async function resolveApiBase(): Promise<string> {
     for (const b64 of MOBIDETECT) {
       try {
         const host = Buffer.from(b64, 'base64').toString('utf8').trim().replace(/\/$/, '');
-        const { data } = await axios.get(`${host}/checknewtv.php`, { headers: appHeaders(), timeout: REQ_TIMEOUT_MS });
+        const { data } = await nf.get(`${host}/checknewtv.php`, { headers: appHeaders(), timeout: REQ_TIMEOUT_MS });
         const th = data?.token_hash;
         if (th) {
           const url = Buffer.from(String(th), 'base64').toString('utf8').trim().replace(/\/$/, '');
@@ -198,7 +229,7 @@ async function resolveMasterMeta(apiBase: string, ott: string, id: string):
   const langs = new Map<number, { code: string; name: string }>();
   const subs: NetmirrorSub[] = [];
   try {
-    const { data } = await axios.get<string>(`${apiBase}/newtv/hls/${ott}/${encodeURIComponent(id)}.m3u8`, {
+    const { data } = await nf.get<string>(`${apiBase}/newtv/hls/${ott}/${encodeURIComponent(id)}.m3u8`, {
       headers: { ...cdnHeaders(), Accept: '*/*' }, timeout: REQ_TIMEOUT_MS,
       responseType: 'text', transformResponse: r => r,
     });
@@ -247,7 +278,7 @@ async function probeAudio(cdnHost: string, id: string, candidates: number[]):
   const list = candidates.length ? candidates : [0, 1, 2, 3];
   for (const i of list) {
     try {
-      const { data } = await axios.get<string>(`https://${cdnHost}/files/${id}/a/${i}/${i}.m3u8`, {
+      const { data } = await nf.get<string>(`https://${cdnHost}/files/${id}/a/${i}/${i}.m3u8`, {
         headers: cdnHeaders(), timeout: REQ_TIMEOUT_MS, responseType: 'text', transformResponse: r => r,
       });
       const txt = String(data || '');
@@ -304,7 +335,7 @@ const segUrl = (cdnHost: string, id: string, q: string, prefix: string, n: numbe
 
 async function segExists(url: string): Promise<boolean> {
   try {
-    const r = await axios.get(url, {
+    const r = await nf.get(url, {
       headers: { ...cdnHeaders(), Range: 'bytes=0-1' }, timeout: 8000,
       validateStatus: () => true, responseType: 'arraybuffer',
     });
@@ -350,7 +381,7 @@ async function resolveEpisodeId(
     return m?.id || null;
   };
   try {
-    const { data: post } = await axios.get(`${NET52_BASE}/mobile/post.php`, {
+    const { data: post } = await nf.get(`${NET52_BASE}/mobile/post.php`, {
       params: { id: seriesId, t: ts() }, headers: headers(), timeout: REQ_TIMEOUT_MS,
     });
     const seasons: any[] = Array.isArray(post?.season) ? post.season : [];
@@ -366,7 +397,7 @@ async function resolveEpisodeId(
 
     // Otherwise (or if not found on the selected page), page episodes.php.
     for (let page = 1; page <= 6; page++) {
-      const { data: ep } = await axios.get(`${NET52_BASE}/mobile/episodes.php`, {
+      const { data: ep } = await nf.get(`${NET52_BASE}/mobile/episodes.php`, {
         params: { s: target.id, t: ts(), page }, headers: headers(), timeout: REQ_TIMEOUT_MS,
       });
       const id = findEp(ep?.episodes);
@@ -378,6 +409,21 @@ async function resolveEpisodeId(
     console.log(`[Netmirror] episode resolve (${platform.ott}) failed: ${e.message}`);
     return null;
   }
+}
+
+// Sonde de vivacité du CDN (netfree rote ses hôtes) : segment 000 en Range, DIRECT (le CDN
+// est ouvert -> ~50ms). 206/200 = l'hôte sert encore ce contenu. Permet de cacher le résultat
+// longtemps sans jamais servir un manifeste mort (hôte roté = segments 404).
+async function netmirrorAlive(s: NetmirrorStream): Promise<boolean> {
+  try {
+    const q = s.quality || s.qualities[0] || '1080p';
+    const url = `https://${s.cdnHost}/files/${s.contentId}/${q}/${s.prefix}_000.jpg`;
+    const r = await nf.get<ArrayBuffer>(url, {
+      headers: { ...cdnHeaders(), Range: 'bytes=0-1' },
+      timeout: 6000, responseType: 'arraybuffer', maxContentLength: 4096, validateStatus: () => true,
+    });
+    return r.status === 206 || r.status === 200;
+  } catch { return false; }
 }
 
 export async function getNetmirrorStreams(
@@ -394,12 +440,25 @@ export async function getNetmirrorStreams(
   const key = mediaType === 'series'
     ? `netmirror:series:${normalizeTitle(title)}:${season}:${episode}:${originalLanguage}`
     : `netmirror:movie:${normalizeTitle(title)}:${year}:${originalLanguage}`;
-  return cached(
-    key,
-    STREAMS_TTL_MS,
-    () => fetchNetmirrorStreams(title, year, mediaType, season, episode, originalLanguage),
-    { scope: 'netmirror', shouldCache: r => r.length > 0, negativeTtlMs: EMPTY_TTL_MS }
-  );
+  const fetchFn = () => fetchNetmirrorStreams(title, year, mediaType, season, episode, originalLanguage);
+
+  const result = await cached(key, STREAMS_TTL_MS, fetchFn,
+    { scope: 'netmirror', shouldCache: r => r.length > 0, negativeTtlMs: EMPTY_TTL_MS });
+  if (!result.length) return result;
+
+  // Recheck vivacité du cdnHost — caché ALIVE_TTL_MS pour ne pas sonder à chaque requête.
+  // Ne cache QUE "vivant" ; un "mort" n'est gardé que 20s (le temps de re-scraper).
+  const alive = await cached(
+    `netmirror:alive:${result[0].cdnHost}:${result[0].contentId}`, ALIVE_TTL_MS,
+    () => netmirrorAlive(result[0]),
+    { scope: 'netmirror', shouldCache: v => v === true, negativeTtlMs: 20 * 1000 });
+  if (alive) return result;
+
+  // cdnHost roté -> on invalide le cache long + re-scrape frais (nouvel hôte).
+  console.log(`[Netmirror] cdnHost ${result[0].cdnHost} mort (rotation) -> invalidation + re-scrape`);
+  del(key);
+  return cached(key, STREAMS_TTL_MS, fetchFn,
+    { scope: 'netmirror', shouldCache: r => r.length > 0, negativeTtlMs: EMPTY_TTL_MS });
 }
 
 async function fetchNetmirrorStreams(
