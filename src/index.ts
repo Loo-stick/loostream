@@ -1167,10 +1167,20 @@ async function handleStream(req: express.Request, res: express.Response, type: s
 
     // Process Coflix results (films/séries FR VF+VOSTFR, HLS extrait des hôtes).
     for (const cf of coflixResults) {
+      // livavid/tnmr : injouable en DIRECT (le player n'applique pas l'UA mobile aux
+      // segments -> 302) ET via MEDIAFLOW (mangle les headers -> « Stream unavailable »).
+      // SEUL le proxy LOCAL marche (forwarde l'UA exact). On ne l'offre donc qu'aux configs
+      // qui peuvent l'utiliser (owner key / mode local) -> sinon flux mort, on l'écarte.
+      // tnmr est anti-datacenter -> ne jouera de toute façon que sur un serveur résidentiel.
+      const needsLocalProxy = /tnmr/i.test(cf.url);
+      if (needsLocalProxy && !localProxyAllowed) continue;
+      // UA par défaut D'ABORD, headers du stream ENSUITE : si l'extracteur a fixé un UA
+      // précis (livavid = LULU_UA mobile), il gagne. Les hôtes sans UA (fsvid/vidzy)
+      // gardent l'UA navigateur par défaut.
       const d = await deliver(cf.url, {
-        ...(cf.headers || {}),
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-      }, { forceHls: true }, req, config);
+        ...(cf.headers || {}),
+      }, { forceHls: true, forceLocal: needsLocalProxy }, req, config);
 
       if (!d) continue; // Skip blocked URLs
 

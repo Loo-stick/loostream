@@ -19,7 +19,12 @@
 //                        À L'IP/ASN de l'extracteur (param asn=) -> injouable depuis
 //                        le client en direct ; seul notre serveur (proxy local) a la
 //                        bonne IP. En mode direct pur : écarté (mieux qu'un flux mort).
-export const PROXY_FORCED_HOSTS = ['uqload', 'voe.sx', 'vmnow', 'vmeas', 'vmpx.online'];
+//   - tnmr             : CDN de livavid (LuluVdo). Exige le JEU COMPLET de headers
+//                        (UA mobile + Referer + Origin + Sec-Fetch) sur CHAQUE requête,
+//                        segments compris (sinon 302 -> endpoint mort). Le player ne
+//                        les applique pas de façon fiable en direct -> « charge, pas de
+//                        vidéo ». Doit passer par le proxy (qui pose les headers partout).
+export const PROXY_FORCED_HOSTS = ['uqload', 'voe.sx', 'vmnow', 'vmeas', 'vmpx.online', 'tnmr'];
 
 /** Un hôte est directable s'il n'est pas dans la liste non-directable ci-dessus ET si
  * son token n'est pas LIÉ À L'ASN de l'extracteur. Un CDN qui met `asn=<ASN serveur>`

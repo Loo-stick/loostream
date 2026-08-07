@@ -3,6 +3,7 @@ import * as https from 'https';
 import * as vm from 'vm';
 import { unpackFromHtml, findStreamUrl } from './unpack';
 import { isStreamLive } from '../live-check';
+import { probeMaster, resLabel } from '../multiaudio';
 import * as fs from 'fs';
 import * as path from 'path';
 
@@ -504,14 +505,24 @@ async function tryDlEmbed(embedUrl: string): Promise<ExtractedStream | null> {
     if (!url) return null;
     console.log(`[Extractor] /dl OK: ${new URL(url).host} <- ${embedUrl}`);
     // UA MOBILE + headers CORS/XHR requis (sinon 403 sur tnmr.org).
-    return {
-      url, quality: 'HD', format: 'hls',
-      headers: {
-        'User-Agent': LULU_UA,
-        Referer: `${origin}/`, Origin: origin, Accept: '*/*',
-        'Sec-Fetch-Dest': 'empty', 'Sec-Fetch-Mode': 'cors', 'Sec-Fetch-Site': 'cross-site',
-      },
+    const streamHeaders = {
+      'User-Agent': LULU_UA,
+      Referer: `${origin}/`, Origin: origin, Accept: '*/*',
+      'Sec-Fetch-Dest': 'empty', 'Sec-Fetch-Mode': 'cors', 'Sec-Fetch-Site': 'cross-site',
     };
+    // Qualité RÉELLE lue À L'EXTRACTION (token frais -> le master répond 200). Ces CDN à
+    // token court (tnmr…) renvoient 522 à une sonde TARDIVE (applyMultiAudio d'après-coup),
+    // d'où le 'HD' générique jusqu'ici. En sondant ici on amorce aussi le cache de
+    // probeMaster -> le relabel/langues en aval réutilise ce résultat frais.
+    let quality = 'HD';
+    if (/\.m3u8/i.test(url)) {
+      try {
+        const { height } = await probeMaster(url, streamHeaders);
+        const lbl = height ? resLabel(height) : null;
+        if (lbl) quality = lbl;
+      } catch { /* garde 'HD' */ }
+    }
+    return { url, quality, format: 'hls', headers: streamHeaders };
   } catch { return null; }
 }
 
@@ -679,10 +690,13 @@ async function extractLocally(embedUrl: string, extractor: string): Promise<Extr
     case 'lulustream':
     case 'streamwish':
     case 'filelions':
+    case 'livavid':
+      // livavid = famille LuluVdo/KVS : la voie /dl (tryDlEmbed) mint un token tnmr
+      // FRAIS + pose les headers CORS requis. Le packedJs générique sortait un master
+      // au token qui périmait avant lecture (-> 302/522). Cf. probeMaster à l'extraction.
       return await extractStreamWishFamily(embedUrl);
     case 'fsvid':
     case 'vidzy':
-    case 'livavid':
     case 'vidoza':
       return await extractPackedJs(embedUrl);
     case 'mailru':
@@ -850,7 +864,7 @@ export async function extractStream(
   //    MediaFlow sort une URL RELATIVE cassée ("/stream/…/master.m3u8" -> "relative URL
   //    without a base") ; notre voie /dl (extractStreamWishFamily) donne une URL CDN
   //    absolue fraîche. Extraction locale, puis livraison via le proxy du mode.
-  const LOCAL_ONLY: string[] = ['fsvid', 'vidzy', 'mailru', 'sibnet', 'lulustream', 'streamwish', 'filelions'];
+  const LOCAL_ONLY: string[] = ['fsvid', 'vidzy', 'mailru', 'sibnet', 'lulustream', 'streamwish', 'filelions', 'livavid'];
 
   // Try MediaFlow first if configured
   if (config?.useMediaFlow && config.mediaFlowUrl && !LOCAL_ONLY.includes(extractor)) {

@@ -20,7 +20,7 @@ const UNKNOWN = -1;    // erreur passagère : ne pas cacher, ne rien changer
 // Résultat de sonde EN UN SEUL fetch : nb de langues audio (langs >=0, ou BLOCKED
 // /UNKNOWN) + hauteur de la variante la plus haute (résolution réelle, ou null).
 interface Probe { langs: number; height: number | null; }
-async function probeMaster(url: string, headers?: Record<string, string>): Promise<Probe> {
+export async function probeMaster(url: string, headers?: Record<string, string>): Promise<Probe> {
   return cached<Probe>(
     `multiaudio:${url}`,
     PROBE_TTL_MS,
