@@ -3,738 +3,484 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>LooStream - Configuration</title>
+    <title>LooStream — Installation</title>
     <style>
-        * {
-            box-sizing: border-box;
-            margin: 0;
-            padding: 0;
-        }
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
-            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
-            min-height: 100vh;
-            color: #fff;
-            padding: 20px;
-        }
-        .container {
-            max-width: 600px;
-            margin: 0 auto;
-        }
-        .logo {
-            text-align: center;
-            margin-bottom: 30px;
-        }
-        .logo img {
-            width: 100px;
-            height: 100px;
-            border-radius: 20px;
-        }
-        .logo h1 {
-            margin-top: 15px;
-            font-size: 2em;
-        }
-        .card {
-            background: rgba(255, 255, 255, 0.1);
-            border-radius: 15px;
-            padding: 25px;
-            margin-bottom: 20px;
-            backdrop-filter: blur(10px);
-        }
-        .card h2 {
-            margin-bottom: 15px;
-            color: #7f5af0;
-        }
-        .option {
-            background: rgba(255, 255, 255, 0.05);
-            border: 2px solid transparent;
-            border-radius: 10px;
-            padding: 20px;
-            margin-bottom: 15px;
-            cursor: pointer;
-            transition: all 0.3s;
-        }
-        .option:hover {
-            background: rgba(255, 255, 255, 0.1);
-        }
-        .option.selected {
-            border-color: #7f5af0;
-            background: rgba(127, 90, 240, 0.2);
-        }
-        .option h3 {
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            margin-bottom: 10px;
-        }
-        .option p {
-            color: #aaa;
-            font-size: 0.9em;
-            line-height: 1.5;
-        }
-        .badge {
-            font-size: 0.7em;
-            padding: 3px 8px;
-            border-radius: 5px;
-            background: #7f5af0;
-        }
-        .badge.warning {
-            background: #f59e0b;
-        }
-        .warning-box {
-            background: rgba(245, 158, 11, 0.2);
-            border: 1px solid #f59e0b;
-            border-radius: 10px;
-            padding: 15px;
-            margin-top: 15px;
-            display: none;
-        }
-        .warning-box.show {
-            display: block;
-        }
-        .warning-box p {
-            color: #fcd34d;
-            font-size: 0.85em;
-        }
-        .input-group {
-            margin-top: 15px;
-            display: none;
-        }
-        .input-group.show {
-            display: block;
-        }
-        .input-group label {
-            display: block;
-            margin-bottom: 5px;
-            color: #aaa;
-            font-size: 0.9em;
-        }
-        .input-group input {
-            width: 100%;
-            padding: 12px;
-            border: none;
-            border-radius: 8px;
-            background: rgba(255, 255, 255, 0.1);
-            color: #fff;
-            font-size: 1em;
-            margin-bottom: 10px;
-        }
-        .input-group input::placeholder {
-            color: #666;
-        }
-        .input-group a {
-            color: #7f5af0;
-            font-size: 0.85em;
-        }
-        .btn {
-            width: 100%;
-            padding: 15px;
-            border: none;
-            border-radius: 10px;
-            background: #7f5af0;
-            color: #fff;
-            font-size: 1.1em;
-            font-weight: bold;
-            cursor: pointer;
-            transition: all 0.3s;
-        }
-        .btn:hover {
-            background: #6b46e5;
-            transform: translateY(-2px);
-        }
-        .btn:disabled {
-            background: #444;
-            cursor: not-allowed;
-            transform: none;
-        }
-        .result {
-            margin-top: 20px;
-            display: none;
-        }
-        .result.show {
-            display: block;
-        }
-        .result input {
-            width: 100%;
-            padding: 12px;
-            border: none;
-            border-radius: 8px;
-            background: rgba(0, 0, 0, 0.3);
-            color: #7f5af0;
-            font-size: 0.9em;
-            margin-bottom: 10px;
-        }
-        .result .btn-copy {
-            background: #2cb67d;
-        }
-        .result .btn-copy:hover {
-            background: #24a06d;
-        }
-        .disclaimer {
-            margin-top: 30px;
-            padding: 15px;
-            background: rgba(255, 0, 0, 0.1);
-            border: 1px solid rgba(255, 0, 0, 0.3);
-            border-radius: 10px;
-            font-size: 0.8em;
-            color: #f87171;
-            line-height: 1.6;
-        }
-        .input-group select {
-            width: 100%;
-            padding: 12px;
-            border: none;
-            border-radius: 8px;
-            background: rgba(255, 255, 255, 0.1);
-            color: #fff;
-            font-size: 1em;
-            margin-bottom: 10px;
-            cursor: pointer;
-        }
-        .input-group select option {
-            background: #1a1a2e;
-            color: #fff;
-        }
-        .lang-list {
-            list-style: none;
-            padding: 0;
-            margin: 10px 0;
-        }
-        .lang-item {
-            background: rgba(255, 255, 255, 0.1);
-            border: 2px solid transparent;
-            border-radius: 8px;
-            padding: 12px 15px;
-            margin-bottom: 8px;
-            cursor: grab;
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            transition: all 0.2s;
-            user-select: none;
-        }
-        .lang-item:hover {
-            background: rgba(255, 255, 255, 0.15);
-        }
-        .lang-item.dragging {
-            opacity: 0.5;
-            border-color: #7f5af0;
-        }
-        .lang-item .drag-handle {
-            color: #666;
-            font-size: 1.2em;
-        }
-        .lang-item .lang-name {
-            flex: 1;
-        }
-        .lang-item .lang-desc {
-            color: #888;
-            font-size: 0.85em;
-        }
-        .lang-item .lang-toggle {
-            width: 18px;
-            height: 18px;
-            cursor: pointer;
-            flex-shrink: 0;
-            accent-color: #7f5af0;
-        }
-        .lang-item.excluded {
-            opacity: 0.4;
-        }
-        .lang-item.excluded .lang-name {
-            text-decoration: line-through;
-        }
-        .lang-item .position {
-            background: #7f5af0;
-            color: #fff;
-            width: 24px;
-            height: 24px;
-            border-radius: 50%;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-size: 0.8em;
-            font-weight: bold;
-        }
+      :root{
+        --bg:#0d0f16; --surface:#161923; --raised:#1c2130; --raised2:#232838;
+        --border:#282d3c; --border-soft:#1f2431;
+        --text:#e8ebf2; --muted:#8b93a7; --faint:#5c6377;
+        --accent:#5b93f5; --accent2:#7ea6ff; --accent-soft:rgba(91,147,245,.14);
+        --good:#35c28a; --warn:#e6a93e; --crit:#e5555b;
+        --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+        --mono:ui-monospace,"SF Mono",SFMono-Regular,Menlo,Consolas,monospace;
+      }
+      *{box-sizing:border-box;margin:0;padding:0}
+      body{
+        background:var(--bg); color:var(--text); font-family:var(--sans); font-size:14px; line-height:1.5;
+        -webkit-font-smoothing:antialiased; min-height:100vh;
+        background-image:radial-gradient(1100px 520px at 50% -14%, rgba(91,147,245,.10), transparent 62%);
+        padding:30px 16px 60px;
+      }
+      a{color:var(--accent2)}
+      .wrap{max-width:680px;margin:0 auto}
+      .brand{display:flex;align-items:center;gap:12px;justify-content:center;margin-bottom:20px}
+      .brand img{width:38px;height:38px;border-radius:9px}
+      .brand .txt h1{font-size:20px;letter-spacing:-.01em;margin:0}
+      .brand .txt p{margin:0;color:var(--muted);font-size:12.5px}
+
+      .card{background:var(--surface);border:1px solid var(--border);border-radius:18px;overflow:hidden;box-shadow:0 24px 70px -34px rgba(0,0,0,.85)}
+      .head{padding:22px 26px 18px;border-bottom:1px solid var(--border-soft)}
+      .head h2{margin:0 0 4px;font-size:19px;letter-spacing:-.02em}
+      .head p{margin:0;color:var(--muted);font-size:13.5px}
+
+      .steps{display:flex;gap:6px;padding:18px 26px 4px}
+      .step{flex:1;cursor:pointer;background:none;border:0;padding:0;text-align:left;font:inherit}
+      .step .bar{height:4px;border-radius:3px;background:var(--raised2);transition:background .2s}
+      .step.done .bar,.step.cur .bar{background:var(--accent)}
+      .step .lab{display:flex;gap:6px;align-items:center;margin-top:9px;color:var(--muted);font-size:11.5px;font-weight:600}
+      .step.cur .lab{color:var(--text)}
+      .step .no{width:18px;height:18px;border-radius:50%;display:grid;place-items:center;font-size:10.5px;font-weight:700;background:var(--raised2);color:var(--muted);flex:none}
+      .step.cur .no{background:var(--accent);color:#0d0f16}
+      .step.done .no{background:var(--good);color:#0d0f16}
+      .step .lab span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+
+      .body{padding:24px 26px;min-height:300px}
+      .wstep{display:none} .wstep.on{display:block;animation:fade .18s ease}
+      @keyframes fade{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
+      .eyebrow{font-size:11px;letter-spacing:.13em;text-transform:uppercase;color:var(--faint);font-weight:600;margin-bottom:14px}
+
+      .option{display:block;width:100%;text-align:left;padding:15px 16px;border:1px solid var(--border);border-radius:12px;background:var(--raised);cursor:pointer;transition:border-color .15s,background .15s;margin-bottom:11px;color:inherit;font:inherit}
+      .option:hover{border-color:#39415a}
+      .option.selected{border-color:var(--accent);background:var(--accent-soft)}
+      .option h3{font-size:14px;display:flex;align-items:center;gap:9px;margin-bottom:5px}
+      .option p{color:var(--muted);font-size:12.6px}
+      .badge{font-size:10px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--accent2);background:var(--accent-soft);padding:2px 8px;border-radius:999px}
+      .badge.warning{color:var(--warn);background:rgba(230,169,62,.14)}
+
+      .warning-box{display:none;background:rgba(230,169,62,.10);border:1px solid rgba(230,169,62,.25);border-radius:10px;padding:11px 13px;font-size:12.5px;color:#f0c469;margin-top:6px}
+      .warning-box.show{display:block}
+      .callout{background:var(--accent-soft);border:1px solid rgba(91,147,245,.25);border-radius:10px;padding:12px 14px;font-size:12.6px;color:var(--accent2);margin-bottom:16px}
+      .callout.sec{background:rgba(53,194,138,.10);border-color:rgba(53,194,138,.25);color:#6fd6a8}
+
+      .input-group{display:none;margin-bottom:16px}
+      .input-group.show{display:block}
+      .input-group:last-child{margin-bottom:0}
+      label{display:block;font-size:12.5px;font-weight:600;margin-bottom:7px;margin-top:4px}
+      .hint{color:var(--faint);font-weight:500}
+      input,select{width:100%;font:inherit;color:var(--text);background:var(--bg);border:1px solid var(--border);border-radius:10px;padding:11px 13px;outline:none;transition:border-color .15s,box-shadow .15s}
+      input.mono{font-family:var(--mono);font-size:12.5px}
+      input:focus,select:focus{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
+      input::placeholder{color:var(--faint)}
+      .sub{color:var(--faint);font-size:12px;margin-top:8px}
+      #mf-config{border-left:2px solid var(--accent);padding-left:14px;margin-top:4px}
+
+      .qtoggles{display:flex;flex-wrap:wrap;gap:8px}
+      .qt{display:inline-flex;align-items:center;gap:7px;padding:7px 13px;border:1px solid var(--border);border-radius:999px;background:var(--raised);cursor:pointer;font-weight:600;font-size:13px;color:var(--muted);transition:all .13s;user-select:none;width:auto}
+      .qt.on{border-color:var(--accent);background:var(--accent-soft);color:var(--text)}
+      .qt.off{text-decoration:line-through;opacity:.55}
+      .qt .dot{width:8px;height:8px;border-radius:50%;background:var(--faint)}
+      .qt.on .dot{background:var(--accent)}
+
+      .lang-list{list-style:none;display:flex;flex-direction:column;gap:8px}
+      .lang-item{display:flex;align-items:center;gap:11px;padding:10px 13px;border:1px solid var(--border);border-radius:10px;background:var(--raised);cursor:grab}
+      .lang-item.dragging{opacity:.5}
+      .lang-item.excluded{opacity:.5}
+      .lang-item.excluded .lang-name{text-decoration:line-through}
+      .lang-item .position{width:20px;height:20px;border-radius:6px;background:var(--raised2);display:grid;place-items:center;font-size:11px;font-weight:700;color:var(--muted);flex:none}
+      .lang-item .drag-handle{color:var(--faint)}
+      .lang-item .lang-name{font-weight:600}
+      .lang-item .lang-desc{color:var(--muted);font-size:12px;margin-left:auto}
+      .lang-item input[type=checkbox]{width:16px;height:16px;accent-color:var(--accent);flex:none}
+
+      .btn{font:inherit;font-weight:600;cursor:pointer;border-radius:10px;padding:11px 16px;border:1px solid var(--border);background:var(--raised2);color:var(--text);transition:transform .1s,border-color .15s,background .15s}
+      .btn:hover{border-color:#3a415a}
+      .btn:active{transform:translateY(1px)}
+      .btn.primary{background:linear-gradient(150deg,var(--accent),#3f6fd6);border-color:transparent;color:#fff;box-shadow:0 10px 22px -12px rgba(91,147,245,.8)}
+      .btn.ghost{background:transparent}
+      .foot{display:flex;align-items:center;gap:10px;padding:18px 26px;border-top:1px solid var(--border-soft)}
+      .foot .right{margin-left:auto}
+
+      .result{display:none;margin-top:18px}
+      .result.show{display:block;animation:fade .18s ease}
+      .result label{margin-top:0}
+      .result input{font-family:var(--mono);font-size:12px;color:var(--accent2);margin-bottom:10px}
+
+      .disclaimer{color:var(--faint);font-size:11.5px;text-align:center;margin-top:18px;line-height:1.6}
+      :focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+      @media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
+      @media (max-width:540px){.step .lab span{display:none}}
     </style>
 </head>
 <body>
-    <div class="container">
-        <div class="logo">
-            <img src="/logo.png" alt="LooStream">
-            <h1>LooStream</h1>
-            <p style="color: #aaa; margin-top: 5px;">Configuration de l'addon</p>
+    <div class="wrap">
+      <div class="brand"><img src="/logo.png" alt="LooStream"><div class="txt"><h1>LooStream</h1><p>Installation de l'addon</p></div></div>
+      <div class="card">
+        <div class="head">
+          <h2>Installer LooStream</h2>
+          <p>Quelques étapes pour générer ton lien d'installation Stremio / Nuvio.</p>
         </div>
 
-        <div class="card">
-            <h2>Mode de proxy</h2>
+        <div class="steps">
+          <button class="step cur" onclick="go(1)"><div class="bar"></div><div class="lab"><span class="no">1</span><span>Hébergeur</span></div></button>
+          <button class="step" onclick="go(2)"><div class="bar"></div><div class="lab"><span class="no">2</span><span>Mode</span></div></button>
+          <button class="step" onclick="go(3)"><div class="bar"></div><div class="lab"><span class="no">3</span><span>Clés</span></div></button>
+          <button class="step" onclick="go(4)"><div class="bar"></div><div class="lab"><span class="no">4</span><span>Préférences</span></div></button>
+          <button class="step" onclick="go(5)"><div class="bar"></div><div class="lab"><span class="no">5</span><span>Lien</span></div></button>
+        </div>
 
-            <div class="option selected" data-mode="mediaflow" onclick="selectMode('mediaflow')">
-                <h3>
-                    <span>☁️</span> MediaFlow Proxy
-                    <span class="badge">Partagé / public</span>
-                </h3>
-                <p>Tout ce qui peut se lire en <strong>direct</strong> passe en direct (0 bande passante). Ce qui ne peut pas (NetMirror, hôtes bloqués) passe par un serveur MediaFlow externe. Idéal pour un usage partagé ou public.</p>
+        <div class="body">
+          <!-- 1 : Hébergeur / clé propriétaire -->
+          <div class="wstep on" id="s1">
+            <div class="eyebrow">Es-tu l'hébergeur de ce LooStream ?</div>
+            <div class="callout sec">🔒 Le <b>proxy local</b> (relais serveur) est réservé à l'hébergeur : il se débloque avec la <b>clé propriétaire</b> ci-dessous. Sans elle, l'option reste masquée — et même en trafiquant le lien, le serveur refuse le local (il retombe sur les modes autorisés, et le proxy exige la clé d'accès).</div>
+            <div class="section" id="owner-key-section" style="display:none;">
+              <label>Clé propriétaire <span class="hint">— laisse vide si tu installes juste l'addon</span></label>
+              <input type="text" id="owner-key" class="mono" placeholder="colle ta clé propriétaire (hébergeur)" oninput="onOwnerKeyChange()">
             </div>
+            <p class="sub">La plupart des gens laissent ce champ vide et continuent.</p>
+          </div>
 
-            <div class="input-group" id="mf-config">
-                <label>URL MediaFlow</label>
-                <input type="url" id="mf-url" placeholder="https://votre-mediaflow.com" value="">
-                <label>Mot de passe MediaFlow</label>
-                <input type="password" id="mf-password" placeholder="Mot de passe">
-                <p style="margin-top: 10px;">
-                    <a href="https://github.com/mhdzumair/mediaflow-proxy" target="_blank">📦 Installer MediaFlow Proxy</a>
-                </p>
-            </div>
-
-            <div class="option" data-mode="local" onclick="selectMode('local')">
-                <h3>
-                    <span>🏠</span> Proxy Local
-                    <span class="badge warning">Avancé</span>
-                </h3>
-                <p>Tout ce qui peut se lire en <strong>direct</strong> passe en direct (0 bande passante). Ce qui ne peut pas (NetMirror, hôtes bloqués) passe par ce serveur. Aucune dépendance externe. Usage personnel (1-3 utilisateurs).</p>
-            </div>
-
+          <!-- 2 : Mode -->
+          <div class="wstep" id="s2">
+            <div class="eyebrow">Comment les flux te sont livrés</div>
             <div class="option" data-mode="direct" onclick="selectMode('direct')">
-                <h3>
-                    <span>🚀</span> Direct — sans proxy
-                    <span class="badge">Recommandé</span>
-                </h3>
-                <p>Stremio lit directement depuis les CDN. <strong>Zéro bande passante serveur.</strong> Les flux qui nécessitent un proxy (NetMirror, hôtes bloqués) ne sont <strong>pas proposés</strong>. Recommandé sur Stremio natif (le player web bute sur le CORS).</p>
+              <h3><span>🚀</span> Direct — sans proxy <span class="badge">Recommandé</span></h3>
+              <p>Stremio lit directement depuis les CDN. Zéro bande passante serveur. Les flux qui exigent un proxy (NetMirror, hôtes bloqués) ne sont pas proposés.</p>
             </div>
-
+            <div class="option selected" data-mode="mediaflow" onclick="selectMode('mediaflow')">
+              <h3><span>☁️</span> MediaFlow <span class="badge">Partagé / public</span></h3>
+              <p>Ce qui peut se lire en direct passe en direct (0 bande passante) ; le reste passe par un MediaFlow externe. Idéal pour un usage partagé.</p>
+            </div>
+            <div class="option" data-mode="local" onclick="selectMode('local')">
+              <h3><span>🏠</span> Proxy local <span class="badge warning">Hébergeur</span></h3>
+              <p>Ton serveur relaie ce qui ne passe pas en direct. Couvre le plus de sources. Protégé par la clé d'accès. Débloqué par la clé propriétaire (étape 1).</p>
+            </div>
             <div class="warning-box" id="local-warning">
-                <p>⚠️ <strong>Attention :</strong> En mode local, TOUT le trafic vidéo passe par ce serveur. Un flux 4K consomme ~25 Mbps. Assurez-vous d'avoir une bande passante suffisante. Non recommandé pour un usage public.</p>
+              <p>⚠️ En mode local, tout le trafic vidéo non-direct passe par ton serveur (un 4K ≈ 25 Mbps). À réserver à l'hébergeur, non recommandé en public.</p>
             </div>
-        </div>
+          </div>
 
-        <div class="card">
-            <h2>🎬 Clé API TMDB</h2>
-            <p style="color: #aaa; font-size: 0.9em; margin-bottom: 15px;">Nécessaire pour rechercher les films et séries.</p>
+          <!-- 3 : Clés -->
+          <div class="wstep" id="s3">
+            <div class="eyebrow">Tes clés — privées, jamais partagées</div>
+            <div class="callout">🔑 La clé TMDB résout titres, saisons et épisodes. Gratuite en 2 min sur <a href="https://www.themoviedb.org/settings/api" target="_blank">themoviedb.org → Paramètres → API</a>.</div>
             <div class="input-group show">
-                <label>Clé API TMDB (v3)</label>
-                <input type="text" id="tmdb-key" placeholder="Votre clé API TMDB">
-                <p style="margin-top: 5px;">
-                    <a href="https://www.themoviedb.org/settings/api" target="_blank">🔑 Obtenir une clé gratuite sur TMDB</a>
-                </p>
+              <label>Clé API TMDB (v3)</label>
+              <input type="text" id="tmdb-key" class="mono" placeholder="ex. 80860a1db80b00fafc3a94b4f76da5d1">
             </div>
-        </div>
+            <div class="input-group" id="mf-config">
+              <label>URL MediaFlow <span class="hint">— requis pour le mode MediaFlow</span></label>
+              <input type="url" id="mf-url" class="mono" placeholder="https://votre-mediaflow.ovh">
+              <label>Mot de passe MediaFlow</label>
+              <input type="password" id="mf-password" placeholder="••••••••">
+              <p class="sub"><a href="https://github.com/mhdzumair/mediaflow-proxy" target="_blank">📦 Installer MediaFlow Proxy</a></p>
+            </div>
+            <div class="input-group show" style="margin-top:16px">
+              <label>Clé d'accès <span class="hint">— seulement si l'hébergeur l'exige</span></label>
+              <input type="text" id="access-key" class="mono" placeholder="optionnel — laisse vide si non requise">
+            </div>
+          </div>
 
-        <div class="card">
-            <h2>🔒 Clé d'accès</h2>
-            <p style="color: #aaa; font-size: 0.9em; margin-bottom: 15px;">Optionnel. À renseigner <strong>uniquement</strong> si l'hébergeur a activé une clé d'accès (variable <code>ACCESS_KEY</code>). Sinon, laissez vide.</p>
+          <!-- 4 : Préférences -->
+          <div class="wstep" id="s4">
+            <div class="eyebrow">Qualités, tri &amp; langues</div>
             <div class="input-group show">
-                <label>Clé d'accès (optionnel)</label>
-                <input type="text" id="access-key" placeholder="Laissez vide si non requise">
+              <label>Qualités à afficher <span class="hint">— clique pour exclure (ex. pas de 4K, pas de 360p)</span></label>
+              <div class="qtoggles" id="quality-toggles">
+                <button type="button" class="qt on" data-q="4K" onclick="qt(this)"><span class="dot"></span>4K</button>
+                <button type="button" class="qt on" data-q="1080p" onclick="qt(this)"><span class="dot"></span>1080p</button>
+                <button type="button" class="qt on" data-q="720p" onclick="qt(this)"><span class="dot"></span>720p</button>
+                <button type="button" class="qt on" data-q="480p" onclick="qt(this)"><span class="dot"></span>480p</button>
+                <button type="button" class="qt on" data-q="360p" onclick="qt(this)"><span class="dot"></span>360p</button>
+              </div>
             </div>
-        </div>
+            <div class="input-group show" style="margin-top:18px">
+              <label>Qualité préférée <span class="hint">— remontée en tête au tri</span></label>
+              <select id="pref-quality">
+                <option value="1080p">1080p (Full HD)</option>
+                <option value="4K">4K (Ultra HD)</option>
+                <option value="720p">720p (HD)</option>
+                <option value="480p">480p (SD)</option>
+              </select>
+            </div>
+            <div class="input-group show" style="margin-top:18px">
+              <label>Priorité de tri</label>
+              <select id="sort-by">
+                <option value="language">Langue puis qualité (défaut)</option>
+                <option value="quality">Qualité puis langue</option>
+              </select>
+              <p class="sub">« Langue puis qualité » : ton ordre de langues d'abord, meilleure qualité en tête de chaque langue. « Qualité puis langue » : la meilleure qualité remonte toutes langues confondues.</p>
+            </div>
+            <div class="input-group show" style="margin-top:18px">
+              <label>Réponse rapide dès <span class="hint">— nb de flux suffisant</span></label>
+              <select id="min-streams">
+                <option value="3">3 — le plus rapide</option>
+                <option value="5" selected>5 — recommandé</option>
+                <option value="8">8 — plus de choix</option>
+                <option value="0">Aucun — attendre toutes les sources (lent)</option>
+              </select>
+            </div>
+            <div class="input-group show" style="margin-top:18px">
+              <label>Ordre des langues <span class="hint">— glisse pour réordonner, décoche pour exclure</span></label>
+              <ul class="lang-list" id="lang-list">
+                <li class="lang-item" draggable="true" data-lang="MULTI">
+                  <input type="checkbox" class="lang-toggle" draggable="false" checked onmousedown="event.stopPropagation()">
+                  <span class="position">1</span><span class="drag-handle">⋮⋮</span><span class="lang-name">MULTI</span><span class="lang-desc">VF + VO</span>
+                </li>
+                <li class="lang-item" draggable="true" data-lang="VF">
+                  <input type="checkbox" class="lang-toggle" draggable="false" checked onmousedown="event.stopPropagation()">
+                  <span class="position">2</span><span class="drag-handle">⋮⋮</span><span class="lang-name">VF</span><span class="lang-desc">Version française</span>
+                </li>
+                <li class="lang-item" draggable="true" data-lang="VOSTFR">
+                  <input type="checkbox" class="lang-toggle" draggable="false" checked onmousedown="event.stopPropagation()">
+                  <span class="position">3</span><span class="drag-handle">⋮⋮</span><span class="lang-name">VOSTFR</span><span class="lang-desc">VO sous-titrée FR</span>
+                </li>
+                <li class="lang-item" draggable="true" data-lang="VO">
+                  <input type="checkbox" class="lang-toggle" draggable="false" checked onmousedown="event.stopPropagation()">
+                  <span class="position">4</span><span class="drag-handle">⋮⋮</span><span class="lang-name">VO</span><span class="lang-desc">Version originale</span>
+                </li>
+              </ul>
+            </div>
+          </div>
 
-        <div class="section" id="owner-key-section" style="display:none;">
-            <h2>👑 Clé propriétaire</h2>
-            <p style="color: #aaa; font-size: 0.9em; margin-bottom: 15px;">Réservé à l'hébergeur. Débloque le <strong>proxy local</strong> pour VOUS même si les modes sont restreints pour les partages (variable <code>MODE</code>). Les liens de vos amis, sans cette clé, restent limités. Laissez vide pour un partage normal.</p>
+          <!-- 5 : Pseudo + lien -->
+          <div class="wstep" id="s5">
+            <div class="eyebrow">Presque fini</div>
             <div class="input-group show">
-                <label>Clé propriétaire (optionnel)</label>
-                <input type="text" id="owner-key" placeholder="Laissez vide si vous n'êtes pas l'hébergeur" oninput="onOwnerKeyChange()">
+              <label>Pseudo <span class="hint">— optionnel, aide le support à te retrouver</span></label>
+              <input type="text" id="pseudo" maxlength="24" placeholder="ex. Wallace" autocomplete="off">
+              <p class="sub">Lettres, chiffres, espace, <code>_ . -</code> — 24 max. Laisse vide pour rester anonyme.</p>
             </div>
+            <div class="result" id="result">
+              <label>Ton lien d'installation</label>
+              <input type="text" id="install-url" readonly>
+              <button class="btn primary" style="width:100%" onclick="copyAndInstall()">➕ Copier et ouvrir dans Stremio</button>
+            </div>
+          </div>
         </div>
 
-        <div class="card">
-            <h2>⚙️ Préférences</h2>
-            <p style="color: #aaa; font-size: 0.9em; margin-bottom: 15px;">Filtrer et trier les streams selon vos préférences.</p>
-
-            <div class="input-group show">
-                <label>Qualité préférée</label>
-                <select id="pref-quality">
-                    <option value="1080p">1080p (Full HD)</option>
-                    <option value="4K">4K (Ultra HD)</option>
-                    <option value="720p">720p (HD)</option>
-                    <option value="480p">480p (SD)</option>
-                </select>
-            </div>
-
-            <div class="input-group show" style="margin-top: 20px;">
-                <label>Priorité de tri</label>
-                <select id="sort-by">
-                    <option value="language">Langue puis qualité (défaut)</option>
-                    <option value="quality">Qualité puis langue</option>
-                </select>
-                <p style="color: #888; font-size: 0.82em; margin-top: 8px;">
-                    « Langue puis qualité » classe d'abord selon l'ordre de vos langues, puis met la meilleure qualité
-                    en tête de chaque langue. « Qualité puis langue » fait remonter la meilleure qualité (proche de votre
-                    préférence) <em>toutes langues confondues</em> — ex. un 4K VF passe devant une MULTI 1080p.
-                </p>
-            </div>
-
-            <div class="input-group show" style="margin-top: 20px;">
-                <label>Nombre de résultats suffisant (réponse rapide)</label>
-                <select id="min-streams">
-                    <option value="3">3 — le plus rapide</option>
-                    <option value="5" selected>5 — recommandé</option>
-                    <option value="8">8 — plus de choix</option>
-                    <option value="0">Aucun — attendre toutes les sources (lent)</option>
-                </select>
-                <p style="color: #888; font-size: 0.82em; margin-top: 8px;">
-                    Dès qu'on a ce nombre de streams correspondant à vos préférences (langue <em>et</em> qualité,
-                    toutes langues acceptées confondues), la réponse part sans attendre les sources les plus lentes.
-                    Celles-ci continuent en arrière-plan et seront disponibles instantanément au prochain lancement.
-                </p>
-            </div>
-
-            <div class="input-group show" style="margin-top: 20px;">
-                <label>Langues — décocher pour exclure, glisser pour réordonner</label>
-                <ul class="lang-list" id="lang-list">
-                    <li class="lang-item" draggable="true" data-lang="MULTI">
-                        <input type="checkbox" class="lang-toggle" draggable="false" checked onmousedown="event.stopPropagation()">
-                        <span class="position">1</span>
-                        <span class="drag-handle">☰</span>
-                        <span class="lang-name">MULTI</span>
-                        <span class="lang-desc">VF + VO</span>
-                    </li>
-                    <li class="lang-item" draggable="true" data-lang="VF">
-                        <input type="checkbox" class="lang-toggle" draggable="false" checked onmousedown="event.stopPropagation()">
-                        <span class="position">2</span>
-                        <span class="drag-handle">☰</span>
-                        <span class="lang-name">VF</span>
-                        <span class="lang-desc">Version Française</span>
-                    </li>
-                    <li class="lang-item" draggable="true" data-lang="VOSTFR">
-                        <input type="checkbox" class="lang-toggle" draggable="false" checked onmousedown="event.stopPropagation()">
-                        <span class="position">3</span>
-                        <span class="drag-handle">☰</span>
-                        <span class="lang-name">VOSTFR</span>
-                        <span class="lang-desc">VO sous-titrée FR</span>
-                    </li>
-                    <li class="lang-item" draggable="true" data-lang="VO">
-                        <input type="checkbox" class="lang-toggle" draggable="false" checked onmousedown="event.stopPropagation()">
-                        <span class="position">4</span>
-                        <span class="drag-handle">☰</span>
-                        <span class="lang-name">VO</span>
-                        <span class="lang-desc">Version Originale</span>
-                    </li>
-                </ul>
-            </div>
+        <div class="foot">
+          <button class="btn ghost" id="back" onclick="go(cur-1)" disabled>← Retour</button>
+          <div class="right"><button class="btn primary" id="next" onclick="nextOrGenerate()">Continuer →</button></div>
         </div>
-
-        <div class="card">
-            <h2>🙋 Pseudo <span style="font-size:0.6em;color:#888;text-transform:none;letter-spacing:0;">optionnel</span></h2>
-            <p style="color: #aaa; font-size: 0.9em; margin-bottom: 15px;">Un pseudo pour que le support puisse te retrouver si tu signales un souci. Facultatif — laisse vide pour rester anonyme. (Lettres, chiffres, espace, <code>_ . -</code> ; 24 caractères max.)</p>
-            <div class="input-group show">
-                <label>Pseudo</label>
-                <input type="text" id="pseudo" maxlength="24" placeholder="ex. Wallace" autocomplete="off">
-            </div>
-        </div>
-
-        <button class="btn" onclick="generateUrl()">Générer le lien d'installation</button>
-
-        <div class="result" id="result">
-            <div class="card">
-                <h2>Votre lien d'installation</h2>
-                <input type="text" id="install-url" readonly>
-                <button class="btn btn-copy" onclick="copyAndInstall()">📋 Copier et installer dans Stremio</button>
-            </div>
-        </div>
-
-        <div class="disclaimer">
-            <strong>⚠️ Avertissement :</strong> Cet addon est fourni à des fins éducatives uniquement. L'utilisateur est seul responsable de vérifier la légalité de son utilisation dans sa juridiction. Aucun contenu n'est hébergé par cet addon.
-        </div>
+      </div>
+      <p class="disclaimer">⚠️ Addon fourni à des fins éducatives uniquement. L'utilisateur est seul responsable de la légalité de son usage dans sa juridiction. Aucun contenu n'est hébergé par cet addon.</p>
     </div>
 
     <script>
         let currentMode = 'mediaflow';
         const baseUrl = window.location.origin;
+        var cur = 1, N = 5;
+
+        function go(n){
+          cur = Math.max(1, Math.min(N, n));
+          for (var i=1;i<=N;i++){
+            document.getElementById('s'+i).classList.toggle('on', i===cur);
+            var st = document.querySelectorAll('.steps .step')[i-1];
+            st.classList.toggle('cur', i===cur);
+            st.classList.toggle('done', i<cur);
+          }
+          document.getElementById('back').disabled = cur===1;
+          document.getElementById('next').textContent = cur===N ? 'Générer le lien ✓' : 'Continuer →';
+          document.querySelector('.body').scrollIntoView({block:'nearest'});
+        }
+        function nextOrGenerate(){ if (cur===N) generateUrl(); else go(cur+1); }
 
         function selectMode(mode) {
-            currentMode = mode;
+          currentMode = mode;
+          document.querySelectorAll('.option').forEach(opt => opt.classList.remove('selected'));
+          const el = document.querySelector(`[data-mode="${mode}"]`);
+          if (el) el.classList.add('selected');
+          document.getElementById('mf-config').classList.toggle('show', mode === 'mediaflow');
+          document.getElementById('local-warning').classList.toggle('show', mode === 'local');
+          document.getElementById('result').classList.remove('show');
+        }
 
-            document.querySelectorAll('.option').forEach(opt => {
-                opt.classList.remove('selected');
-            });
-            document.querySelector(`[data-mode="${mode}"]`).classList.add('selected');
-
-            document.getElementById('mf-config').classList.toggle('show', mode === 'mediaflow');
-            document.getElementById('local-warning').classList.toggle('show', mode === 'local');
-            document.getElementById('result').classList.remove('show');
+        // Qualités : toggle inclure/exclure ; getExcludeQualities = les paliers OFF.
+        function qt(el){ el.classList.toggle('on'); el.classList.toggle('off'); }
+        function getExcludeQualities(){
+          return [...document.querySelectorAll('#quality-toggles .qt')]
+            .filter(b => !b.classList.contains('on')).map(b => b.dataset.q);
         }
 
         function generateUrl() {
-            const tmdbKey = document.getElementById('tmdb-key').value.trim();
+          const tmdbKey = document.getElementById('tmdb-key').value.trim();
+          if (!tmdbKey) { alert('Entre ta clé API TMDB (étape 3).'); go(3); return; }
 
-            if (!tmdbKey) {
-                alert('Veuillez entrer votre clé API TMDB');
-                return;
-            }
+          let config = { tmdbKey };
 
-            let config = {
-                tmdbKey: tmdbKey
-            };
+          if (currentMode === 'mediaflow') {
+            const url = document.getElementById('mf-url').value.trim();
+            const password = document.getElementById('mf-password').value;
+            if (!url) { alert('Entre l\'URL de ton MediaFlow (étape 3).'); go(3); return; }
+            config.proxy = 'mediaflow'; config.mfUrl = url; config.mfPass = password;
+          } else {
+            config.proxy = currentMode; // 'local' ou 'direct'
+          }
 
-            if (currentMode === 'mediaflow') {
-                const url = document.getElementById('mf-url').value.trim();
-                const password = document.getElementById('mf-password').value;
+          config.prefQuality = document.getElementById('pref-quality').value;
+          config.langOrder = getLangOrder();
+          if (config.langOrder.length === 0) { alert('Coche au moins une langue (étape 4).'); go(4); return; }
+          config.minStreams = parseInt(document.getElementById('min-streams').value, 10);
+          config.sortBy = document.getElementById('sort-by').value;
 
-                if (!url) {
-                    alert('Veuillez entrer l\'URL de votre MediaFlow Proxy');
-                    return;
-                }
+          const ex = getExcludeQualities();
+          if (ex.length) config.excludeQualities = ex;
 
-                config.proxy = 'mediaflow';
-                config.mfUrl = url;
-                config.mfPass = password;
-            } else {
-                // 'local' ou 'direct' : pas de mfUrl/mfPass
-                config.proxy = currentMode;
-            }
+          const accessKey = document.getElementById('access-key').value.trim();
+          if (accessKey) config.accessKey = accessKey;
 
-            // Add preferences
-            config.prefQuality = document.getElementById('pref-quality').value;
-            config.langOrder = getLangOrder();
-            if (config.langOrder.length === 0) {
-                alert('Cochez au moins une langue.');
-                return;
-            }
-            config.minStreams = parseInt(document.getElementById('min-streams').value, 10);
-            config.sortBy = document.getElementById('sort-by').value;
+          const ownerKey = document.getElementById('owner-key').value.trim();
+          if (ownerKey) config.ownerKey = ownerKey;
 
-            // Clé d'accès optionnelle (seulement si l'hébergeur l'exige)
-            const accessKey = document.getElementById('access-key').value.trim();
-            if (accessKey) config.accessKey = accessKey;
+          const pseudo = document.getElementById('pseudo').value.trim();
+          if (pseudo) config.pseudo = pseudo;
 
-            // Clé propriétaire optionnelle (débloque le proxy local malgré MODE)
-            const ownerKey = document.getElementById('owner-key').value.trim();
-            if (ownerKey) config.ownerKey = ownerKey;
-
-            // Pseudo optionnel (support) — inclus seulement si non vide (rétro-compat)
-            const pseudo = document.getElementById('pseudo').value.trim();
-            if (pseudo) config.pseudo = pseudo;
-
-            // base64 UTF-8-safe : btoa() seul casse sur les accents (é, è…) d'un pseudo.
-            const configStr = btoa(unescape(encodeURIComponent(JSON.stringify(config))));
-            const installUrl = `${baseUrl}/${configStr}/manifest.json`;
-
-            document.getElementById('install-url').value = installUrl;
-            document.getElementById('result').classList.add('show');
+          // base64 UTF-8-safe : btoa() seul casse sur les accents (é, è…) d'un pseudo.
+          const configStr = btoa(unescape(encodeURIComponent(JSON.stringify(config))));
+          document.getElementById('install-url').value = `${baseUrl}/${configStr}/manifest.json`;
+          document.getElementById('result').classList.add('show');
         }
 
-        // Get language order from drag & drop list
         function getLangOrder() {
-            const items = document.querySelectorAll('#lang-list .lang-item');
-            // Uniquement les langues COCHÉES (les décochées sont exclues), dans l'ordre.
-            return Array.from(items)
-                .filter(item => item.querySelector('.lang-toggle').checked)
-                .map(item => item.dataset.lang);
+          const items = document.querySelectorAll('#lang-list .lang-item');
+          return Array.from(items)
+            .filter(item => item.querySelector('.lang-toggle').checked)
+            .map(item => item.dataset.lang);
         }
-
-        // Coche/décoche un item + met à jour son style (barré/estompé).
         function setLangChecked(item, checked) {
-            const cb = item.querySelector('.lang-toggle');
-            if (cb) cb.checked = checked;
-            item.classList.toggle('excluded', !checked);
+          const cb = item.querySelector('.lang-toggle');
+          if (cb) cb.checked = checked;
+          item.classList.toggle('excluded', !checked);
         }
-
-        // Branche les cases à cocher (style + masque le résultat au changement).
         function setupLangToggles() {
-            document.querySelectorAll('#lang-list .lang-toggle').forEach(cb => {
-                const item = cb.closest('.lang-item');
-                item.classList.toggle('excluded', !cb.checked);
-                cb.addEventListener('change', () => {
-                    item.classList.toggle('excluded', !cb.checked);
-                    document.getElementById('result')?.classList.remove('show');
-                });
+          document.querySelectorAll('#lang-list .lang-toggle').forEach(cb => {
+            const item = cb.closest('.lang-item');
+            item.classList.toggle('excluded', !cb.checked);
+            cb.addEventListener('change', () => {
+              item.classList.toggle('excluded', !cb.checked);
+              document.getElementById('result')?.classList.remove('show');
             });
+          });
         }
-
-        // Update position numbers after reorder
         function updatePositions() {
-            const items = document.querySelectorAll('#lang-list .lang-item');
-            items.forEach((item, index) => {
-                item.querySelector('.position').textContent = index + 1;
-            });
+          document.querySelectorAll('#lang-list .lang-item').forEach((item, index) => {
+            item.querySelector('.position').textContent = index + 1;
+          });
         }
-
-        // Drag & drop for language list
         function initDragAndDrop() {
-            const list = document.getElementById('lang-list');
-            let draggedItem = null;
-
-            list.addEventListener('dragstart', (e) => {
-                if (e.target.classList.contains('lang-item')) {
-                    draggedItem = e.target;
-                    e.target.classList.add('dragging');
-                }
-            });
-
-            list.addEventListener('dragend', (e) => {
-                if (e.target.classList.contains('lang-item')) {
-                    e.target.classList.remove('dragging');
-                    draggedItem = null;
-                    updatePositions();
-                }
-            });
-
-            list.addEventListener('dragover', (e) => {
-                e.preventDefault();
-                const afterElement = getDragAfterElement(list, e.clientY);
-                if (draggedItem) {
-                    if (afterElement == null) {
-                        list.appendChild(draggedItem);
-                    } else {
-                        list.insertBefore(draggedItem, afterElement);
-                    }
-                }
-            });
+          const list = document.getElementById('lang-list');
+          let draggedItem = null;
+          list.addEventListener('dragstart', (e) => {
+            if (e.target.classList.contains('lang-item')) { draggedItem = e.target; e.target.classList.add('dragging'); }
+          });
+          list.addEventListener('dragend', (e) => {
+            if (e.target.classList.contains('lang-item')) { e.target.classList.remove('dragging'); draggedItem = null; updatePositions(); }
+          });
+          list.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            const afterElement = getDragAfterElement(list, e.clientY);
+            if (draggedItem) {
+              if (afterElement == null) list.appendChild(draggedItem);
+              else list.insertBefore(draggedItem, afterElement);
+            }
+          });
         }
-
         function getDragAfterElement(container, y) {
-            const draggableElements = [...container.querySelectorAll('.lang-item:not(.dragging)')];
-            return draggableElements.reduce((closest, child) => {
-                const box = child.getBoundingClientRect();
-                const offset = y - box.top - box.height / 2;
-                if (offset < 0 && offset > closest.offset) {
-                    return { offset: offset, element: child };
-                } else {
-                    return closest;
-                }
-            }, { offset: Number.NEGATIVE_INFINITY }).element;
+          const els = [...container.querySelectorAll('.lang-item:not(.dragging)')];
+          return els.reduce((closest, child) => {
+            const box = child.getBoundingClientRect();
+            const offset = y - box.top - box.height / 2;
+            if (offset < 0 && offset > closest.offset) return { offset, element: child };
+            return closest;
+          }, { offset: Number.NEGATIVE_INFINITY }).element;
         }
 
         function copyAndInstall() {
-            const url = document.getElementById('install-url').value;
-            navigator.clipboard.writeText(url).then(() => {
-                window.location.href = url.replace('/manifest.json', '/manifest.json').replace('http', 'stremio');
-            });
+          const url = document.getElementById('install-url').value;
+          navigator.clipboard.writeText(url).then(() => {
+            window.location.href = url.replace('http', 'stremio');
+          });
         }
 
-        // Parse existing config from URL path
         function loadExistingConfig() {
-            const pathParts = window.location.pathname.split('/');
-            // URL format: /{config}/configure or /configure
-            if (pathParts.length >= 2 && pathParts[1] && pathParts[1] !== 'configure') {
-                try {
-                    // decode UTF-8-safe (miroir de l'encode) : gère les pseudos accentués.
-                    const config = JSON.parse(decodeURIComponent(escape(atob(pathParts[1]))));
-
-                    // Pre-fill TMDB key
-                    if (config.tmdbKey) {
-                        document.getElementById('tmdb-key').value = config.tmdbKey;
-                    }
-
-                    // Pre-fill pseudo
-                    if (config.pseudo) {
-                        document.getElementById('pseudo').value = config.pseudo;
-                    }
-
-                    // Pre-fill access key
-                    if (config.accessKey) {
-                        document.getElementById('access-key').value = config.accessKey;
-                    }
-
-                    // Pre-fill owner key (rend visible la section + débloquera le local via init)
-                    if (config.ownerKey) {
-                        document.getElementById('owner-key').value = config.ownerKey;
-                        document.getElementById('owner-key-section').style.display = '';
-                    }
-
-                    // Pre-fill proxy mode
-                    if (config.proxy === 'local') {
-                        selectMode('local');
-                    } else if (config.proxy === 'direct') {
-                        selectMode('direct');
-                    } else {
-                        selectMode('mediaflow');
-                        if (config.mfUrl) {
-                            document.getElementById('mf-url').value = config.mfUrl;
-                        }
-                        if (config.mfPass) {
-                            document.getElementById('mf-password').value = config.mfPass;
-                        }
-                    }
-
-                    // Pre-fill preferences
-                    if (config.prefQuality) {
-                        document.getElementById('pref-quality').value = config.prefQuality;
-                    }
-                    if (config.minStreams !== undefined && config.minStreams !== null) {
-                        document.getElementById('min-streams').value = String(config.minStreams);
-                    }
-                    if (config.sortBy) {
-                        document.getElementById('sort-by').value = config.sortBy;
-                    }
-                    if (config.langOrder && Array.isArray(config.langOrder)) {
-                        setLangOrder(config.langOrder);
-                    }
-
-                    console.log('Config loaded from URL:', config);
-                } catch (e) {
-                    console.log('No valid config in URL');
-                }
-            }
+          const pathParts = window.location.pathname.split('/');
+          if (pathParts.length >= 2 && pathParts[1] && pathParts[1] !== 'configure') {
+            try {
+              // decode UTF-8-safe (miroir de l'encode) : gère les pseudos accentués.
+              const config = JSON.parse(decodeURIComponent(escape(atob(pathParts[1]))));
+              if (config.tmdbKey) document.getElementById('tmdb-key').value = config.tmdbKey;
+              if (config.pseudo) document.getElementById('pseudo').value = config.pseudo;
+              if (config.accessKey) document.getElementById('access-key').value = config.accessKey;
+              if (config.ownerKey) {
+                document.getElementById('owner-key').value = config.ownerKey;
+                document.getElementById('owner-key-section').style.display = '';
+              }
+              if (config.proxy === 'local') selectMode('local');
+              else if (config.proxy === 'direct') selectMode('direct');
+              else {
+                selectMode('mediaflow');
+                if (config.mfUrl) document.getElementById('mf-url').value = config.mfUrl;
+                if (config.mfPass) document.getElementById('mf-password').value = config.mfPass;
+              }
+              if (config.prefQuality) document.getElementById('pref-quality').value = config.prefQuality;
+              if (config.minStreams !== undefined && config.minStreams !== null) document.getElementById('min-streams').value = String(config.minStreams);
+              if (config.sortBy) document.getElementById('sort-by').value = config.sortBy;
+              if (config.langOrder && Array.isArray(config.langOrder)) setLangOrder(config.langOrder);
+              if (config.excludeQualities && Array.isArray(config.excludeQualities)) {
+                document.querySelectorAll('#quality-toggles .qt').forEach(b => {
+                  const off = config.excludeQualities.includes(b.dataset.q);
+                  b.classList.toggle('on', !off); b.classList.toggle('off', off);
+                });
+              }
+            } catch (e) { console.log('No valid config in URL'); }
+          }
         }
 
-        // Set language order from config
         function setLangOrder(order) {
-            const list = document.getElementById('lang-list');
-            const items = {};
-
-            // Store all items by language
-            list.querySelectorAll('.lang-item').forEach(item => {
-                items[item.dataset.lang] = item;
-            });
-
-            // Clear and re-add in order — langues du config = COCHÉES, dans l'ordre.
-            list.innerHTML = '';
-            order.forEach(lang => {
-                if (items[lang]) {
-                    setLangChecked(items[lang], true);
-                    list.appendChild(items[lang]);
-                }
-            });
-
-            // Langues absentes du config = EXCLUES (décochées), à la fin.
-            Object.keys(items).forEach(lang => {
-                if (!order.includes(lang)) {
-                    setLangChecked(items[lang], false);
-                    list.appendChild(items[lang]);
-                }
-            });
-
-            updatePositions();
+          const list = document.getElementById('lang-list');
+          const items = {};
+          list.querySelectorAll('.lang-item').forEach(item => { items[item.dataset.lang] = item; });
+          list.innerHTML = '';
+          order.forEach(lang => { if (items[lang]) { setLangChecked(items[lang], true); list.appendChild(items[lang]); } });
+          Object.keys(items).forEach(lang => { if (!order.includes(lang)) { setLangChecked(items[lang], false); list.appendChild(items[lang]); } });
+          updatePositions();
         }
 
-        // Modes proposés : pilotés par MODE (.env) via /api/modes. Une clé propriétaire
-        // valide débloque les 3 (dont le proxy local) pour l'hébergeur.
+        // Modes proposés : pilotés par MODE (.env) via /api/modes. Clé propriétaire valide -> local débloqué.
         let allowedModes = ['direct', 'mediaflow', 'local'];
         async function applyModes(ownerKeyVal) {
-            let modes = ['direct', 'mediaflow', 'local'];
-            let def = 'mediaflow', ownerKeyAvailable = false;
-            try {
-                const url = '/api/modes' + (ownerKeyVal ? ('?ownerKey=' + encodeURIComponent(ownerKeyVal)) : '');
-                const j = await (await fetch(url)).json();
-                if (Array.isArray(j.modes) && j.modes.length) { modes = j.modes; def = j.default || modes[0]; }
-                ownerKeyAvailable = !!j.ownerKeyAvailable;
-            } catch (e) { /* fallback : tous */ }
-            allowedModes = modes;
-            document.querySelectorAll('.option[data-mode]').forEach(opt => {
-                opt.style.display = modes.includes(opt.dataset.mode) ? '' : 'none';
-            });
-            // Champ propriétaire visible seulement si l'hébergeur a configuré OWNER_KEY.
-            if (ownerKeyAvailable) document.getElementById('owner-key-section').style.display = '';
-            if (!modes.includes(currentMode)) selectMode(def);
-            return def;
+          let modes = ['direct', 'mediaflow', 'local'];
+          let def = 'mediaflow', ownerKeyAvailable = false;
+          try {
+            const url = '/api/modes' + (ownerKeyVal ? ('?ownerKey=' + encodeURIComponent(ownerKeyVal)) : '');
+            const j = await (await fetch(url)).json();
+            if (Array.isArray(j.modes) && j.modes.length) { modes = j.modes; def = j.default || modes[0]; }
+            ownerKeyAvailable = !!j.ownerKeyAvailable;
+          } catch (e) { /* fallback : tous */ }
+          allowedModes = modes;
+          document.querySelectorAll('.option[data-mode]').forEach(opt => {
+            opt.style.display = modes.includes(opt.dataset.mode) ? '' : 'none';
+          });
+          // Champ propriétaire visible seulement si l'hébergeur a configuré OWNER_KEY.
+          if (ownerKeyAvailable) document.getElementById('owner-key-section').style.display = '';
+          if (!modes.includes(currentMode)) selectMode(def);
+          return def;
         }
 
         let ownerKeyDebounce;
         function onOwnerKeyChange() {
-            clearTimeout(ownerKeyDebounce);
-            ownerKeyDebounce = setTimeout(() => applyModes(document.getElementById('owner-key').value.trim()), 350);
+          clearTimeout(ownerKeyDebounce);
+          ownerKeyDebounce = setTimeout(() => applyModes(document.getElementById('owner-key').value.trim()), 350);
         }
 
         async function init() {
-            await applyModes('');
-            initDragAndDrop();
-            setupLangToggles();
-            loadExistingConfig();
-            const ok = document.getElementById('owner-key').value.trim();
-            if (ok) await applyModes(ok); // débloque le local si la clé du lien est valide
+          await applyModes('');
+          initDragAndDrop();
+          setupLangToggles();
+          loadExistingConfig();
+          const ok = document.getElementById('owner-key').value.trim();
+          if (ok) await applyModes(ok);
         }
         init();
     </script>
