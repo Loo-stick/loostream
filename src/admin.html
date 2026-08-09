@@ -637,6 +637,11 @@ async function loadPartage() {
         const poolLive = st.netfreeSocksPool
             ? `${np.live}/${np.target} SOCKS vivants · courant : ${np.current ? esc(np.current) : 'scan en cours…'}`
             : '';
+        const capBadge = st.captureAllLogs ? '<span class="badge on">activé</span>' : '<span class="badge off">désactivé (problèmes uniquement)</span>';
+        const capSrc = `<span class="badge src">source : ${st.captureAllLogsSource === 'file' ? 'admin' : '.env'}</span>`;
+        const capToggle = st.captureAllLogs
+            ? `<button class="btn small" onclick="setCaptureAll(false)">Désactiver</button>`
+            : `<button class="btn small" onclick="setCaptureAll(true)">Activer</button>`;
         box.innerHTML = `
             <div style="margin-bottom:22px;">
                 <div style="font-weight:600;margin-bottom:6px;">Modes de livraison proposés <span class="badge src">source : ${st.modeSource === 'file' ? 'admin' : (st.modeSource === 'env' ? '.env' : 'défaut (tous)')}</span></div>
@@ -671,6 +676,14 @@ async function loadPartage() {
                     <button class="btn secondary small" onclick="loadPartage()">↻ Rafraîchir l'état</button>
                     <span style="color:var(--muted);font-size:0.85em;">${poolLive}</span>
                     <span class="cfg-msg" id="msg-nfpool"></span></div>
+            </div>
+            <div style="border-top:1px solid rgba(255,255,255,0.08);padding-top:18px;margin-top:22px;">
+                <div style="font-weight:600;margin-bottom:6px;">Capture de tous les logs ${capBadge}${capSrc}</div>
+                <div style="font-size:0.8em;color:var(--dim);margin-bottom:10px;">Par défaut, la trace détaillée (vue <b>Utilisateurs</b>) n'est stockée que pour les requêtes à <b>problème</b> (0 flux / erreur). Active ceci pour capturer AUSSI les requêtes réussies — utile pour du débug ponctuel, mais ça grossit la base (rétention 30 j). À remettre sur off après.</div>
+                <div class="cfg-row">
+                    ${capToggle}
+                    <button class="btn secondary small" onclick="loadPartage()">↻ Rafraîchir l'état</button>
+                    <span class="cfg-msg" id="msg-capall"></span></div>
             </div>`;
     } catch (e) { if (e.message !== 'session') box.innerHTML = `<div class="error">Erreur: ${esc(e.message)}</div>`; }
 }
@@ -678,6 +691,14 @@ async function setNetfreePool(on) {
     const msg = document.getElementById('msg-nfpool'); if (msg) { msg.textContent = '…'; msg.className = 'cfg-msg'; }
     try {
         const r = await api('/api/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ netfreeSocksPool: on }) });
+        const j = await r.json(); if (!r.ok || j.ok === false) throw new Error(j.error || 'HTTP ' + r.status);
+        loadPartage();
+    } catch (e) { if (e.message !== 'session' && msg) { msg.textContent = '✗ ' + e.message; msg.className = 'cfg-msg err'; } }
+}
+async function setCaptureAll(on) {
+    const msg = document.getElementById('msg-capall'); if (msg) { msg.textContent = '…'; msg.className = 'cfg-msg'; }
+    try {
+        const r = await api('/api/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ captureAllLogs: on }) });
         const j = await r.json(); if (!r.ok || j.ok === false) throw new Error(j.error || 'HTTP ' + r.status);
         loadPartage();
     } catch (e) { if (e.message !== 'session' && msg) { msg.textContent = '✗ ' + e.message; msg.className = 'cfg-msg err'; } }

@@ -1913,7 +1913,7 @@ app.get('/api/settings', (_req, res) => {
 });
 app.post('/api/settings', requireAdminSession, jsonBody, (req, res) => {
   const b = req.body || {};
-  const patch: { mode?: string | null; ownerKey?: string | null; autoWhitelist?: boolean | null; netfreeSocksPool?: boolean | null } = {};
+  const patch: { mode?: string | null; ownerKey?: string | null; autoWhitelist?: boolean | null; netfreeSocksPool?: boolean | null; captureAllLogs?: boolean | null } = {};
 
   if ('mode' in b) {
     if (b.mode === null) patch.mode = null;
@@ -1944,6 +1944,11 @@ app.post('/api/settings', requireAdminSession, jsonBody, (req, res) => {
     if (b.netfreeSocksPool === null) patch.netfreeSocksPool = null;
     else if (typeof b.netfreeSocksPool === 'boolean') patch.netfreeSocksPool = b.netfreeSocksPool;
     else return res.status(400).json({ ok: false, error: 'netfreeSocksPool doit être un booléen' });
+  }
+  if ('captureAllLogs' in b) {
+    if (b.captureAllLogs === null) patch.captureAllLogs = null;
+    else if (typeof b.captureAllLogs === 'boolean') patch.captureAllLogs = b.captureAllLogs;
+    else return res.status(400).json({ ok: false, error: 'captureAllLogs doit être un booléen' });
   }
 
   updateSettings(patch);
