@@ -150,6 +150,7 @@ interface UserConfig {
   minStreams?: number;   // early exit: stop waiting once this many wanted streams are in (0 = wait for all)
   sortBy?: 'language' | 'quality'; // priorité de tri : langue d'abord (défaut) ou qualité d'abord
   pseudo?: string;       // libellé libre auto-déclaré (support) — optionnel, cf. src/pseudo.ts
+  excludeQualities?: string[]; // qualités à EXCLURE (ex. ["4K","360p"]) — filtre opt-in, cf. prefs.ts
 }
 
 // Stream with metadata for filtering/sorting
@@ -261,6 +262,13 @@ function parseConfig(configStr: string): UserConfig | null {
     // Priorité de tri : 'quality' (qualité d'abord) sinon 'language' (défaut).
     const sortBy: 'language' | 'quality' = parsed.sortBy === 'quality' ? 'quality' : 'language';
 
+    // Qualités à exclure (opt-in) : sous-ensemble des paliers offerts. Vide -> absent.
+    const validExclude = ['4K', '1080p', '720p', '480p', '360p'];
+    let excludeQualities = Array.isArray(parsed.excludeQualities)
+      ? parsed.excludeQualities.filter((q: unknown) => typeof q === 'string' && validExclude.includes(q))
+      : undefined;
+    if (excludeQualities && excludeQualities.length === 0) excludeQualities = undefined;
+
     // Sanitize strings
     return {
       proxy,
@@ -274,6 +282,7 @@ function parseConfig(configStr: string): UserConfig | null {
       minStreams,
       sortBy,
       pseudo: parsed.pseudo !== undefined ? (sanitizePseudo(parsed.pseudo) || undefined) : undefined,
+      excludeQualities,
     };
   } catch {
     return null;
@@ -387,11 +396,11 @@ function collectSources(
  * Any accepted language and any accepted quality counts: 3 VF + 2 VOSTFR is
  * five results, and so is 3×1080p + 2×720p.
  */
-/** Counts a source's results that pass the user's LANGUAGE prefs (quality doesn't filter). */
-function wantedCounter(source: string, langOrder: string[]) {
+/** Counts a source's results that pass the user's LANGUAGE prefs + quality exclusion. */
+function wantedCounter(source: string, langOrder: string[], excludeQualities?: string[]) {
   return (results: { language?: string; quality?: string }[]) =>
     results.filter(r =>
-      passesPreferences({ quality: r.quality || '', language: r.language || '', source }, langOrder)
+      passesPreferences({ quality: r.quality || '', language: r.language || '', source }, langOrder, excludeQualities)
     ).length;
 }
 
@@ -403,8 +412,8 @@ function filterAndSortStreams(streams: StreamWithMeta[], config: UserConfig | nu
   const prefQualityScore = QUALITY_SCORES[prefQuality] || 3;
 
   // Filter streams based on preferences (same predicate the early exit counts with).
-  // Langue seulement — la qualité ne filtre pas, elle départage au tri ci-dessous.
-  let filtered = streams.filter(s => passesPreferences(s._meta, langOrder));
+  // Langue + exclusion de qualité opt-in (excludeQualities) ; la qualité départage au tri.
+  let filtered = streams.filter(s => passesPreferences(s._meta, langOrder, config.excludeQualities));
 
   // If filtering removed everything, return original streams sorted
   if (filtered.length === 0) {
@@ -1030,7 +1039,7 @@ async function handleStream(req: express.Request, res: express.Response, type: s
       sourcePromises.map((promise, i) => ({
         name: SOURCE_NAMES[i],
         promise,
-        countWanted: wantedCounter(SOURCE_NAMES[i], langOrder),
+        countWanted: wantedCounter(SOURCE_NAMES[i], langOrder, config?.excludeQualities),
       })),
       minStreams,
       (reason, ms) => console.log(`[Stream] Fan-out terminé: ${reason}${ms ? ` en ${(ms / 1000).toFixed(2)}s` : ''}`),

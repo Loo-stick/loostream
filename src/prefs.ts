@@ -43,16 +43,20 @@ export function normalizeQuality(quality: string): string {
 }
 
 /**
- * Un flux passe-t-il les préférences ? FILTRE DE LANGUE UNIQUEMENT — la qualité ne
- * filtre pas (un 480p peut être la seule source VF dispo ; elle départage au tri).
- * NetMirror est exempté (HLS multi-langue, comme il l'a toujours été).
+ * Un flux passe-t-il les préférences ? Filtre de LANGUE (toujours) + exclusion de QUALITÉ
+ * OPT-IN (`excludeQualities`, vide par défaut → aucun effet, cf. historique du sur-filtrage).
+ * L'exclusion porte sur la qualité NORMALISÉE : sûre pour les extrêmes (4K/360p) ; « HD »
+ * générique normalise en 1080p. NetMirror est exempté (HLS multi-langue ET multi-qualité).
  */
 export function passesPreferences(
   meta: { quality: string; language: string; source: string },
   langOrder: string[],
+  excludeQualities?: string[],
 ): boolean {
   if (meta.source === 'netmirror') return true;
-  return langOrder.includes(normalizeLanguage(meta.language));
+  if (!langOrder.includes(normalizeLanguage(meta.language))) return false;
+  if (excludeQualities && excludeQualities.length && excludeQualities.includes(normalizeQuality(meta.quality))) return false;
+  return true;
 }
 
 /** Rang d'une langue dans l'ordre de préférence (inconnue = tout en bas). */

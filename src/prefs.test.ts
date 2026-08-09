@@ -20,6 +20,22 @@ test('NetMirror reste exempté (multi-langue)', () => {
   assert.equal(passesPreferences({ quality: 'HD', language: 'VO', source: 'netmirror' }, LANGS), true);
 });
 
+test('exclusion qualité : 4K/360p exclus → rejetés (par qualité normalisée) ; autres OK', () => {
+  const ex = ['4K', '360p'];
+  assert.equal(passesPreferences({ quality: '4K', language: 'VF', source: 'movix' }, LANGS, ex), false);
+  assert.equal(passesPreferences({ quality: '2160p', language: 'VF', source: 'movix' }, LANGS, ex), false); // normalise -> 4K
+  assert.equal(passesPreferences({ quality: '360p', language: 'VF', source: 'movix' }, LANGS, ex), false);
+  assert.equal(passesPreferences({ quality: '1080p', language: 'VF', source: 'movix' }, LANGS, ex), true);
+});
+
+test('exclusion qualité : NetMirror reste exempté', () => {
+  assert.equal(passesPreferences({ quality: '4K', language: 'VF', source: 'netmirror' }, LANGS, ['4K']), true);
+});
+
+test('exclusion qualité : sans liste → aucun effet (rétro-compat)', () => {
+  assert.equal(passesPreferences({ quality: '4K', language: 'VF', source: 'movix' }, LANGS), true);
+});
+
 test('normalisation : HD → 1080p (repli), 480p → 480p, VF reconnu', () => {
   assert.equal(normalizeQuality('HD'), '1080p');
   assert.equal(normalizeQuality('480p'), '480p');
