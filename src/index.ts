@@ -21,7 +21,10 @@ import crypto from 'crypto';
 import proxyRouter, { isAllowedUrl, addAllowedDomain, getAllowedDomains } from './proxy';
 import { accessEnabled, keyMatches, signUrl, requireQueryKey, ownerKeyMatches, ownerKeyEnabled } from './access';
 import { installLogCapture, getLogs } from './logbuffer';
-import { getModeRaw, autoWhitelistEnabled, updateSettings, settingsView, netfreeSocksPoolEnabled, isSourceEnabled, getDisabledSources } from './settings';
+import { getModeRaw, autoWhitelistEnabled, updateSettings, settingsView, netfreeSocksPoolEnabled, isSourceEnabled, getDisabledSources, captureAllLogsEnabled } from './settings';
+import { sanitizePseudo, pseudoLabel } from './pseudo';
+import { runWithLogCapture, capturedLines } from './request-log';
+import { recordUserActivity, getUsersOverview, getUserRequests, getRequestLog } from './user-activity';
 import { setPoolEnabled, poolStatus } from './netfree-pool';
 import { canDirect } from './deliver';
 import * as fsSync from 'fs';
@@ -146,6 +149,7 @@ interface UserConfig {
   langOrder?: string[];  // ["MULTI", "VF", "VOSTFR", "VO"]
   minStreams?: number;   // early exit: stop waiting once this many wanted streams are in (0 = wait for all)
   sortBy?: 'language' | 'quality'; // priorité de tri : langue d'abord (défaut) ou qualité d'abord
+  pseudo?: string;       // libellé libre auto-déclaré (support) — optionnel, cf. src/pseudo.ts
 }
 
 // Stream with metadata for filtering/sorting
@@ -269,6 +273,7 @@ function parseConfig(configStr: string): UserConfig | null {
       langOrder,
       minStreams,
       sortBy,
+      pseudo: parsed.pseudo !== undefined ? (sanitizePseudo(parsed.pseudo) || undefined) : undefined,
     };
   } catch {
     return null;
@@ -889,16 +894,33 @@ function parseStremioId(id: string): { baseId: string; season?: number; episode?
 async function handleStream(req: express.Request, res: express.Response, type: string, id: string, config: UserConfig | null) {
   console.log(`[Stream] Request for ${type}/${id} (proxy: ${config?.proxy || 'default'})`);
 
+  // Tracking Users (logs détaillés par utilisateur). `recTitle`/`perSourceSummary` sont hors
+  // du try pour rester lisibles dans le catch. `record` ne LIT PAS `info` (sinon on perd le
+  // narrowing de `const info`) : le titre passe par `recTitle`. `log` complet stocké pour les
+  // problèmes (empty/error) ou si captureAllLogs, sinon rien (échelle).
+  const who = pseudoLabel(config?.pseudo);
+  let recTitle: string | undefined;
+  const perSourceSummary: Record<string, number> = {};
+  const record = (streams: number, outcome: 'ok' | 'empty' | 'error') => {
+    const logForOutcome = (outcome !== 'ok' || captureAllLogsEnabled()) ? capturedLines() : null;
+    recordUserActivity(who, {
+      mediaType: type, contentId: id, title: recTitle,
+      streams, outcome, detail: JSON.stringify(perSourceSummary), log: logForOutcome,
+    });
+  };
+
   try {
     const parsed = parseStremioId(decodeURIComponent(id));
     const info = await getTmdbInfo(type, parsed.baseId, config);
 
     if (!info) {
       console.log('[Stream] Could not get TMDB info');
+      record(0, 'empty');
       return res.json({ streams: [] });
     }
+    recTitle = info.title;
 
-    console.log(`[Stream] Title: ${info.title} (${info.year})`);
+    console.log(`[Stream] 👤 ${who} · Title: ${info.title} (${info.year})`);
 
     // Sous-titres FR externes (OpenSubtitles) : nombre dispo pour le titre, calculé
     // EN PARALLÈLE des scrapers (caché 12h) et affiché sur chaque carte (🇫🇷 N).
@@ -1020,6 +1042,12 @@ async function handleStream(req: express.Request, res: express.Response, type: s
         ? [SOURCE_NAMES.indexOf('voiranime'), SOURCE_NAMES.indexOf('animesama')]
         : []
     );
+
+    // Résumé par source pour le tracking Users (nb de flux rendus par chaque source).
+    SOURCE_NAMES.forEach((n, i) => {
+      const r = collected[i];
+      if (Array.isArray(r) && r.length) perSourceSummary[n] = r.length;
+    });
 
     // collectSources is order-preserving but untyped (heterogeneous tuple), so
     // restore each source's real element type here.
@@ -1427,6 +1455,7 @@ async function handleStream(req: express.Request, res: express.Response, type: s
 
     if (drafts.length === 0) {
       console.log('[Stream] No streams found');
+      record(0, 'empty');
       return res.json({ streams: [] });
     }
 
@@ -1497,9 +1526,11 @@ async function handleStream(req: express.Request, res: express.Response, type: s
       .join(', ');
 
     console.log(`[Stream] Returning ${cleanStreams.length} streams${breakdown ? ` (${breakdown})` : ''}`);
+    record(cleanStreams.length, cleanStreams.length > 0 ? 'ok' : 'empty');
     res.json({ streams: cleanStreams });
   } catch (e) {
     console.error('[Stream] Error:', e);
+    record(0, 'error');
     res.json({ streams: [] });
   }
 }
@@ -1508,7 +1539,7 @@ async function handleStream(req: express.Request, res: express.Response, type: s
 app.get('/stream/:type/:id.json', async (req, res) => {
   if (accessEnabled()) return res.status(401).send("Non autorisé : clé d'accès requise");
   const { type, id } = req.params;
-  await handleStream(req, res, type, id, null);
+  await runWithLogCapture(pseudoLabel(null), () => handleStream(req, res, type, id, null));
 });
 
 // Stream endpoint (with config)
@@ -1519,7 +1550,7 @@ app.get('/:config/stream/:type/:id.json', async (req, res) => {
     return res.status(400).json({ error: 'Invalid configuration' });
   }
   if (denyIfNoAccess(userConfig, res)) return;
-  await handleStream(req, res, type, id, userConfig);
+  await runWithLogCapture(pseudoLabel(userConfig?.pseudo), () => handleStream(req, res, type, id, userConfig));
 });
 
 // Subtitles resource — mécanisme canonique Stremio/Nuvio (les subs de niveau-stream
@@ -2083,6 +2114,19 @@ app.get('/api/logs', requireAdminSession, (req, res) => {
     q: str(req.query.q),
     limit: num(req.query.limit),
   }));
+});
+
+// Tracking Users (admin). Vue d'ensemble triée (problèmes récents en tête), requêtes d'un
+// pseudo, et trace de logs détaillée d'une requête (chargée au clic). `/request/:id` déclaré
+// AVANT `/:pseudo` sinon "request" serait capturé comme un pseudo.
+app.get('/api/users', requireAdminSession, (_req, res) => {
+  res.json({ users: getUsersOverview() });
+});
+app.get('/api/users/request/:id', requireAdminSession, (req, res) => {
+  res.json({ log: getRequestLog(Number(req.params.id)) });
+});
+app.get('/api/users/:pseudo', requireAdminSession, (req, res) => {
+  res.json({ requests: getUserRequests(req.params.pseudo) });
 });
 
 // Retry a probe request on transient network/TLS errors. Some CDN edge nodes
