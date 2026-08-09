@@ -415,6 +415,15 @@
             </div>
         </div>
 
+        <div class="card">
+            <h2>🙋 Pseudo <span style="font-size:0.6em;color:#888;text-transform:none;letter-spacing:0;">optionnel</span></h2>
+            <p style="color: #aaa; font-size: 0.9em; margin-bottom: 15px;">Un pseudo pour que le support puisse te retrouver si tu signales un souci. Facultatif — laisse vide pour rester anonyme. (Lettres, chiffres, espace, <code>_ . -</code> ; 24 caractères max.)</p>
+            <div class="input-group show">
+                <label>Pseudo</label>
+                <input type="text" id="pseudo" maxlength="24" placeholder="ex. Wallace" autocomplete="off">
+            </div>
+        </div>
+
         <button class="btn" onclick="generateUrl()">Générer le lien d'installation</button>
 
         <div class="result" id="result">
@@ -494,7 +503,12 @@
             const ownerKey = document.getElementById('owner-key').value.trim();
             if (ownerKey) config.ownerKey = ownerKey;
 
-            const configStr = btoa(JSON.stringify(config));
+            // Pseudo optionnel (support) — inclus seulement si non vide (rétro-compat)
+            const pseudo = document.getElementById('pseudo').value.trim();
+            if (pseudo) config.pseudo = pseudo;
+
+            // base64 UTF-8-safe : btoa() seul casse sur les accents (é, è…) d'un pseudo.
+            const configStr = btoa(unescape(encodeURIComponent(JSON.stringify(config))));
             const installUrl = `${baseUrl}/${configStr}/manifest.json`;
 
             document.getElementById('install-url').value = installUrl;
@@ -596,12 +610,17 @@
             // URL format: /{config}/configure or /configure
             if (pathParts.length >= 2 && pathParts[1] && pathParts[1] !== 'configure') {
                 try {
-                    const configStr = atob(pathParts[1]);
-                    const config = JSON.parse(configStr);
+                    // decode UTF-8-safe (miroir de l'encode) : gère les pseudos accentués.
+                    const config = JSON.parse(decodeURIComponent(escape(atob(pathParts[1]))));
 
                     // Pre-fill TMDB key
                     if (config.tmdbKey) {
                         document.getElementById('tmdb-key').value = config.tmdbKey;
+                    }
+
+                    // Pre-fill pseudo
+                    if (config.pseudo) {
+                        document.getElementById('pseudo').value = config.pseudo;
                     }
 
                     // Pre-fill access key
