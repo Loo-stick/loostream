@@ -142,6 +142,38 @@
             .sidebar .foot, .sidebar .logo small { display: none; }
             main { padding: 20px 16px; }
         }
+        /* --- Utilisateurs --- */
+        .utable { width: 100%; border-collapse: collapse; font-size: 0.9em; }
+        .utable th { text-align: left; font-size: 0.72em; text-transform: uppercase; letter-spacing: .06em; color: var(--dim); font-weight: 600; padding: 9px 12px; border-bottom: 1px solid rgba(255,255,255,0.08); }
+        .utable th.r, .utable td.r { text-align: right; font-variant-numeric: tabular-nums; }
+        .utable td { padding: 11px 12px; border-bottom: 1px solid rgba(255,255,255,0.05); }
+        .utable tbody tr { cursor: pointer; transition: background .12s; }
+        .utable tbody tr:hover { background: rgba(255,255,255,0.05); }
+        .utable tbody tr.sel { background: rgba(127,90,240,0.16); }
+        .uwho { display: flex; align-items: center; gap: 10px; }
+        .uflag { width: 3px; height: 22px; border-radius: 2px; background: transparent; }
+        tr.problem .uflag { background: var(--down); }
+        .uava { width: 28px; height: 28px; border-radius: 7px; display: grid; place-items: center; font-weight: 700; font-size: 0.75em; color: #16213e; flex: none; }
+        .chip { display: inline-flex; align-items: center; gap: 5px; font-size: 0.78em; font-weight: 600; padding: 2px 8px; border-radius: 999px; }
+        .chip.ok { background: rgba(44,182,125,0.16); color: #4fd6a0; }
+        .chip.warn { background: rgba(255,137,6,0.16); color: #ffab52; }
+        .chip.crit { background: rgba(229,49,112,0.18); color: #ff8fb0; }
+        .chip.mute { background: rgba(255,255,255,0.08); color: var(--muted); }
+        .ucols { display: grid; grid-template-columns: 1.5fr 1fr; gap: 18px; align-items: start; }
+        @media (max-width: 900px) { .ucols { grid-template-columns: 1fr; } }
+        .evrow { border-bottom: 1px solid rgba(255,255,255,0.05); }
+        .ev { display: flex; align-items: center; gap: 11px; padding: 10px 4px; cursor: pointer; }
+        .ev .ttl { min-width: 0; }
+        .ev .ttl b { display: block; font-size: 0.9em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .ev .ttl span { color: var(--dim); font-size: 0.78em; }
+        .ev .when { margin-left: auto; color: var(--dim); font-size: 0.78em; white-space: nowrap; }
+        .ev .caret { color: var(--dim); transition: transform .15s; }
+        .evrow.open .ev .caret { transform: rotate(90deg); }
+        .evlog { display: none; padding: 2px 4px 12px; }
+        .evrow.open .evlog { display: block; }
+        .srcline { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 9px; }
+        .pill { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 0.72em; padding: 2px 8px; border-radius: 6px; background: rgba(255,255,255,0.08); color: var(--muted); }
+        .logblock { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 0.74em; line-height: 1.7; background: rgba(0,0,0,0.28); border: 1px solid rgba(255,255,255,0.07); border-radius: 8px; padding: 10px 12px; overflow-x: auto; white-space: pre; color: var(--muted); }
     </style>
 </head>
 <body>
@@ -150,6 +182,7 @@
         <nav class="nav">
             <a data-view="dashboard" class="active">📊 Dashboard</a>
             <a data-view="sources">🎛️ Sources</a>
+            <a data-view="users">👥 Utilisateurs</a>
             <a data-view="stats">📈 Stats</a>
             <a data-view="logs">📜 Logs</a>
             <a data-view="settings">🛠️ Paramétrage</a>
@@ -186,6 +219,23 @@
             <div class="view-head"><h1>Sources</h1><button class="btn" onclick="loadSources()">Rafraîchir</button></div>
             <div id="sources-summary" style="margin-bottom:14px;display:flex;gap:8px;flex-wrap:wrap;"></div>
             <div id="sources-list"><div class="loader">Chargement…</div></div>
+        </section>
+
+        <!-- ============ UTILISATEURS ============ -->
+        <section class="view" data-view="users">
+            <div class="view-head"><h1>Utilisateurs</h1><button class="btn" onclick="loadUsers()">Rafraîchir</button></div>
+            <p style="color:var(--muted);font-size:0.85em;margin:-10px 0 18px;">Qui utilise l'addon, et surtout qui a rencontré un problème récemment. Clic sur une ligne → ses requêtes et leurs logs détaillés.</p>
+            <div class="ucols">
+                <div class="card" style="padding:0;overflow:hidden;">
+                    <div style="overflow-x:auto;"><table class="utable">
+                        <thead><tr><th>Pseudo</th><th>Vu</th><th class="r">Req.</th><th class="r">Vides</th><th class="r">Erreurs</th></tr></thead>
+                        <tbody id="users-tbody"><tr><td colspan="5"><div class="loader">Chargement…</div></td></tr></tbody>
+                    </table></div>
+                </div>
+                <div class="card" id="user-detail" style="padding:0;overflow:hidden;">
+                    <div style="padding:18px;color:var(--dim);font-size:0.88em;">Sélectionne un utilisateur pour voir ses requêtes et logs.</div>
+                </div>
+            </div>
         </section>
 
         <!-- ============ STATS ============ -->
@@ -273,6 +323,7 @@ function showView(name) {
     if (name === 'logs') { resetLogs(); startLogPoll(); } else { stopLogPoll(); }
     if (name === 'settings') loadSettingsTab();
     if (name === 'sources') loadSources();
+    if (name === 'users') loadUsers();
 }
 document.querySelectorAll('.nav a').forEach(a => a.addEventListener('click', () => showView(a.dataset.view)));
 
@@ -662,9 +713,78 @@ function removeOwnerKey() { if (confirm('Retirer la clé propriétaire (retour a
 
 // ============ Boot ============
 loadStats();
+// --- Utilisateurs ---
+const AVA_COLORS = ['#f0a24a','#6ea8fe','#2cb67d','#c07ae0','#e5709b','#4fd6c8','#f0d24a'];
+const avaColor = p => AVA_COLORS[[...String(p)].reduce((a,c)=>a+c.charCodeAt(0),0) % AVA_COLORS.length];
+const outcomeChip = (o, n) => o === 'ok' ? `<span class="chip ok">✓ ${n}</span>`
+    : o === 'empty' ? '<span class="chip warn">⚠ 0</span>' : '<span class="chip crit">✕</span>';
+
+async function loadUsers() {
+    const tb = document.getElementById('users-tbody');
+    try {
+        const { users } = await (await fetch('/api/users')).json();
+        if (!users.length) { tb.innerHTML = '<tr><td colspan="5" style="color:var(--dim);padding:18px;">Aucune activité enregistrée pour l\'instant.</td></tr>'; return; }
+        tb.innerHTML = users.map(u => {
+            const anon = u.pseudo === '(anonyme)';
+            const av = anon ? '?' : esc(u.pseudo[0].toUpperCase());
+            return `<tr class="${u.recentProblems>0?'problem':''}" onclick='selectUser(this, ${JSON.stringify(u.pseudo)})'>
+                <td><div class="uwho"><span class="uflag"></span><span class="uava" style="background:${anon?'#7a7a8a':avaColor(u.pseudo)}">${av}</span>
+                    <span style="${anon?'color:var(--muted)':''}">${esc(u.pseudo)}</span></div></td>
+                <td style="color:var(--muted);font-size:0.85em;">${fmtAge(u.lastSeen)}</td>
+                <td class="r">${u.requests}</td>
+                <td class="r">${u.empties>0?`<span class="chip warn">${u.empties}</span>`:'<span class="chip mute">0</span>'}</td>
+                <td class="r">${u.errors>0?`<span class="chip crit">${u.errors}</span>`:'<span class="chip mute">0</span>'}</td>
+            </tr>`;
+        }).join('');
+    } catch { tb.innerHTML = '<tr><td colspan="5" style="color:var(--down);padding:18px;">Erreur de chargement.</td></tr>'; }
+}
+
+function selectUser(tr, pseudo) {
+    document.querySelectorAll('#users-tbody tr').forEach(r => r.classList.remove('sel'));
+    tr.classList.add('sel');
+    loadUserDetail(pseudo);
+}
+
+async function loadUserDetail(pseudo) {
+    const box = document.getElementById('user-detail');
+    box.innerHTML = '<div class="loader" style="padding:18px;">Chargement…</div>';
+    try {
+        const { requests } = await (await fetch('/api/users/' + encodeURIComponent(pseudo))).json();
+        const head = `<div style="display:flex;align-items:center;gap:11px;padding:16px 18px;border-bottom:1px solid rgba(255,255,255,0.07);">
+            <span class="uava" style="width:34px;height:34px;border-radius:9px;font-size:0.9em;background:${pseudo==='(anonyme)'?'#7a7a8a':avaColor(pseudo)}">${pseudo==='(anonyme)'?'?':esc(pseudo[0].toUpperCase())}</span>
+            <div><div style="font-weight:600;">${esc(pseudo)}</div><div style="color:var(--dim);font-size:0.8em;">${requests.length} requête(s) récente(s)</div></div></div>`;
+        const rows = requests.map(r => {
+            let pills = '';
+            try { const d = JSON.parse(r.detail || '{}'); pills = Object.entries(d).map(([s,n]) => `<span class="pill">${esc(s)} ${n}</span>`).join(''); } catch {}
+            const se = r.mediaType === 'series' && r.contentId && r.contentId.includes(':') ? ' · ' + esc(r.contentId.split(':').slice(1).join(' E').replace(/^/,'S')) : '';
+            return `<div class="evrow"><div class="ev" onclick="toggleReqLog(this, ${r.id})">
+                ${outcomeChip(r.outcome, r.streams)}
+                <div class="ttl"><b>${esc(r.title || '?')}</b><span>${r.mediaType==='series'?'Série':'Film'}${se}</span></div>
+                <span class="when">${fmtAge(r.ts)}</span><span class="caret">›</span></div>
+                <div class="evlog"><div class="srcline">${pills || '<span class="pill">aucun flux</span>'}</div><div class="logbox"></div></div></div>`;
+        }).join('') || '<div style="padding:16px;color:var(--dim);">Aucune requête.</div>';
+        box.innerHTML = head + '<div>' + rows + '</div>';
+    } catch { box.innerHTML = '<div style="padding:18px;color:var(--down);">Erreur de chargement.</div>'; }
+}
+
+async function toggleReqLog(el, id) {
+    const row = el.closest('.evrow');
+    row.classList.toggle('open');
+    const logbox = row.querySelector('.logbox');
+    if (row.classList.contains('open') && !logbox.dataset.loaded) {
+        logbox.dataset.loaded = '1';
+        logbox.innerHTML = '<div class="loader">Chargement des logs…</div>';
+        try {
+            const { log } = await (await fetch('/api/users/request/' + id)).json();
+            logbox.innerHTML = log ? `<div class="logblock">${esc(log)}</div>`
+                : '<div style="color:var(--dim);font-size:0.8em;">Pas de trace détaillée pour cette requête (réussie — activer « capturer tous les logs » pour les stocker aussi).</div>';
+        } catch { logbox.innerHTML = '<div style="color:var(--down);font-size:0.8em;">Erreur de chargement du log.</div>'; }
+    }
+}
+
 setInterval(() => { if (document.querySelector('.view[data-view="dashboard"]').classList.contains('active') || document.querySelector('.view[data-view="stats"]').classList.contains('active')) loadStats(); }, 30000);
 const initial = (location.hash || '#dashboard').slice(1);
-showView(['dashboard','sources','stats','logs','settings'].includes(initial) ? initial : 'dashboard');
+showView(['dashboard','sources','users','stats','logs','settings'].includes(initial) ? initial : 'dashboard');
 </script>
 </body>
 </html>
