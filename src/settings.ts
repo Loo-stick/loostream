@@ -12,6 +12,7 @@ interface RuntimeSettings {
   autoWhitelist?: boolean;
   netfreeSocksPool?: boolean;
   disabledSources?: string[];
+  captureAllLogs?: boolean;
 }
 
 const filePath = process.env.RUNTIME_SETTINGS_CONFIG ||
@@ -34,6 +35,7 @@ function load(): RuntimeSettings {
         disabledSources: Array.isArray(raw.disabledSources)
           ? raw.disabledSources.filter((x: unknown) => typeof x === 'string')
           : undefined,
+        captureAllLogs: typeof raw.captureAllLogs === 'boolean' ? raw.captureAllLogs : undefined,
       };
     } else {
       cache = {};
@@ -68,6 +70,13 @@ export function netfreeSocksPoolEnabled(): boolean {
   return s.netfreeSocksPool !== undefined ? s.netfreeSocksPool : (process.env.NETFREE_SOCKS_POOL === 'true');
 }
 
+// Capture systématique de la trace de logs pour TOUTES les requêtes (pas seulement les
+// problèmes). Débug ponctuel — off par défaut (les problèmes sont toujours capturés).
+export function captureAllLogsEnabled(): boolean {
+  const s = load();
+  return s.captureAllLogs !== undefined ? s.captureAllLogs : (process.env.CAPTURE_ALL_LOGS === 'true');
+}
+
 // Sources désactivées manuellement (admin) — skippées dans le fan-out. Persistant, à chaud.
 export function getDisabledSources(): string[] {
   return load().disabledSources || [];
@@ -78,7 +87,7 @@ export function isSourceEnabled(name: string): boolean {
 
 export function updateSettings(patch: {
   mode?: string | null; ownerKey?: string | null; autoWhitelist?: boolean | null;
-  netfreeSocksPool?: boolean | null; disabledSources?: string[] | null;
+  netfreeSocksPool?: boolean | null; disabledSources?: string[] | null; captureAllLogs?: boolean | null;
 }): void {
   const current: RuntimeSettings = { ...load() };
   const apply = <K extends keyof RuntimeSettings>(k: K, v: RuntimeSettings[K] | null | undefined) => {
@@ -90,6 +99,7 @@ export function updateSettings(patch: {
   apply('ownerKey', patch.ownerKey === null ? null : (patch.ownerKey || undefined));
   apply('autoWhitelist', patch.autoWhitelist);
   apply('netfreeSocksPool', patch.netfreeSocksPool);
+  apply('captureAllLogs', patch.captureAllLogs);
   apply('disabledSources', patch.disabledSources === null ? null : (patch.disabledSources && patch.disabledSources.length ? patch.disabledSources : null));
   fs.writeFileSync(filePath, JSON.stringify(current, null, 2));
   cache = null; // invalide
@@ -100,6 +110,7 @@ export function settingsView(): {
   ownerKey: { configured: boolean; length: number; source: 'file' | 'env' | 'none' };
   autoWhitelist: boolean; autoWhitelistSource: 'file' | 'env';
   netfreeSocksPool: boolean; netfreeSocksPoolSource: 'file' | 'env';
+  captureAllLogs: boolean; captureAllLogsSource: 'file' | 'env';
 } {
   const s = load();
   const ownerFile = s.ownerKey !== undefined;
@@ -117,5 +128,7 @@ export function settingsView(): {
     autoWhitelistSource: s.autoWhitelist !== undefined ? 'file' : 'env',
     netfreeSocksPool: netfreeSocksPoolEnabled(),
     netfreeSocksPoolSource: s.netfreeSocksPool !== undefined ? 'file' : 'env',
+    captureAllLogs: captureAllLogsEnabled(),
+    captureAllLogsSource: s.captureAllLogs !== undefined ? 'file' : 'env',
   };
 }
