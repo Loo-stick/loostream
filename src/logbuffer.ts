@@ -1,3 +1,5 @@
+import { captureLine } from './request-log';
+
 // Buffer de logs en mémoire pour l'admin (page Logs). On intercepte console.*,
 // on range { seq, ts, level, source, msg } dans un ring borné, PUIS on délègue à
 // l'original (les logs Docker restent intacts). Les secrets sont masqués avant
@@ -44,6 +46,7 @@ function deriveSource(text: string): string {
 
 export function pushLog(level: 'info' | 'warn' | 'error', text: string): void {
   const masked = maskSecrets(text);
+  captureLine(masked); // alimente le buffer par-requête (logs détaillés par utilisateur), déjà masqué
   ring.push({
     seq: ++seq,
     ts: Date.now(),

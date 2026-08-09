@@ -1,29 +1,23 @@
 import { AsyncLocalStorage } from 'async_hooks';
 
 // Capture des logs par requête. Un contexte (pseudo + buffer) est posé au début de
-// handleStream via runWithLogCapture ; installLogCapture() wrap console.log UNE fois pour
-// pousser chaque ligne dans le buffer du contexte courant EN PLUS de stdout. Hors requête
-// (pas de contexte) -> aucun effet. Sert à stocker la trace d'une requête dans user_activity.
+// handleStream via runWithLogCapture. C'est logbuffer.pushLog (le wrap unique de console.*)
+// qui appelle captureLine() avec le texte DÉJÀ MASQUÉ -> le buffer par requête n'expose
+// jamais de secret. Hors requête (pas de contexte) -> captureLine ne fait rien.
+// Sert à stocker la trace d'une requête dans user_activity (logs détaillés par utilisateur).
 type Ctx = { pseudo: string; lines: string[] };
 const als = new AsyncLocalStorage<Ctx>();
 const MAX_LINES = 200;
-let installed = false;
 
 function hhmmss(): string {
   return new Date().toTimeString().slice(0, 8);
 }
 
-export function installLogCapture(): void {
-  if (installed) return;
-  installed = true;
-  const orig = console.log.bind(console);
-  console.log = (...args: any[]) => {
-    orig(...args);
-    const ctx = als.getStore();
-    if (ctx && ctx.lines.length < MAX_LINES) {
-      ctx.lines.push(`${hhmmss()} ${args.map(a => typeof a === 'string' ? a : JSON.stringify(a)).join(' ')}`);
-    }
-  };
+// Appelé par logbuffer pour CHAQUE ligne de log (déjà masquée). Pousse dans le buffer du
+// contexte de requête courant s'il existe, borné à MAX_LINES.
+export function captureLine(masked: string): void {
+  const ctx = als.getStore();
+  if (ctx && ctx.lines.length < MAX_LINES) ctx.lines.push(`${hhmmss()} ${masked}`);
 }
 
 export function runWithLogCapture<T>(pseudo: string, fn: () => Promise<T>): Promise<T> {

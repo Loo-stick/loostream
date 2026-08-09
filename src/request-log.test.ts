@@ -1,14 +1,12 @@
 import { test } from 'node:test';
 import assert from 'node:assert';
-import { runWithLogCapture, capturedLines, currentPseudo, installLogCapture } from './request-log';
+import { runWithLogCapture, capturedLines, currentPseudo, captureLine } from './request-log';
 
-installLogCapture();
-
-test('capture les console.log DANS le contexte, pas dehors', async () => {
-  console.log('hors-contexte'); // ne doit pas apparaître
+test('capture les lignes DANS le contexte de requête, pas dehors', async () => {
+  captureLine('hors-contexte'); // aucun contexte -> ignoré
   const cap = await runWithLogCapture('Wallace', async () => {
-    console.log('[Movix] Purstream=0');
-    console.log('[Stream] No streams found');
+    captureLine('[Movix] Purstream=0');
+    captureLine('[Stream] No streams found');
     assert.equal(currentPseudo(), 'Wallace');
     return capturedLines();
   });
