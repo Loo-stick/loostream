@@ -245,11 +245,12 @@
 
           <!-- 5 : Pseudo + lien -->
           <div class="wstep" id="s5">
-            <div class="eyebrow">Presque fini</div>
+            <div class="eyebrow">Dernière étape — ton pseudo</div>
+            <div class="callout">👤 Le pseudo est <b>obligatoire</b> : il permet au support de t'identifier si tu signales un souci. Sans lui, l'addon ne renvoie aucun flux.</div>
             <div class="input-group show">
-              <label>Pseudo <span class="hint">— optionnel, aide le support à te retrouver</span></label>
-              <input type="text" id="pseudo" maxlength="24" placeholder="ex. Wallace" autocomplete="off">
-              <p class="sub">Lettres, chiffres, espace, <code>_ . -</code> — 24 max. Laisse vide pour rester anonyme.</p>
+              <label>Pseudo <span class="hint">— requis</span></label>
+              <input type="text" id="pseudo" maxlength="24" placeholder="ex. Wallace" autocomplete="off" required>
+              <p class="sub">Lettres, chiffres, espace, <code>_ . -</code> — 24 caractères max.</p>
             </div>
             <div class="result" id="result">
               <label>Ton lien d'installation</label>
@@ -334,7 +335,8 @@
           if (ownerKey) config.ownerKey = ownerKey;
 
           const pseudo = document.getElementById('pseudo').value.trim();
-          if (pseudo) config.pseudo = pseudo;
+          if (!pseudo) { alert('Le pseudo est obligatoire (étape 5).'); go(5); document.getElementById('pseudo').focus(); return; }
+          config.pseudo = pseudo;
 
           // base64 UTF-8-safe : btoa() seul casse sur les accents (é, è…) d'un pseudo.
           const configStr = btoa(unescape(encodeURIComponent(JSON.stringify(config))));

@@ -15,7 +15,7 @@ Trois chantiers cohérents :
 
 ## Décisions cadrées (validées avec Stick)
 
-- Pseudo **optionnel**, fallback `(anonyme)` quand absent.
+- Pseudo **OBLIGATOIRE** (changé le 2026-08-09 — était optionnel). Sans pseudo, `handleStream` ne sert AUCUN flux : il renvoie une entrée informative (`externalUrl`) qui ouvre `/configure` (config pré-remplie) pour en ajouter un. `configure.html` bloque la génération du lien sans pseudo. `pseudoLabel` garde le fallback `(anonyme)` par défense, mais aucune requête sans pseudo n'atteint plus le tracking (bloquée avant).
 - Persistance des données Users **sur disque, survit au restart**.
 - Stockage en **SQLite** (table `user_activity`), **pas** un fichier JSON réécrit à chaque flush : upsert incrémental indexé + purge de rétention → scale à des milliers d'utilisateurs (cohérent avec `cache.db` existant, qui est content-keyed, partagé et auto-purgé).
 - Direction visuelle laissée à l'initiative (thème sombre moderne) ; page configure en **assistant (wizard) 4 étapes**.
@@ -149,12 +149,20 @@ Nouvelle entrée nav `👥 Utilisateurs` dans admin.html. Table :
 - Restyle des vues existantes (Dashboard / Sources / Stats / Paramétrage / Logs) + nouvelle vue **Utilisateurs**.
 - Pas de changement fonctionnel des endpoints existants ; on refait la présentation (layout cartes, hiérarchie, états santé plus lisibles).
 
-### 4.3 Page configure (`src/configure.html`) — assistant 4 étapes
-1. **Mode** — Direct / MediaFlow / Local, avec explication courte de chaque.
-2. **Clés** — TMDB, identifiants MediaFlow, clé d'accès (si l'hébergeur l'exige).
-3. **Préférences** — qualité préférée, ordre des langues, `minStreams`, tri (langue/qualité).
-4. **Pseudo + génération** — champ pseudo (optionnel) + génération de l'URL d'install (copier / ouvrir dans Stremio).
-- Indicateur de progression, validation par étape, **mêmes champs fonctionnels qu'aujourd'hui** (aucune régression de config) + le nouveau champ pseudo. Le base64 produit reste rétro-compatible (pseudo simplement absent des anciennes URLs).
+### 4.3 Page configure (`src/configure.html`) — assistant 5 étapes
+1. **Hébergeur** — la **clé propriétaire EN PREMIER** (optionnelle). Elle débloque le mode « Proxy local » à l'étape suivante. Réutilise l'existant : `applyModes(ownerKey)` → `/api/modes?ownerKey=`. Explication sécurité : le local est **enforced serveur** (parseConfig downgrade si la clé est absente/fausse ; les endpoints `/proxy/*` exigent la clé d'accès) → un lien trafiqué n'ouvre pas le local.
+2. **Mode** — MediaFlow / Direct toujours ; **« Proxy local » n'apparaît que si une clé propriétaire (valide) a été saisie** à l'étape 1.
+3. **Clés** — TMDB, identifiants MediaFlow, clé d'accès (si l'hébergeur l'exige).
+4. **Préférences** — **« Qualités à afficher »** (toggles 4K/1080p/720p/480p/360p : décocher = exclure, cf. §Exclusion qualité), qualité préférée (tri), ordre des langues, `minStreams`, tri (langue/qualité).
+5. **Pseudo + génération** — champ pseudo (optionnel) + génération de l'URL d'install (copier / ouvrir dans Stremio).
+- Indicateur de progression, validation par étape, **mêmes champs fonctionnels qu'aujourd'hui** (aucune régression) + pseudo + `excludeQualities`. Base64 rétro-compatible (champs simplement absents des anciennes URLs).
+
+### 4.4 Exclusion de qualités (nouveau — `excludeQualities`)
+Aujourd'hui la qualité **ne filtre pas**, elle ne sert qu'au tri (cf. `src/prefs.ts`, historique du sur-filtrage). On ajoute un **filtre d'exclusion explicite, opt-in** :
+- Config : `excludeQualities?: string[]` (sous-ensemble de `4K/1080p/720p/480p/360p`), validé dans `parseConfig`, inclus dans le base64 seulement si non vide.
+- `prefs.ts` : `passesPreferences(meta, langOrder, excludeQualities?)` — rejette un flux si `normalizeQuality(quality) ∈ excludeQualities`. **NetMirror reste exempté** (HLS multi-qualité). ⚠️ Le label générique « HD » normalise en 1080p — l'exclusion des extrêmes (4K/360p) est sûre ; documenter que « exclure 1080p » peut toucher des flux HD génériques.
+- Le **fallback anti-vide** existant est conservé : si le filtrage (langue + qualité) ne laisse rien, on retombe sur tous les flux triés (mieux qu'un écran vide).
+- Appliqué au **filtre final** (`filterAndSortStreams`) ET au **compteur d'early-exit** (même prédicat) pour rester cohérent.
 
 ---
 

@@ -903,6 +903,23 @@ function parseStremioId(id: string): { baseId: string; season?: number; episode?
 async function handleStream(req: express.Request, res: express.Response, type: string, id: string, config: UserConfig | null) {
   console.log(`[Stream] Request for ${type}/${id} (proxy: ${config?.proxy || 'default'})`);
 
+  // Pseudo OBLIGATOIRE : sans pseudo dans la config, l'addon ne sert AUCUN flux. On
+  // renvoie une entrée informative (externalUrl) qui ouvre /configure — avec la config
+  // actuelle pré-remplie quand elle existe — pour que l'utilisateur ajoute son pseudo.
+  if (!sanitizePseudo(config?.pseudo)) {
+    const proto = (req.headers['x-forwarded-proto'] as string) || req.protocol || 'http';
+    const host = (req.headers['x-forwarded-host'] as string) || req.headers.host;
+    const base = `${proto}://${host}`;
+    const cfgParam = (req.params as { config?: string }).config;
+    const cfgUrl = cfgParam ? `${base}/${cfgParam}/configure` : `${base}/configure`;
+    console.log('[Stream] ⛔ Pseudo requis — aucun flux servi (config sans pseudo)');
+    return res.json({ streams: [{
+      name: 'LooStream ⚠️',
+      title: 'Pseudo requis\nOuvre la configuration et ajoute un pseudo pour activer l\'addon.',
+      externalUrl: cfgUrl,
+    }] });
+  }
+
   // Tracking Users (logs détaillés par utilisateur). `recTitle`/`perSourceSummary` sont hors
   // du try pour rester lisibles dans le catch. `record` ne LIT PAS `info` (sinon on perd le
   // narrowing de `const info`) : le titre passe par `recTitle`. `log` complet stocké pour les
