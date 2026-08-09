@@ -608,7 +608,7 @@ function isPreferProxyHost(streamUrl: string): boolean {
 async function deliver(
   streamUrl: string,
   headers: Record<string, string>,
-  opts: { forceLocal?: boolean; forceHls?: boolean; useTransformer?: boolean; forceProxy?: boolean },
+  opts: { forceLocal?: boolean; forceHls?: boolean; useTransformer?: boolean; forceProxy?: boolean; fixAudioHls?: boolean },
   req: express.Request,
   config: UserConfig | null,
 ): Promise<{ url: string; proxyHeaders?: Record<string, string> } | null> {
@@ -621,6 +621,19 @@ async function deliver(
   // (return null plus bas). Contrairement à forceLocal, il NE force PAS le proxy local :
   // il respecte le mode -> pas de fuite « proxy local » quand seul MFP/direct est autorisé.
   if (!opts.forceProxy && !preferProxy && canDirect(streamUrl, !!opts.forceLocal)) {
+    // Master HLS multi-audio livré en direct : beaucoup déclarent des pistes audio
+    // séparées sans DEFAULT=YES -> « vidéo sans son » sur les players stricts, et un
+    // stream direct ne peut PAS être réécrit côté player. On sert le master corrigé via
+    // /proxy/fixaudio (injecte DEFAULT=YES), les enfants restent en ABSOLU CDN -> segments
+    // toujours en direct (pas de bande passante chez nous). Reste « direct » pour le badge.
+    if (opts.fixAudioHls && (opts.forceHls || isHlsUrl(streamUrl))) {
+      const proto = (req.headers['x-forwarded-proto'] as string) || req.protocol || 'http';
+      const host = (req.headers['x-forwarded-host'] as string) || req.headers.host;
+      const u = new URL('/proxy/fixaudio', `${proto}://${host}`);
+      u.searchParams.set('url', streamUrl);
+      for (const [k, v] of Object.entries(headers)) u.searchParams.set(`h_${k.toLowerCase()}`, v);
+      return { url: signUrl(u).toString() };
+    }
     // Hôte header-free -> URL brute (lecteur natif Stremio, rapide). Sinon
     // proxyHeaders (nécessaire, mais passe par le serveur interne Stremio, lent).
     const needsHdr = await hostNeedsHeaders(streamUrl);
@@ -650,6 +663,7 @@ function computeDelivery(url: string, hasProxyHeaders: boolean, config: UserConf
   if (mfUrl) {
     try { if (new URL(url).hostname.includes(new URL(mfUrl).hostname)) return 'mediaflow'; } catch { /* ignore */ }
   }
+  if (url.includes('/proxy/fixaudio')) return 'direct'; // master corrigé, segments en direct CDN
   if (url.includes('/proxy/') || url.includes('/netmirror/')) return 'local';
   if (url.includes('/moviebox/')) return 'direct'; // 302 -> CDN, aucun relais serveur
   return 'direct'; // URL CDN brute sans en-têtes = pas de relais
@@ -1053,7 +1067,9 @@ async function handleStream(req: express.Request, res: express.Response, type: s
         // stream plays but every subtitle track is silently missing. The API
         // already tells us the format — trust it over the extension.
         const isHls = mv.format === 'm3u8';
-        const d = await deliver(mv.url, proxyHeaders, { forceHls: isHls }, req, config);
+        // Masters Movix (seekstreaming/purstream/anime…) = multi-audio à pistes séparées
+        // sans DEFAULT=YES -> en direct, on sert le master corrigé (segments directs).
+        const d = await deliver(mv.url, proxyHeaders, { forceHls: isHls, fixAudioHls: isHls }, req, config);
 
         if (!d) continue; // Skip blocked URLs
         finalUrl = d.url;

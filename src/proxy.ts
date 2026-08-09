@@ -154,6 +154,19 @@ export function isAllowedUrl(url: string): { allowed: boolean; reason?: string }
 }
 
 // Parse headers from query params (h_referer, h_user-agent, etc.)
+// HTTP(S) + blocage IP privée, SANS exiger l'allowlist de domaines. Réservé aux endpoints
+// qui NE relaient PAS de bande passante en masse (fixaudio : on ne sert que le manifeste
+// maître, les segments restent en direct sur le CDN) -> l'allowlist (anti-proxy-ouvert de
+// gros débit) n'est pas nécessaire ; la clé d'accès + le blocage IP privée suffisent.
+function isSafePublicUrl(url: string): { allowed: boolean; reason?: string } {
+  try {
+    const p = new URL(url);
+    if (!['http:', 'https:'].includes(p.protocol)) return { allowed: false, reason: 'Invalid protocol' };
+    for (const pat of PRIVATE_IP_PATTERNS) if (pat.test(p.hostname)) return { allowed: false, reason: 'Private IP not allowed' };
+    return { allowed: true };
+  } catch { return { allowed: false, reason: 'Invalid URL format' }; }
+}
+
 function parseHeaders(query: Record<string, any>): Record<string, string> {
   const headers: Record<string, string> = {};
   for (const [key, value] of Object.entries(query)) {
@@ -181,6 +194,29 @@ function resolveUrl(ref: string, originalUrl: string, originalBase: string): str
 }
 
 // Rewrite URLs in HLS manifest to go through our proxy
+// Promeut une piste audio en DEFAULT=YES/AUTOSELECT=YES si AUCUNE ne l'est déjà, sur un
+// master à pistes audio séparées. Préfère le français (LANGUAGE fr*/NAME fran|vf), sinon
+// la première piste (ordre source). Mute les lignes `lines` en place. No-op si une piste
+// est déjà DEFAULT=YES ou s'il n'y a pas de #EXT-X-MEDIA:TYPE=AUDIO.
+function ensureDefaultAudio(lines: string[]): void {
+  const audioIdx: number[] = [];
+  for (let i = 0; i < lines.length; i++) {
+    const t = lines[i].trim();
+    if (t.startsWith('#EXT-X-MEDIA:') && /TYPE=AUDIO/i.test(t)) {
+      if (/DEFAULT=YES/i.test(t)) return; // déjà un défaut -> ne touche à rien
+      audioIdx.push(i);
+    }
+  }
+  if (!audioIdx.length) return;
+  const isFr = (l: string) =>
+    /LANGUAGE="(fr|fre|fra)[^"]*"/i.test(l) || /NAME="[^"]*(fran|vff|vfq|\bvf\b)[^"]*"/i.test(l);
+  const target = audioIdx.find(i => isFr(lines[i])) ?? audioIdx[0];
+  let l = lines[target];
+  l = /DEFAULT=NO/i.test(l) ? l.replace(/DEFAULT=NO/i, 'DEFAULT=YES') : (/DEFAULT=/i.test(l) ? l : l + ',DEFAULT=YES');
+  l = /AUTOSELECT=NO/i.test(l) ? l.replace(/AUTOSELECT=NO/i, 'AUTOSELECT=YES') : (/AUTOSELECT=/i.test(l) ? l : l + ',AUTOSELECT=YES');
+  lines[target] = l;
+}
+
 function rewriteManifest(
   manifest: string,
   originalUrl: string,
@@ -224,6 +260,13 @@ function rewriteManifest(
       return audioKeep.some(k => lang.startsWith(k));
     });
   }
+
+  // Garantie de son (systématique, tous providers). Beaucoup de masters à audio SÉPARÉ
+  // (seekstreaming AES, purstream, anime…) ne marquent AUCUNE piste DEFAULT=YES — parfois
+  // même AUTOSELECT=NO sur toutes. Les players stricts ne sélectionnent alors aucun audio
+  // = VIDÉO SANS SON (Nuvio/ExoPlayer prend la 1re par tolérance, d'autres non). On promeut
+  // une piste (français de préférence, sinon la 1re) en DEFAULT=YES/AUTOSELECT=YES.
+  ensureDefaultAudio(lines);
 
   const rewritten = lines.map(line => {
     const trimmed = line.trim();
@@ -317,6 +360,48 @@ router.get('/manifest', requireQueryKey, async (req: Request, res: Response) => 
     res.send(rewritten);
   } catch (e: any) {
     console.error(`[Proxy] Manifest error:`, e.message);
+    res.status(502).send('Failed to fetch manifest');
+  }
+});
+
+// Master HLS « fixé » pour les flux livrés en DIRECT : injecte DEFAULT=YES sur une piste
+// audio (ensureDefaultAudio) et résout les enfants (variantes/audio/segments) en URLs
+// ABSOLUES CDN -> le player récupère TOUT le reste en direct (aucune bande passante segment
+// chez nous). Corrige le « vidéo sans son » sur les masters multi-audio livrés en direct
+// (seekstreaming, purstream…), là où un stream direct ne peut PAS être réécrit côté player.
+router.get('/fixaudio', requireQueryKey, async (req: Request, res: Response) => {
+  const url = req.query.url as string;
+  if (!url) return res.status(400).send('Missing url parameter');
+  const validation = isSafePublicUrl(url);
+  if (!validation.allowed) {
+    console.warn(`[Proxy] fixaudio blocked: ${validation.reason} - ${url}`);
+    return res.status(403).send(`Forbidden: ${validation.reason}`);
+  }
+  const headers = parseHeaders(req.query as Record<string, any>);
+  try {
+    const response = await axios.get(url, {
+      headers: { ...headers, 'Accept': '*/*' }, timeout: 10000, responseType: 'text', transformResponse: r => r,
+    });
+    let text = String(response.data);
+    if (!/#EXTM3U/.test(text)) return res.status(502).send('Not an HLS manifest');
+    const base = url.substring(0, url.lastIndexOf('/') + 1);
+    let lines = text.split('\n');
+    ensureDefaultAudio(lines);
+    lines = lines.map(line => {
+      const t = line.trim();
+      if (!t) return line;
+      if (t.startsWith('#')) {
+        return t.includes('URI="')
+          ? line.replace(/URI="([^"]+)"/g, (_m, u) => `URI="${resolveUrl(u, url, base)}"`)
+          : line;
+      }
+      return resolveUrl(t, url, base); // variante/audio -> URL absolue CDN (le player la lit en direct)
+    });
+    res.setHeader('Content-Type', 'application/vnd.apple.mpegurl');
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.send(lines.join('\n'));
+  } catch (e: any) {
+    console.error('[Proxy] fixaudio error:', e.message);
     res.status(502).send('Failed to fetch manifest');
   }
 });
