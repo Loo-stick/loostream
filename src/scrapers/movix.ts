@@ -78,6 +78,16 @@ function buildHeaders() {
   };
 }
 
+// Log concis d'un échec provider. Un 404 = titre hors du catalogue de CE provider (cas
+// normal, la plupart des titres ne sont pas sur tous les providers) -> une ligne, jamais
+// la stack axios complète (config + headers) qui noyait les logs. 5xx = souci côté API Movix.
+function logMovixFail(provider: string, e: any): void {
+  const status = e?.response?.status ?? e?.status;
+  if (status === 404) console.log(`[Movix] ${provider}: hors catalogue (404)`);
+  else if (status) console.log(`[Movix] ${provider} failed: HTTP ${status}`);
+  else console.log(`[Movix] ${provider} failed: ${e?.message || e}`);
+}
+
 // Headers pour les SOURCES PurStream (CDN finepulfe/pulse), à NE PAS confondre avec
 // ceux de l'API : leur Cloudflare BLOQUE le `Referer: movix.cash` (périmé — movix a
 // migré vers .fun). PROUVÉ : Referer movix.cash -> 403 (page « Attention Required! ») ;
@@ -260,7 +270,7 @@ async function fetchPurstream(
     }
     return live;
   } catch (e) {
-    console.log('[Movix] Purstream failed:', e);
+    logMovixFail('Purstream', e);
     return [];
   }
 }
@@ -310,7 +320,7 @@ async function fetchCpasmal(
 
     return links;
   } catch (e) {
-    console.log('[Movix] Cpasmal failed:', e);
+    logMovixFail('Cpasmal', e);
     return [];
   }
 }
@@ -352,7 +362,7 @@ async function fetchFStream(
     }
     return links;
   } catch (e: any) {
-    console.log('[Movix] FStream failed:', e?.message || e);
+    logMovixFail('FStream', e);
     return [];
   }
 }
