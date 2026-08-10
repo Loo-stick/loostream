@@ -35,6 +35,11 @@ config/cache.db
 config/cache.db-wal
 config/cache.db-shm
 
+# SQLite tracking Users (runtime, données de visionnage — ne jamais committer)
+config/users.db
+config/users.db-wal
+config/users.db-shm
+
 # Local Claude Code state
 .claude/
 
