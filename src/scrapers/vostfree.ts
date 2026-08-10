@@ -49,46 +49,88 @@ async function getHtml(url: string, post?: string): Promise<string | null> {
   } catch { return null; }
 }
 
+// ⚠️ tester le CHEMIN, pas l'URL entière : le domaine « vostfree » contient « vostfr »
+// et classerait tout en VOSTFR.
+const urlPath = (url: string): string => url.replace(/^https?:\/\/[^/]+/, '');
+
 function languageOf(url: string): string {
-  return /-vf[-.]/i.test(url) && !/vostfr/i.test(url) ? 'VF' : 'VOSTFR';
+  const p = urlPath(url);
+  return /-vf[-.]/i.test(p) && !/vostfr/i.test(p) ? 'VF' : 'VOSTFR';
 }
 
 interface Candidate { url: string; language: string }
 
-// Recherche DLE -> pages anime matchant le titre (une par langue).
-async function search(titles: string[]): Promise<Candidate[]> {
-  const html = await getHtml(`${BASE()}/index.php?do=search`,
-    `do=search&subaction=search&search_start=0&full_search=0&story=${encodeURIComponent(titles[0])}`);
-  if (!html) return [];
+// N° de saison depuis le nom + le CHEMIN (les slugs séparent par tirets : « saison-3 »,
+// « -s4-part-2- »). Le nom peut finir par la langue (« … Kyojin 2 VOSTFR »). Défaut 1.
+function seasonOf(name: string, url: string): number {
+  const p = urlPath(url).toLowerCase();
+  const n = name.toLowerCase();
+  const m = n.match(/\bsaison[\s-]*(\d{1,2})\b/) || p.match(/saison[\s-]*(\d{1,2})/)
+    || p.match(/[-/]s(\d{1,2})(?:[-_]|$)/)
+    || n.match(/(\d{1,2})\s*(?:vf|vostfr|vost|french|multi|vo)?\s*$/);
+  return m ? Number(m[1]) : 1;
+}
+
+// Retire marqueurs de saison/langue/part pour le matching de titre STRICT (sinon le
+// numéro de saison en trop fait échouer titlesMatch : « Shingeki no Kyojin 4 » ⊄ requête).
+function stripSeason(name: string): string {
+  return name
+    .replace(/\((?:vf|vostfr|vost|vo|multi|french)\)/ig, '')
+    .replace(/\b(?:saison|season|s)\s*\d{1,2}\b/ig, '')
+    .replace(/\bpart(?:ie)?\s*\d+\b/ig, '')
+    .replace(/\b(?:vf|vostfr|vost|french)\b/ig, '')
+    .replace(/\s+\d{1,2}\s*$/, '') // numéro final isolé (« … Kyojin 4 »)
+    .replace(/\s+/g, ' ').trim();
+}
+
+// Recherche DLE -> une page par langue POUR LA SAISON voulue. Essaie plusieurs titres
+// (le titre TMDB anglais renvoie souvent 0 ; le romaji / FR matche). S'arrête dès qu'on
+// a VF + VOSTFR.
+async function search(titles: string[], wantSeason: number): Promise<Candidate[]> {
   const rx = /href="(https?:\/\/[a-z0-9.-]*vostfree[^"]*?\/\d+-[^"]+\.html)"[^>]*>([^<]{2,120})<\/a>/gi;
   const byLang = new Map<string, Candidate>();
-  let m: RegExpExecArray | null;
-  while ((m = rx.exec(html)) && byLang.size < MAX_CANDIDATES) {
-    const url = m[1];
-    const name = m[2].replace(/\((?:vf|vostfr|vost)\)/ig, '').trim();
-    if (!titlesMatch(titles, name)) continue; // évite les faux titres
-    const lang = languageOf(url);
-    if (!byLang.has(lang)) byLang.set(lang, { url, language: lang });
+  for (const q of titles.slice(0, 4)) {
+    if (byLang.size >= MAX_CANDIDATES) break;
+    const html = await getHtml(`${BASE()}/index.php?do=search`,
+      `do=search&subaction=search&search_start=0&full_search=0&story=${encodeURIComponent(q)}`);
+    if (!html) continue;
+    let m: RegExpExecArray | null;
+    rx.lastIndex = 0;
+    while ((m = rx.exec(html))) {
+      const url = m[1];
+      const base = stripSeason(m[2]);
+      if (!titlesMatch(titles, base)) continue;      // faux titre -> écarté
+      if (seasonOf(m[2], url) !== wantSeason) continue; // autre saison -> écartée
+      const lang = languageOf(url);
+      if (!byLang.has(lang)) byLang.set(lang, { url, language: lang });
+    }
   }
   return [...byLang.values()];
 }
 
-// Embeds Sibnet + Uqload de l'épisode voulu sur une page anime. Les content_player sont
-// groupés par épisode (perEp hôtes chacun) ; on classe par FORMAT (robuste à l'ordre).
+// Embeds de l'épisode voulu — MAPPING EXACT via la structure DLE :
+//   <div id="buttons_N">…<div id="player_M" class="new_player_<hôte>">…</div>…</div>  (N = épisode)
+//   <div id="content_player_M" class="player_box">VALEUR</div>                          (M = même id)
+// Le type d'hôte vient de la classe (pas de devinette de format), l'épisode du bloc buttons_N.
 function episodeEmbeds(html: string, episode: number): { url: string; server: string }[] {
-  const cps: string[] = [];
-  const rx = /<div id="content_player_\d+"[^>]*>([^<]+)<\/div>/g;
-  let m: RegExpExecArray | null;
-  while ((m = rx.exec(html))) cps.push(m[1].trim());
-  if (!cps.length) return [];
-  const epCount = (html.match(/<option[^>]*>\s*Episode/gi) || []).length || 1;
-  const perEp = Math.max(1, Math.round(cps.length / epCount));
-  const block = cps.slice((episode - 1) * perEp, (episode - 1) * perEp + perEp);
+  // Valeur d'embed indexée par id de player.
+  const values = new Map<number, string>();
+  for (const m of html.matchAll(/<div id="content_player_(\d+)"[^>]*>([^<]+)<\/div>/g)) {
+    values.set(Number(m[1]), m[2].trim());
+  }
+  if (!values.size) return [];
+  // Bloc de boutons de l'épisode (jusqu'au prochain buttons_ ou la fin de la zone lecteur).
+  const btn = html.match(new RegExp(
+    `<div id="buttons_${episode}"[^>]*>([\\s\\S]*?)(?=<div id="buttons_\\d|<div class="new_player_content")`, 'i'));
+  if (!btn) return [];
   const out: { url: string; server: string }[] = [];
-  for (const v of block) {
-    if (/^\d{4,}$/.test(v)) out.push({ url: `https://video.sibnet.ru/shell.php?videoid=${v}`, server: 'sibnet' });
-    else if (/^[a-z0-9]{10,14}$/i.test(v)) out.push({ url: `https://${UQLOAD_TLD}/embed-${v}.html`, server: 'uqload' });
-    // Streamsb/Vudeo/Mytv (URLs http complètes ou ids longs) -> ignorés (non extractibles)
+  for (const pm of btn[1].matchAll(/<div id="player_(\d+)"[^>]*class="[^"]*new_player_([a-z0-9]+)/gi)) {
+    const v = values.get(Number(pm[1]));
+    if (!v) continue;
+    const host = pm[2].toLowerCase();
+    if (host === 'sibnet') out.push({ url: `https://video.sibnet.ru/shell.php?videoid=${v}`, server: 'sibnet' });
+    else if (host === 'uqload') out.push({ url: `https://${UQLOAD_TLD}/embed-${v}.html`, server: 'uqload' });
+    // Mytv/Streamsb/Vudeo/… -> ignorés (non extractibles chez nous)
   }
   return out;
 }
@@ -128,19 +170,20 @@ export async function getVostfreeStreams(
   if (!uniq.length) return [];
   if (mediaType === 'series' && !episode) return [];
   const ep = mediaType === 'series' ? episode! : 1;
+  const wantSeason = mediaType === 'series' ? (season || 1) : 1;
   const mode = extractorConfig.useMediaFlow ? 'mf' : 'loc';
-  const key = `vostfree:${mode}:${uniq[0].toLowerCase()}:${season || 1}:${ep}`;
+  const key = `vostfree:${mode}:${uniq[0].toLowerCase()}:${wantSeason}:${ep}`;
   return cached(
     key, STREAMS_TTL_MS,
-    () => fetchVostfree(uniq, mediaType, ep, extractorConfig),
+    () => fetchVostfree(uniq, wantSeason, ep, extractorConfig),
     { scope: 'vostfree', shouldCache: r => r.length > 0, negativeTtlMs: EMPTY_TTL_MS },
   );
 }
 
 async function fetchVostfree(
-  titles: string[], mediaType: 'movie' | 'series', ep: number, extractorConfig: ExtractorConfig,
+  titles: string[], wantSeason: number, ep: number, extractorConfig: ExtractorConfig,
 ): Promise<VostfreeStream[]> {
-  const candidates = await search(titles);
+  const candidates = await search(titles, wantSeason);
   if (!candidates.length) { console.log(`[Vostfree] Aucun match pour "${titles[0]}"`); return []; }
   const perLang = await Promise.all(candidates.map(async c => {
     const html = await getHtml(c.url);
