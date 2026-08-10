@@ -6,7 +6,7 @@
 
 ## Objectif
 
-Ajouter **nakastream** comme source **optionnelle, activée par utilisateur** : celui qui le souhaite connecte son compte nakastream (email fictif possible) via un **code de pairing** collé dans le wizard configure. Sans code → source désactivée pour lui. nakastream apporte un catalogue **FR + anime** (~8289 titres) en **HLS direct tokené** (re-hébergé sur son R2), avec **sous-titres FR/EN (WebVTT)**.
+Ajouter **nakastream** comme source **optionnelle, activée par utilisateur** : celui qui le souhaite connecte son compte nakastream (email fictif possible) via un **code de pairing** collé dans le wizard configure. Sans code → source désactivée pour lui. nakastream apporte un **catalogue large (blockbusters INCLUS : Dune 1&2, GoT… + FR + anime)** en **HLS direct tokené** (re-hébergé sur son R2, souvent ~720p, FR audio DEFAULT), avec **sous-titres FR/EN (WebVTT)**. Contenu partiellement issu de cinepulse/purstream (mêmes slugs) mais re-hébergé stable + subs propres.
 
 **Contrainte workflow** : aucun `git push` sans l'aval explicite de Stick (cf. [[test-before-push]]). Travail sur `feat/nakastream`.
 
@@ -14,7 +14,7 @@ Ajouter **nakastream** comme source **optionnelle, activée par utilisateur** : 
 
 - **Pairing** : `POST /api/v1/auth/pair/generate` exige la session nakastream (401 sans) → **le USER génère le code sur nakastream** (flux « connecter une TV »). `POST /api/v1/auth/pair/claim` body `{"code":"ABCDE"}` (sans auth) → renvoie `{user, token}` (token opaque `oat_…`, ~79 chars). Code **usage unique + expiration courte**.
 - **Auth API** : `Authorization: Bearer <oat_token>` (durable, type token device).
-- **Résolution** : `GET /api/v1/browse/by-tmdb/<tmdbId>/<mediaTypeInt>` (media_type = **entier**, à confirmer 1=film/2=série à l'implémentation ; repli `GET /api/v1/browse/search?q=<titre>`). Renvoie l'objet contenu (`id`, `tmdbId`, `mediaType`, `title`, `quality`, `audioLanguages`, `subtitleLanguages`…).
+- **Résolution (CORRIGÉE)** : `by-tmdb` est **CASSÉ** (renvoie « Content not found » même pour du contenu présent, quel que soit le type — NE PAS l'utiliser). La voie fiable = **`GET /api/v1/browse/search?q=<titre>`** → liste `[{id, tmdbId, mediaType, title…}]` → **matcher sur `tmdbId` (exact)** pour récupérer l'`id` interne. Pas de fuzzy (match par tmdb). `streaming/check/<tmdbId>?type=<movie|tv>` existe aussi (dispo oui/non) mais ne donne pas l'id.
 - **Flux** : `GET /api/v1/streaming/source/<contentId>` (+ `?season=&episode=` pour les séries) → `{ url, subtitles[], audioTracks[] }`.
   - `url` = `/api/v1/r2/<...>/master.m3u8?token=<t>&exp=<ts>` — **master HLS standard** (structure purstream-like : `#EXT-X-MEDIA:TYPE=AUDIO` FR **DEFAULT=YES** + EN, variante vidéo). **Jouable avec le seul `?token` (PAS de Bearer sur le manifeste/segments)** — vérifié 200 sans Authorization.
   - `subtitles[]` = `[{lang:"fre|eng", label, url:"…/subs_fre.vtt?token=…&exp=…", default, forced}]` — **WebVTT réels** (vérifié 63 Ko de cues FR), joignables avec le seul `?token`.
@@ -47,7 +47,7 @@ Ajouter **nakastream** comme source **optionnelle, activée par utilisateur** : 
 ## Partie 2 — Scraper `src/scrapers/nakastream.ts` (NOUVEAU)
 
 `getNakastreamStreams(token, tmdbId, mediaType, season?, episode?, title?)` → `NakaStream[]` (+ sous-titres). Actif **seulement si token présent**.
-1. `browse/by-tmdb/<tmdbId>/<typeInt>` (repli `browse/search?q=<title>` + match TMDB) → `contentId` ou `null` (hors catalogue = normal, silencieux).
+1. `browse/search?q=<title>` → matcher le résultat dont `tmdbId === <tmdbId>` → `contentId` interne, ou `null` (hors catalogue = normal). **Ne PAS utiliser by-tmdb (cassé).** Nécessite le **titre** (déjà fourni par `getTmdbInfo`/`cinemetaInfo`).
 2. `streaming/source/<contentId>` (+ `?season=&episode=`) avec `Authorization: Bearer <token>`.
    - **401** → lève une erreur typée `NakastreamAuthError` (le handler ajoutera l'entrée « reconnecte »).
    - sinon → 1 flux : `url` = `https://nakastream.tv<master>` (absolu), `language:'MULTI'`, `quality` (depuis le contenu / la variante), `format:'m3u8'`, + `subtitles` (fr/eng VTT en absolu).
