@@ -15,6 +15,7 @@ import { getStreamFlixStreams, reloadStreamflixEndpoints, getStreamflixEndpoints
 import { getVideasyStreams, reloadVideasyEndpoints, getVideasyEndpoints } from './scrapers/videasy';
 import { getMovixStreams, getMovixAnimeStreams, reloadMovixEndpoints, getMovixEndpoints } from './scrapers/movix';
 import { getNakastreamStreams, NakastreamAuthError, getNakastreamEndpoints } from './scrapers/nakastream';
+import { getVostfreeStreams, getVostfreeEndpoints, reloadVostfreeEndpoints } from './scrapers/vostfree';
 import { getFrenchStreamStreams, reloadFrenchStreamEndpoints, getFrenchStreamEndpoints } from './scrapers/frenchstream';
 import { cached, getCacheStats } from './cache';
 import { recordOutcome, getAllMetrics } from './metrics';
@@ -70,6 +71,7 @@ interface Stats {
     videasy: { requests: number; success: number; errors: number; lastSuccess: number | null };
     animesama: { requests: number; success: number; errors: number; lastSuccess: number | null };
     nakastream: { requests: number; success: number; errors: number; lastSuccess: number | null };
+    vostfree: { requests: number; success: number; errors: number; lastSuccess: number | null };
   };
   streamsServed: {
     movix: number;
@@ -85,6 +87,7 @@ interface Stats {
     videasy: number;
     animesama: number;
     nakastream: number;
+    vostfree: number;
   };
 }
 
@@ -105,11 +108,12 @@ const stats: Stats = {
     videasy: { requests: 0, success: 0, errors: 0, lastSuccess: null },
     animesama: { requests: 0, success: 0, errors: 0, lastSuccess: null },
     nakastream: { requests: 0, success: 0, errors: 0, lastSuccess: null },
+    vostfree: { requests: 0, success: 0, errors: 0, lastSuccess: null },
   },
-  streamsServed: { movix: 0, netmirror: 0, streamflix: 0, frenchstream: 0, wiflix: 0, voirdrama: 0, moviebox: 0, voiranime: 0, nabistream: 0, coflix: 0, videasy: 0, animesama: 0, nakastream: 0 },
+  streamsServed: { movix: 0, netmirror: 0, streamflix: 0, frenchstream: 0, wiflix: 0, voirdrama: 0, moviebox: 0, voiranime: 0, nabistream: 0, coflix: 0, videasy: 0, animesama: 0, nakastream: 0, vostfree: 0 },
 };
 
-function trackSourceResult(source: 'movix' | 'netmirror' | 'streamflix' | 'frenchstream' | 'wiflix' | 'voirdrama' | 'moviebox' | 'voiranime' | 'nabistream' | 'coflix' | 'videasy' | 'animesama' | 'nakastream', success: boolean, streamCount: number = 0) {
+function trackSourceResult(source: 'movix' | 'netmirror' | 'streamflix' | 'frenchstream' | 'wiflix' | 'voirdrama' | 'moviebox' | 'voiranime' | 'nabistream' | 'coflix' | 'videasy' | 'animesama' | 'nakastream' | 'vostfree', success: boolean, streamCount: number = 0) {
   stats.sources[source].requests++;
   if (success) {
     stats.sources[source].success++;
@@ -1070,9 +1074,15 @@ async function handleStream(req: express.Request, res: express.Response, type: s
           else { console.log('[Nakastream] Error:', e); trackSourceResult('nakastream', false); recordOutcome('nakastream', 'error', e?.message); }
           return [];
         }),
+      // Vostfree : anime VF/VOSTFR uniquement (originalLanguage japonais), keyé titre.
+      (isSourceEnabled('vostfree') && info.originalLanguage === 'ja'
+        ? animeAltsPromise.then(alts => getVostfreeStreams(parsed.baseId, type as 'movie' | 'series', extractorConfig, parsed.season, parsed.episode, [info.title, info.originalTitle, info.frenchTitle, ...alts].filter(Boolean) as string[]))
+        : Promise.resolve([]))
+        .then(r => { if (info.originalLanguage === 'ja') { trackSourceResult('vostfree', true, r.length); recordOutcome('vostfree', r.length > 0 ? 'success' : 'empty'); } return r; })
+        .catch(e => { console.log('[Vostfree] Error:', e); trackSourceResult('vostfree', false); recordOutcome('vostfree', 'error', e?.message); return []; }),
     ];
 
-    const SOURCE_NAMES = ['netmirror', 'streamflix', 'movix', 'frenchstream', 'wiflix', 'voirdrama', 'moviebox', 'voiranime', 'nabistream', 'coflix', 'videasy', 'animesama', 'nakastream'];
+    const SOURCE_NAMES = ['netmirror', 'streamflix', 'movix', 'frenchstream', 'wiflix', 'voirdrama', 'moviebox', 'voiranime', 'nabistream', 'coflix', 'videasy', 'animesama', 'nakastream', 'vostfree'];
     const collected = await collectSources(
       sourcePromises.map((promise, i) => ({
         name: SOURCE_NAMES[i],
@@ -1086,7 +1096,7 @@ async function handleStream(req: express.Request, res: express.Response, type: s
       // Videasy (3 flux instantanés) atteint le quota et les coupe. Plafonné par le
       // deadline (20s). Aucun effet hors anime.
       info.originalLanguage === 'ja'
-        ? [SOURCE_NAMES.indexOf('voiranime'), SOURCE_NAMES.indexOf('animesama')]
+        ? [SOURCE_NAMES.indexOf('voiranime'), SOURCE_NAMES.indexOf('animesama'), SOURCE_NAMES.indexOf('vostfree')]
         : []
     );
 
@@ -1111,6 +1121,7 @@ async function handleStream(req: express.Request, res: express.Response, type: s
     const videasyResults = collected[10] as Awaited<ReturnType<typeof getVideasyStreams>>;
     const animesamaResults = collected[11] as Awaited<ReturnType<typeof getAnimeSamaStreams>>;
     const nakastreamResults = collected[12] as Awaited<ReturnType<typeof getNakastreamStreams>>;
+    const vostfreeResults = collected[13] as Awaited<ReturnType<typeof getVostfreeStreams>>;
 
     // On accumule des "drafts" (streams sans name/title). name/title sont posés
     // en UNE passe centralisée plus bas (src/display.ts), pour un rendu uniforme.
@@ -1302,6 +1313,24 @@ async function handleStream(req: express.Request, res: express.Response, type: s
           source: 'voiranime',
           server: va.server,
         },
+      });
+    }
+
+    // Vostfree : anime VF/VOSTFR (principalement Sibnet mp4 direct).
+    for (const vf of vostfreeResults) {
+      const d = await deliver(vf.url, {
+        ...(vf.headers || {}),
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+      }, {}, req, config);
+      if (!d) continue;
+      drafts.push({
+        url: d.url,
+        behaviorHints: {
+          notWebReady: !!d.proxyHeaders,
+          bingeGroup: `vostfree-${vf.server}`,
+          ...(d.proxyHeaders ? { proxyHeaders: { request: d.proxyHeaders } } : {}),
+        },
+        _meta: { quality: vf.quality, language: vf.language, source: 'vostfree', server: vf.server },
       });
     }
 
