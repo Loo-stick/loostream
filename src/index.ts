@@ -14,6 +14,7 @@ import { getCoflixStreams, getCoflixEndpoints, reloadCoflixEndpoints } from './s
 import { getStreamFlixStreams, reloadStreamflixEndpoints, getStreamflixEndpoints } from './scrapers/streamflix';
 import { getVideasyStreams, reloadVideasyEndpoints, getVideasyEndpoints } from './scrapers/videasy';
 import { getMovixStreams, getMovixAnimeStreams, reloadMovixEndpoints, getMovixEndpoints } from './scrapers/movix';
+import { getNakastreamStreams, NakastreamAuthError, getNakastreamEndpoints } from './scrapers/nakastream';
 import { getFrenchStreamStreams, reloadFrenchStreamEndpoints, getFrenchStreamEndpoints } from './scrapers/frenchstream';
 import { cached, getCacheStats } from './cache';
 import { recordOutcome, getAllMetrics } from './metrics';
@@ -151,6 +152,7 @@ interface UserConfig {
   sortBy?: 'language' | 'quality'; // priorité de tri : langue d'abord (défaut) ou qualité d'abord
   pseudo?: string;       // libellé libre auto-déclaré (support) — optionnel, cf. src/pseudo.ts
   excludeQualities?: string[]; // qualités à EXCLURE (ex. ["4K","360p"]) — filtre opt-in, cf. prefs.ts
+  nakastreamToken?: string; // token de pairing nakastream (per-user, opt-in) — cf. scrapers/nakastream.ts
 }
 
 // Stream with metadata for filtering/sorting
@@ -283,6 +285,8 @@ function parseConfig(configStr: string): UserConfig | null {
       sortBy,
       pseudo: parsed.pseudo !== undefined ? (sanitizePseudo(parsed.pseudo) || undefined) : undefined,
       excludeQualities,
+      nakastreamToken: (typeof parsed.nakastreamToken === 'string' && /^[A-Za-z0-9._-]{10,120}$/.test(parsed.nakastreamToken))
+        ? parsed.nakastreamToken : undefined,
     };
   } catch {
     return null;
@@ -2110,6 +2114,35 @@ app.get('/api/modes', (req, res) => {
   const isOwner = ownerKeyMatches(req.query.ownerKey);
   const modes = isOwner ? ['direct', 'mediaflow', 'local'] : allowedModes();
   res.json({ modes, default: modes[0], owner: isOwner, ownerKeyAvailable: ownerKeyEnabled() });
+});
+
+// Pairing nakastream (public, support configure) : l'utilisateur génère un code sur
+// nakastream.tv, le colle dans le wizard ; on l'échange ici côté serveur (pas de CORS)
+// contre un token de session device. Le token ne transite qu'en réponse (jamais loggué).
+app.post('/api/nakastream/claim', jsonBody, async (req, res) => {
+  const code = typeof req.body?.code === 'string' ? req.body.code.trim().toUpperCase() : '';
+  if (!/^[A-Z0-9]{4,12}$/.test(code)) { res.status(400).json({ ok: false, error: 'Code invalide' }); return; }
+  const base = getNakastreamEndpoints().base.replace(/\/+$/, '');
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const { data, status } = await axios.post(`${base}/api/v1/auth/pair/claim`, { code }, {
+        headers: { 'Content-Type': 'application/json', 'User-Agent': BROWSER_UA, 'Origin': base, 'Referer': `${base}/` },
+        timeout: 12000, validateStatus: () => true,
+      });
+      const token = data?.token;
+      if (status >= 200 && status < 300 && typeof token === 'string' && token.length >= 10) {
+        res.json({ ok: true, token });
+      } else {
+        res.status(400).json({ ok: false, error: data?.message || 'Code invalide ou expiré.' });
+      }
+      return;
+    } catch (e: any) {
+      const dns = /ENOTFOUND|EAI_AGAIN|ETIMEDOUT/.test(String(e?.code || e?.message || ''));
+      if (dns && attempt === 0) { await new Promise(r => setTimeout(r, 600)); continue; }
+      res.status(502).json({ ok: false, error: 'nakastream injoignable, réessaie.' });
+      return;
+    }
+  }
 });
 
 // Stats endpoint
