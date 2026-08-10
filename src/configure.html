@@ -72,6 +72,10 @@
       input:focus,select:focus{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
       input::placeholder{color:var(--faint)}
       .sub{color:var(--faint);font-size:12px;margin-top:8px}
+      .ihelp{width:16px;height:16px;border-radius:50%;border:1px solid var(--border);background:var(--raised2);color:var(--muted);font-size:10px;font-weight:700;font-style:italic;cursor:pointer;line-height:1;padding:0;margin-left:2px}
+      .ihelp:hover{border-color:var(--accent);color:var(--accent2)}
+      .nk-help{display:none;background:var(--accent-soft);border:1px solid rgba(91,147,245,.25);border-radius:10px;padding:10px 12px;font-size:12.4px;color:var(--accent2);margin-bottom:10px}
+      .nk-help.show{display:block}
       #mf-config{border-left:2px solid var(--accent);padding-left:14px;margin-top:4px}
 
       .qtoggles{display:flex;flex-wrap:wrap;gap:8px}
@@ -179,6 +183,17 @@
               <label>Clé d'accès <span class="hint">— seulement si l'hébergeur l'exige</span></label>
               <input type="text" id="access-key" class="mono" placeholder="optionnel — laisse vide si non requise">
             </div>
+            <div class="input-group show" style="margin-top:16px">
+              <label>nakastream <span class="hint">— optionnel, source bonus (films + FR + anime, sous-titres)</span>
+                <button type="button" class="ihelp" onclick="document.getElementById('nk-help').classList.toggle('show')" title="Comment obtenir le code">i</button>
+              </label>
+              <div id="nk-help" class="nk-help">Sur <b>nakastream.tv</b> (connecté — un email fictif suffit), lance <b>« Connecter une TV / un appareil »</b>, copie le <b>code</b> affiché et colle-le ici. Ça active nakastream juste pour toi.</div>
+              <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+                <input type="text" id="nk-code" placeholder="ex. AFNEE" maxlength="12" autocomplete="off" style="text-transform:uppercase;flex:1;min-width:120px">
+                <button type="button" class="btn" onclick="connectNakastream()">Connecter</button>
+              </div>
+              <p class="sub" id="nk-status"></p>
+            </div>
           </div>
 
           <!-- 4 : Préférences -->
@@ -270,7 +285,22 @@
 
     <script>
         let currentMode = 'mediaflow';
+        let nakastreamToken = '';
         const baseUrl = window.location.origin;
+
+        // Pairing nakastream : échange le code (côté serveur) contre un token de session.
+        async function connectNakastream() {
+          const code = (document.getElementById('nk-code').value || '').trim().toUpperCase();
+          const st = document.getElementById('nk-status');
+          if (!code) { st.textContent = 'Colle d\'abord le code affiché sur nakastream.'; st.style.color = ''; return; }
+          st.textContent = 'Connexion…'; st.style.color = '';
+          try {
+            const r = await fetch('/api/nakastream/claim', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ code }) });
+            const j = await r.json();
+            if (j.ok && j.token) { nakastreamToken = j.token; st.textContent = '✅ nakastream connecté'; st.style.color = 'var(--good)'; document.getElementById('result').classList.remove('show'); }
+            else { st.textContent = '✗ ' + (j.error || 'Échec'); st.style.color = 'var(--crit)'; }
+          } catch (e) { st.textContent = '✗ nakastream injoignable, réessaie.'; st.style.color = 'var(--crit)'; }
+        }
         var cur = 1, N = 5;
 
         function go(n){
@@ -337,6 +367,8 @@
           const pseudo = document.getElementById('pseudo').value.trim();
           if (!pseudo) { alert('Le pseudo est obligatoire (étape 5).'); go(5); document.getElementById('pseudo').focus(); return; }
           config.pseudo = pseudo;
+
+          if (nakastreamToken) config.nakastreamToken = nakastreamToken;
 
           // base64 UTF-8-safe : btoa() seul casse sur les accents (é, è…) d'un pseudo.
           const configStr = btoa(unescape(encodeURIComponent(JSON.stringify(config))));
@@ -413,6 +445,11 @@
               const config = JSON.parse(decodeURIComponent(escape(atob(pathParts[1]))));
               if (config.tmdbKey) document.getElementById('tmdb-key').value = config.tmdbKey;
               if (config.pseudo) document.getElementById('pseudo').value = config.pseudo;
+              if (config.nakastreamToken) {
+                nakastreamToken = config.nakastreamToken;
+                const st = document.getElementById('nk-status');
+                if (st) { st.textContent = '✅ nakastream déjà connecté (recolle un code pour changer)'; st.style.color = 'var(--good)'; }
+              }
               if (config.accessKey) document.getElementById('access-key').value = config.accessKey;
               if (config.ownerKey) {
                 document.getElementById('owner-key').value = config.ownerKey;
