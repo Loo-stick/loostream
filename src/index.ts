@@ -69,6 +69,7 @@ interface Stats {
     coflix: { requests: number; success: number; errors: number; lastSuccess: number | null };
     videasy: { requests: number; success: number; errors: number; lastSuccess: number | null };
     animesama: { requests: number; success: number; errors: number; lastSuccess: number | null };
+    nakastream: { requests: number; success: number; errors: number; lastSuccess: number | null };
   };
   streamsServed: {
     movix: number;
@@ -83,6 +84,7 @@ interface Stats {
     coflix: number;
     videasy: number;
     animesama: number;
+    nakastream: number;
   };
 }
 
@@ -102,11 +104,12 @@ const stats: Stats = {
     coflix: { requests: 0, success: 0, errors: 0, lastSuccess: null },
     videasy: { requests: 0, success: 0, errors: 0, lastSuccess: null },
     animesama: { requests: 0, success: 0, errors: 0, lastSuccess: null },
+    nakastream: { requests: 0, success: 0, errors: 0, lastSuccess: null },
   },
-  streamsServed: { movix: 0, netmirror: 0, streamflix: 0, frenchstream: 0, wiflix: 0, voirdrama: 0, moviebox: 0, voiranime: 0, nabistream: 0, coflix: 0, videasy: 0, animesama: 0 },
+  streamsServed: { movix: 0, netmirror: 0, streamflix: 0, frenchstream: 0, wiflix: 0, voirdrama: 0, moviebox: 0, voiranime: 0, nabistream: 0, coflix: 0, videasy: 0, animesama: 0, nakastream: 0 },
 };
 
-function trackSourceResult(source: 'movix' | 'netmirror' | 'streamflix' | 'frenchstream' | 'wiflix' | 'voirdrama' | 'moviebox' | 'voiranime' | 'nabistream' | 'coflix' | 'videasy' | 'animesama', success: boolean, streamCount: number = 0) {
+function trackSourceResult(source: 'movix' | 'netmirror' | 'streamflix' | 'frenchstream' | 'wiflix' | 'voirdrama' | 'moviebox' | 'voiranime' | 'nabistream' | 'coflix' | 'videasy' | 'animesama' | 'nakastream', success: boolean, streamCount: number = 0) {
   stats.sources[source].requests++;
   if (success) {
     stats.sources[source].success++;
@@ -986,6 +989,10 @@ async function handleStream(req: express.Request, res: express.Response, type: s
     // 9 aller-retours). RÈGLE : jamais de proxy local si seuls MFP/direct sont permis (hors owner).
     const localProxyAllowed = allowedModes().includes('local') || ownerKeyMatches(config?.ownerKey);
 
+    // nakastream : token expiré/révoqué -> on lève NakastreamAuthError dans le .catch et
+    // on pose ce flag ; en fin de handler on ajoute UNE entrée « reconnecte » NON-bloquante.
+    let nakastreamAuthFailed = false;
+
     // Sources désactivées manuellement (admin) -> skippées ici (Promise.resolve([]),
     // zéro latence, absentes des résultats). isSourceEnabled lit le réglage à chaud.
     const sourcePromises = [
@@ -1053,9 +1060,19 @@ async function handleStream(req: express.Request, res: express.Response, type: s
         : Promise.resolve([]))
         .then(r => { if (info.originalLanguage === 'ja') { trackSourceResult('animesama', true, r.length); recordOutcome('animesama', r.length > 0 ? 'success' : 'empty'); } return r; })
         .catch(e => { console.log('[AnimeSama] Error:', e); trackSourceResult('animesama', false); recordOutcome('animesama', 'error', e?.message); return []; }),
+      // nakastream : source OPT-IN par utilisateur (token de pairing dans la config).
+      (isSourceEnabled('nakastream') && config?.nakastreamToken
+        ? getNakastreamStreams(config.nakastreamToken, info.tmdbId, type as 'movie' | 'series', parsed.season, parsed.episode, info.title)
+        : Promise.resolve([]))
+        .then(r => { if (config?.nakastreamToken) { trackSourceResult('nakastream', true, r.length); recordOutcome('nakastream', r.length > 0 ? 'success' : 'empty'); } return r; })
+        .catch(e => {
+          if (e instanceof NakastreamAuthError) { nakastreamAuthFailed = true; recordOutcome('nakastream', 'error', 'auth'); }
+          else { console.log('[Nakastream] Error:', e); trackSourceResult('nakastream', false); recordOutcome('nakastream', 'error', e?.message); }
+          return [];
+        }),
     ];
 
-    const SOURCE_NAMES = ['netmirror', 'streamflix', 'movix', 'frenchstream', 'wiflix', 'voirdrama', 'moviebox', 'voiranime', 'nabistream', 'coflix', 'videasy', 'animesama'];
+    const SOURCE_NAMES = ['netmirror', 'streamflix', 'movix', 'frenchstream', 'wiflix', 'voirdrama', 'moviebox', 'voiranime', 'nabistream', 'coflix', 'videasy', 'animesama', 'nakastream'];
     const collected = await collectSources(
       sourcePromises.map((promise, i) => ({
         name: SOURCE_NAMES[i],
@@ -1093,6 +1110,7 @@ async function handleStream(req: express.Request, res: express.Response, type: s
     const coflixResults = collected[9] as Awaited<ReturnType<typeof getCoflixStreams>>;
     const videasyResults = collected[10] as Awaited<ReturnType<typeof getVideasyStreams>>;
     const animesamaResults = collected[11] as Awaited<ReturnType<typeof getAnimeSamaStreams>>;
+    const nakastreamResults = collected[12] as Awaited<ReturnType<typeof getNakastreamStreams>>;
 
     // On accumule des "drafts" (streams sans name/title). name/title sont posés
     // en UNE passe centralisée plus bas (src/display.ts), pour un rendu uniforme.
@@ -1311,6 +1329,21 @@ async function handleStream(req: express.Request, res: express.Response, type: s
           source: 'nabistream',
           subCount: nb.subtitles.length,
         },
+      });
+    }
+
+    // nakastream : master HLS direct tokené (FR audio DEFAULT, token ~6h), Referer requis.
+    for (const nk of nakastreamResults) {
+      const d = await deliver(nk.url, { 'User-Agent': BROWSER_UA, 'Referer': 'https://nakastream.tv/' }, { forceHls: true }, req, config);
+      if (!d) continue;
+      drafts.push({
+        url: d.url,
+        behaviorHints: {
+          notWebReady: !!d.proxyHeaders,
+          bingeGroup: 'nakastream',
+          ...(d.proxyHeaders ? { proxyHeaders: { request: d.proxyHeaders } } : {}),
+        },
+        _meta: { quality: nk.quality, language: nk.language, source: 'nakastream', subCount: nk.subtitles.length },
       });
     }
 
@@ -1555,9 +1588,20 @@ async function handleStream(req: express.Request, res: express.Response, type: s
       .map(([src, n]) => `${src}: ${n}`)
       .join(', ');
 
+    // nakastream déconnecté (token 401) : entrée informative NON-bloquante en fin de liste,
+    // qui ouvre le configure pré-rempli pour reconnecter. Les autres flux restent normaux.
+    const outStreams: any[] = cleanStreams;
+    if (nakastreamAuthFailed) {
+      const proto = (req.headers['x-forwarded-proto'] as string) || req.protocol || 'http';
+      const host = (req.headers['x-forwarded-host'] as string) || req.headers.host;
+      const cfgParam = (req.params as { config?: string }).config;
+      const cfgUrl = cfgParam ? `${proto}://${host}/${cfgParam}/configure` : `${proto}://${host}/configure`;
+      outStreams.push({ name: 'nakastream ⚠️', title: 'nakastream déconnecté\nReconnecte-le dans la configuration.', externalUrl: cfgUrl });
+    }
+
     console.log(`[Stream] Returning ${cleanStreams.length} streams${breakdown ? ` (${breakdown})` : ''}`);
     record(cleanStreams.length, cleanStreams.length > 0 ? 'ok' : 'empty');
-    res.json({ streams: cleanStreams });
+    res.json({ streams: outStreams });
   } catch (e) {
     console.error('[Stream] Error:', e);
     record(0, 'error');
@@ -1609,6 +1653,19 @@ async function handleSubtitles(req: express.Request, res: express.Response, type
       });
     } catch (e: any) {
       console.log('[Subtitles] Nabistream:', (e?.message || '').slice(0, 80));
+    }
+
+    // nakastream : sous-titres FR/EN (WebVTT) tokénés (~6h), servis en direct (opt-in).
+    // Re-résolus frais ; NakastreamAuthError -> juste ignoré ici (pas de subs, non-bloquant).
+    if (config?.nakastreamToken) {
+      try {
+        const nks = await getNakastreamStreams(config.nakastreamToken, info.tmdbId, type as 'movie' | 'series', parsed.season, parsed.episode, info.title);
+        (nks[0]?.subtitles || []).forEach((s, i) => {
+          subtitles.push({ id: `nakastream-${i}-${s.lang}`, url: s.url, lang: s.lang });
+        });
+      } catch (e: any) {
+        console.log('[Subtitles] Nakastream:', (e?.message || '').slice(0, 80));
+      }
     }
 
     // MovieBox : films/séries, sous-titres multi-langues résolus FRAIS à la lecture

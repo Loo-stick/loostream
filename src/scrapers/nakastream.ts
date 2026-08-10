@@ -1,4 +1,5 @@
 import axios from 'axios';
+import * as crypto from 'crypto';
 import { cached } from '../cache';
 import { makeEndpointConfig } from '../endpoint-config';
 
@@ -110,7 +111,10 @@ export async function getNakastreamStreams(
 ): Promise<NakastreamStream[]> {
   if (!token || !tmdbId || !title) return [];
   if (mediaType === 'series' && (!season || !episode)) return [];
-  const key = `nakastream:${tmdbId}:${season || ''}:${episode || ''}`;
+  // Clé PAR TOKEN (hash court) : chaque user a sa propre entrée (le master est tokené
+  // par session) -> pas de partage inter-user, et un token invalide résout à part (401).
+  const tHash = crypto.createHash('md5').update(token).digest('hex').slice(0, 8);
+  const key = `nakastream:${tHash}:${tmdbId}:${season || ''}:${episode || ''}`;
   return cached(
     key,
     STREAMS_TTL_MS,
