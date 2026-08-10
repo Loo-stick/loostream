@@ -6,6 +6,10 @@ services:
     build: .
     container_name: loostream
     restart: unless-stopped
+    # Garde-fou RAM (2026-08-10, apres le crash par thrashing) : pic mesure 119 Mio.
+    # memswap_limit == mem_limit -> AUCUN swap ; au plafond : OOM-kill + restart.
+    mem_limit: 512m
+    memswap_limit: 512m
     ports:
       - "${PORT:-7002}:${PORT:-7002}"
     env_file:
@@ -38,6 +42,10 @@ services:
     image: ghcr.io/mhdzumair/mediaflow-proxy-light:latest
     container_name: loostream-mediaflow
     restart: unless-stopped
+    # Garde-fou RAM (2026-08-10). A l'arret ici, mais dimensionne sur le mediaflow-light
+    # de prod qui plafonne a ~21 Mio. memswap_limit == mem_limit -> AUCUN swap.
+    mem_limit: 512m
+    memswap_limit: 512m
     profiles:
       - mediaflow
     environment:
@@ -56,6 +64,10 @@ services:
       dockerfile: Dockerfile.telegram
     container_name: loostream-telegram
     restart: unless-stopped
+    # Garde-fou RAM (2026-08-10, apres le crash par thrashing) : pic mesure 60 Mio.
+    # memswap_limit == mem_limit -> AUCUN swap ; au plafond : OOM-kill + restart.
+    mem_limit: 512m
+    memswap_limit: 512m
     profiles:
       - telegram
     environment:
