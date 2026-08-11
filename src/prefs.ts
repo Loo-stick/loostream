@@ -48,14 +48,35 @@ export function normalizeQuality(quality: string): string {
  * L'exclusion porte sur la qualité NORMALISÉE : sûre pour les extrêmes (4K/360p) ; « HD »
  * générique normalise en 1080p. NetMirror est exempté (HLS multi-langue ET multi-qualité).
  */
+/**
+ * Résolution NON MESURÉE : label « HD » générique (repli des scrapers quand ils ne
+ * sondent pas la vraie résolution) ou vide. Traitée À PART de l'exclusion par résolution :
+ * on ne peut pas honnêtement affirmer que c'est du 1080p/720p/etc., donc exclure « 1080p »
+ * ne doit PAS l'amputer (sinon Movix/Coflix/FrenchStream/AnimeSama… en repli HD sautent).
+ * L'utilisateur l'exclut explicitement via le token « unknown » (case « Inconnu »).
+ */
+export function isUnknownQuality(quality: string): boolean {
+  const q = (quality || '').trim();
+  return !q || /^(hd|fhd|full\s?hd)$/i.test(q);
+}
+
 export function passesPreferences(
   meta: { quality: string; language: string; source: string },
   langOrder: string[],
   excludeQualities?: string[],
 ): boolean {
-  if (meta.source === 'netmirror') return true;
+  const ex = excludeQualities && excludeQualities.length > 0 ? excludeQualities : null;
+  // Inconnu → exclu SEULEMENT si « unknown » est coché ; sinon exclusion par résolution mesurée.
+  const excluded = !!ex && (isUnknownQuality(meta.quality)
+    ? ex.includes('unknown')
+    : ex.includes(normalizeQuality(meta.quality)));
+  // NetMirror = flux HLS MULTI-AUDIO (VF+VO dans un seul stream) -> exempté du filtre de
+  // LANGUE (le jeter parce qu'il n'est pas « VF pur » perdrait une VF valide). MAIS on
+  // émet désormais une entrée PAR QUALITÉ (cf. handleStream) -> l'exclusion de qualité
+  // s'applique normalement à chacune.
+  if (meta.source === 'netmirror') return !excluded;
   if (!langOrder.includes(normalizeLanguage(meta.language))) return false;
-  if (excludeQualities && excludeQualities.length && excludeQualities.includes(normalizeQuality(meta.quality))) return false;
+  if (excluded) return false;
   return true;
 }
 

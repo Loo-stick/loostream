@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert';
-import { passesPreferences, normalizeQuality, normalizeLanguage, compareStreams, QUALITY_SCORES } from './prefs';
+import { passesPreferences, normalizeQuality, normalizeLanguage, compareStreams, QUALITY_SCORES, isUnknownQuality } from './prefs';
 
 const LANGS = ['MULTI', 'VF', 'VOSTFR']; // VO décoché
 
@@ -16,8 +16,10 @@ test('le filtre de LANGUE reste actif : VO décoché → rejeté', () => {
   assert.equal(passesPreferences({ quality: 'VOSTFR', language: 'VOSTFR', source: 'nabistream' }, LANGS), true);
 });
 
-test('NetMirror reste exempté (multi-langue)', () => {
-  assert.equal(passesPreferences({ quality: 'HD', language: 'VO', source: 'netmirror' }, LANGS), true);
+test('NetMirror reste exempté du filtre de LANGUE (multi-audio VF+VO)', () => {
+  // Une seule langue cochée (VF) : NetMirror MULTI/VO passe quand même (il contient la VF).
+  assert.equal(passesPreferences({ quality: 'HD', language: 'VO', source: 'netmirror' }, ['VF']), true);
+  assert.equal(passesPreferences({ quality: '720p', language: 'MULTI', source: 'netmirror' }, ['VF']), true);
 });
 
 test('exclusion qualité : 4K/360p exclus → rejetés (par qualité normalisée) ; autres OK', () => {
@@ -28,8 +30,37 @@ test('exclusion qualité : 4K/360p exclus → rejetés (par qualité normalisée
   assert.equal(passesPreferences({ quality: '1080p', language: 'VF', source: 'movix' }, LANGS, ex), true);
 });
 
-test('exclusion qualité : NetMirror reste exempté', () => {
-  assert.equal(passesPreferences({ quality: '4K', language: 'VF', source: 'netmirror' }, LANGS, ['4K']), true);
+test('exclusion qualité : NetMirror y est SOUMIS (une entrée par qualité désormais)', () => {
+  // Depuis qu'on émet une entrée NetMirror par résolution, l'exclusion s'applique à chacune :
+  // exclure 1080p retire l'entrée 1080p mais garde 720p/480p.
+  assert.equal(passesPreferences({ quality: '1080p', language: 'MULTI', source: 'netmirror' }, LANGS, ['1080p']), false);
+  assert.equal(passesPreferences({ quality: '720p', language: 'MULTI', source: 'netmirror' }, LANGS, ['1080p']), true);
+  assert.equal(passesPreferences({ quality: '480p', language: 'MULTI', source: 'netmirror' }, LANGS, ['1080p']), true);
+});
+
+test('exclusion qualité : « HD »/inconnu N’EST PAS exclu par une résolution mesurée', () => {
+  // Exclure 1080p ne doit PAS amputer les sources en repli « HD » (résolution non mesurée).
+  assert.equal(passesPreferences({ quality: 'HD', language: 'VF', source: 'movix' }, LANGS, ['1080p']), true);
+  assert.equal(passesPreferences({ quality: '', language: 'VF', source: 'coflix' }, LANGS, ['1080p', '720p']), true);
+});
+
+test('exclusion qualité : token « unknown » → les sources « HD »/inconnu sont exclues', () => {
+  assert.equal(passesPreferences({ quality: 'HD', language: 'VF', source: 'movix' }, LANGS, ['unknown']), false);
+  assert.equal(passesPreferences({ quality: '', language: 'VF', source: 'coflix' }, LANGS, ['unknown']), false);
+  // « unknown » ne touche PAS les résolutions mesurées.
+  assert.equal(passesPreferences({ quality: '1080p', language: 'VF', source: 'movix' }, LANGS, ['unknown']), true);
+  // Combiné : exclure 1080p + unknown retire les deux.
+  assert.equal(passesPreferences({ quality: 'HD', language: 'VF', source: 'movix' }, LANGS, ['1080p', 'unknown']), false);
+  assert.equal(passesPreferences({ quality: '720p', language: 'VF', source: 'movix' }, LANGS, ['1080p', 'unknown']), true);
+});
+
+test('isUnknownQuality : « HD »/vide oui ; résolutions mesurées non', () => {
+  assert.equal(isUnknownQuality('HD'), true);
+  assert.equal(isUnknownQuality(''), true);
+  assert.equal(isUnknownQuality('FHD'), true);
+  assert.equal(isUnknownQuality('1080p'), false);
+  assert.equal(isUnknownQuality('720p'), false);
+  assert.equal(isUnknownQuality('4K'), false);
 });
 
 test('exclusion qualité : sans liste → aucun effet (rétro-compat)', () => {

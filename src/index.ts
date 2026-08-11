@@ -271,8 +271,9 @@ function parseConfig(configStr: string): UserConfig | null {
     // Priorité de tri : 'quality' (qualité d'abord) sinon 'language' (défaut).
     const sortBy: 'language' | 'quality' = parsed.sortBy === 'quality' ? 'quality' : 'language';
 
-    // Qualités à exclure (opt-in) : sous-ensemble des paliers offerts. Vide -> absent.
-    const validExclude = ['4K', '1080p', '720p', '480p', '360p'];
+    // Qualités à exclure (opt-in) : sous-ensemble des paliers offerts + 'unknown' (sources
+    // « HD »/non mesurées, traitées à part — cf. isUnknownQuality dans prefs.ts). Vide -> absent.
+    const validExclude = ['4K', '1080p', '720p', '480p', '360p', 'unknown'];
     let excludeQualities = Array.isArray(parsed.excludeQualities)
       ? parsed.excludeQualities.filter((q: unknown) => typeof q === 'string' && validExclude.includes(q))
       : undefined;
@@ -1187,34 +1188,40 @@ async function handleStream(req: express.Request, res: express.Response, type: s
     // segments .jpg->TS ; MediaFlow incapable). Déjà écarté en amont si le proxy local
     // n'est pas autorisé (localProxyAllowed) -> netmirrorResults est vide dans ce cas.
     for (const r of netmirrorResults) {
-      // Master RECONSTRUIT servi par l'addon (le master d'origine = placeholder).
-      const mu = new URL('/netmirror/master.m3u8', nmSegBase(req));
-      mu.searchParams.set('h', r.cdnHost);
-      mu.searchParams.set('id', r.contentId);
-      mu.searchParams.set('p', r.prefix);
-      mu.searchParams.set('n', String(r.segments));
-      mu.searchParams.set('d', r.avgDur.toFixed(3));
-      mu.searchParams.set('q', r.qualities.join(','));
-      mu.searchParams.set('a', r.audioLangs.map(a => `${a.index}:${a.code}:${encodeURIComponent(a.name)}`).join(','));
-      if (r.subtitles?.length) {
-        mu.searchParams.set('s', r.subtitles
-          .map(t => `${t.code}:${encodeURIComponent(t.name)}:${encodeURIComponent(t.uri)}`).join(','));
-      }
-      const proxiedUrl = signUrl(mu).toString(); // &k= si ACCESS_KEY active
+      // UNE ENTRÉE PAR QUALITÉ réellement présente (au lieu d'un master adaptatif unique).
+      // Chaque entrée porte une vraie résolution -> le filtre d'exclusion de qualité et le
+      // tri par qualité s'appliquent naturellement, et l'utilisateur choisit sa résolution.
+      // L'audio (VF+VO) et les sous-titres restent dans CHAQUE entrée (le player bascule la
+      // piste) : le master reconstruit avec un seul `q` embarque quand même toutes les pistes.
+      for (const q of r.qualities) {
+        const mu = new URL('/netmirror/master.m3u8', nmSegBase(req));
+        mu.searchParams.set('h', r.cdnHost);
+        mu.searchParams.set('id', r.contentId);
+        mu.searchParams.set('p', r.prefix);
+        mu.searchParams.set('n', String(r.segments));
+        mu.searchParams.set('d', r.avgDur.toFixed(3));
+        mu.searchParams.set('q', q); // une seule résolution par entrée
+        mu.searchParams.set('a', r.audioLangs.map(a => `${a.index}:${a.code}:${encodeURIComponent(a.name)}`).join(','));
+        if (r.subtitles?.length) {
+          mu.searchParams.set('s', r.subtitles
+            .map(t => `${t.code}:${encodeURIComponent(t.name)}:${encodeURIComponent(t.uri)}`).join(','));
+        }
+        const proxiedUrl = signUrl(mu).toString(); // &k= si ACCESS_KEY active
 
-      drafts.push({
-        url: proxiedUrl,
-        behaviorHints: {
-          notWebReady: false,
-          bingeGroup: `netmirror-${r.platform}`,
-        },
-        _meta: {
-          quality: r.quality,
-          language: r.language,
-          source: 'netmirror',
-          platform: r.platform,
-        },
-      });
+        drafts.push({
+          url: proxiedUrl,
+          behaviorHints: {
+            notWebReady: false,
+            bingeGroup: `netmirror-${r.platform}-${q}`, // binge par plateforme + qualité
+          },
+          _meta: {
+            quality: q,
+            language: r.language,
+            source: 'netmirror',
+            platform: r.platform,
+          },
+        });
+      }
     }
 
     // Process StreamFlix results
