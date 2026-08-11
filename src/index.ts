@@ -25,8 +25,9 @@ import { accessEnabled, keyMatches, signUrl, requireQueryKey, ownerKeyMatches, o
 import { installLogCapture, getLogs } from './logbuffer';
 import { getModeRaw, autoWhitelistEnabled, updateSettings, settingsView, netfreeSocksPoolEnabled, isSourceEnabled, getDisabledSources, captureAllLogsEnabled } from './settings';
 import { sanitizePseudo, pseudoLabel } from './pseudo';
+import { tmdbReq, tmdbKeyType } from './tmdb-auth';
 import { runWithLogCapture, capturedLines } from './request-log';
-import { recordUserActivity, getUsersOverview, getUserRequests, getRequestLog } from './user-activity';
+import { recordUserActivity, getUsersOverview, getUserRequests, getRequestLog, isPseudoTakenByOther, claimPseudo } from './user-activity';
 import { setPoolEnabled, poolStatus } from './netfree-pool';
 import { canDirect } from './deliver';
 import * as fsSync from 'fs';
@@ -747,6 +748,47 @@ app.get('/:config/configure', (_req, res) => {
   res.sendFile(path.join(__dirname, 'configure.html'));
 });
 
+// Test d'une clé TMDB (v3 api_key OU v4 Bearer) — utilisé par le wizard configure
+// (bouton « Tester » + validation à la génération). Public : ne teste que la clé fournie.
+app.get('/api/tmdb/check', async (req, res) => {
+  const key = String(req.query.key || '').trim();
+  if (!key) return res.json({ valid: false, type: 'unknown' });
+  const type = tmdbKeyType(key);
+  if (type === 'unknown') return res.json({ valid: false, type });
+  try {
+    const rq = tmdbReq('configuration', key);
+    const r = await axios.get(rq.url, { headers: rq.headers, timeout: 8000, validateStatus: () => true });
+    return res.json({ valid: r.status === 200, type, status: r.status });
+  } catch (e: any) {
+    return res.json({ valid: false, type, error: e?.message || 'réseau' });
+  }
+});
+
+// Test de la clé d'accès (si l'hébergeur en exige une). Pas de nouvel oracle : la route
+// /:config/manifest.json valide déjà la clé (200/401), et la clé est à haute entropie.
+app.get('/api/access/check', (req, res) => {
+  if (!accessEnabled()) return res.json({ valid: true, required: false });
+  const key = String(req.query.key || '');
+  return res.json({ valid: keyMatches(key), required: true });
+});
+
+// Unicité du pseudo : déjà utilisé par une clé TMDB DIFFÉRENTE ? (une clé peut avoir
+// plusieurs pseudos ; la re-config pré-remplit clé+pseudo -> même hash -> pas de collision).
+app.get('/api/pseudo/check', (req, res) => {
+  const pseudo = sanitizePseudo(String(req.query.pseudo || ''));
+  if (!pseudo) return res.json({ taken: false });
+  const taken = isPseudoTakenByOther(pseudo, tmdbKeyHash(String(req.query.key || '')));
+  return res.json({ taken });
+});
+// Revendique le pseudo à la GÉNÉRATION du lien (réserve pour cette clé si libre).
+app.post('/api/pseudo/claim', express.json({ limit: '4kb' }), (req, res) => {
+  const b = req.body || {};
+  const pseudo = sanitizePseudo(String(b.pseudo || ''));
+  if (!pseudo) return res.json({ ok: true });
+  const ok = claimPseudo(pseudo, tmdbKeyHash(String(b.key || '')));
+  return res.json({ ok, taken: !ok });
+});
+
 // Manifest without config (uses env defaults)
 app.get('/manifest.json', (req, res) => {
   // Sans config, aucune clé possible : refusé si la protection est active.
@@ -766,6 +808,13 @@ app.get('/:config/manifest.json', (req, res) => {
 
 // TMDB API helper
 const DEFAULT_TMDB_KEY = process.env.TMDB_API_KEY || '';
+
+// Hash court de la clé TMDB : identifie « le même utilisateur » pour l'unicité du pseudo
+// (une clé peut porter PLUSIEURS pseudos ; un pseudo ne peut appartenir qu'à UNE clé).
+function tmdbKeyHash(key: string): string {
+  const k = (key || '').trim();
+  return k ? crypto.createHash('sha256').update(k).digest('hex').slice(0, 16) : '';
+}
 
 const TMDB_TTL_MS = 12 * 60 * 60 * 1000;
 
@@ -808,16 +857,19 @@ async function resolveAnimeTmdbMapping(imdbId: string, title: string, season: nu
       if (!/^\d{4}-\d{2}-\d{2}$/.test(air)) return null;
       const airT = Date.parse(air);
       const base = (title.split(/\s*[:–—-]\s+/)[0] || title).trim();
-      const { data: search } = await axios.get(`https://api.themoviedb.org/3/search/tv?api_key=${tmdbKey}&query=${encodeURIComponent(base)}`, { timeout: 8000 });
+      const rq1 = tmdbReq(`search/tv?query=${encodeURIComponent(base)}`, tmdbKey);
+      const { data: search } = await axios.get(rq1.url, { headers: rq1.headers, timeout: 8000 });
       const cand = (search?.results || [])[0];
       if (!cand) return null;
-      const { data: det } = await axios.get(`https://api.themoviedb.org/3/tv/${cand.id}?api_key=${tmdbKey}`, { timeout: 8000 });
+      const rq2 = tmdbReq(`tv/${cand.id}`, tmdbKey);
+      const { data: det } = await axios.get(rq2.url, { headers: rq2.headers, timeout: 8000 });
       const seasons = (det?.seasons || []).filter((s: any) => s.season_number > 0 && s.air_date)
         .sort((a: any, b: any) => Date.parse(a.air_date) - Date.parse(b.air_date));
       let target: any = null;
       for (const s of seasons) if (Date.parse(s.air_date) <= airT + 2 * 864e5) target = s; // dernière saison commençant avant la date
       if (!target) return null;
-      const { data: sd } = await axios.get(`https://api.themoviedb.org/3/tv/${cand.id}/season/${target.season_number}?api_key=${tmdbKey}`, { timeout: 8000 });
+      const rq3 = tmdbReq(`tv/${cand.id}/season/${target.season_number}`, tmdbKey);
+      const { data: sd } = await axios.get(rq3.url, { headers: rq3.headers, timeout: 8000 });
       const ep = (sd?.episodes || []).find((e: any) => e.air_date && Math.abs(Date.parse(e.air_date) - airT) <= 2 * 864e5);
       if (!ep) return null;
       console.log(`[Stream] Anime mapping: ${imdbId} S${season}E${episode} -> tmdb ${cand.id} S${target.season_number}E${ep.episode_number} (${air})`);
@@ -842,9 +894,8 @@ async function getTmdbInfo(type: string, id: string, config?: UserConfig | null)
         let tmdbId = id;
 
         if (id.startsWith('tt')) {
-          const findResp = await axios.get(
-            `https://api.themoviedb.org/3/find/${id}?api_key=${tmdbKey}&external_source=imdb_id`
-          );
+          const rqf = tmdbReq(`find/${id}?external_source=imdb_id`, tmdbKey);
+          const findResp = await axios.get(rqf.url, { headers: rqf.headers });
           const results = type === 'movie' ? findResp.data.movie_results : findResp.data.tv_results;
           if (!results || results.length === 0) return await cinemetaInfo(type, id); // TMDB ne mappe pas cet IMDB
           tmdbId = String(results[0].id);
@@ -855,9 +906,11 @@ async function getTmdbInfo(type: string, id: string, config?: UserConfig | null)
         const endpoint = type === 'movie' ? 'movie' : 'tv';
         // Détails EN + FR en parallèle : les sites FR indexent par titre français,
         // mais on ne veut pas payer un aller-retour TMDB séquentiel de plus.
+        const rqEn = tmdbReq(`${endpoint}/${tmdbId}`, tmdbKey);
+        const rqFr = tmdbReq(`${endpoint}/${tmdbId}?language=fr-FR`, tmdbKey);
         const [resp, frResp] = await Promise.all([
-          axios.get(`https://api.themoviedb.org/3/${endpoint}/${tmdbId}?api_key=${tmdbKey}`),
-          axios.get(`https://api.themoviedb.org/3/${endpoint}/${tmdbId}?api_key=${tmdbKey}&language=fr-FR`).catch(() => null),
+          axios.get(rqEn.url, { headers: rqEn.headers }),
+          axios.get(rqFr.url, { headers: rqFr.headers }).catch(() => null),
         ]);
 
         const title = resp.data.title || resp.data.name;
@@ -869,7 +922,8 @@ async function getTmdbInfo(type: string, id: string, config?: UserConfig | null)
         let imdbId = id.startsWith('tt') ? id : (resp.data.imdb_id || '');
         if (!imdbId) {
           try {
-            const ext = await axios.get(`https://api.themoviedb.org/3/${endpoint}/${tmdbId}/external_ids?api_key=${tmdbKey}`);
+            const rqx = tmdbReq(`${endpoint}/${tmdbId}/external_ids`, tmdbKey);
+            const ext = await axios.get(rqx.url, { headers: rqx.headers });
             imdbId = ext.data?.imdb_id || '';
           } catch { /* imdbId optional */ }
         }
@@ -937,6 +991,7 @@ async function handleStream(req: express.Request, res: express.Response, type: s
   // narrowing de `const info`) : le titre passe par `recTitle`. `log` complet stocké pour les
   // problèmes (empty/error) ou si captureAllLogs, sinon rien (échelle).
   const who = pseudoLabel(config?.pseudo);
+  const whoKeyHash = tmdbKeyHash(config?.tmdbKey || DEFAULT_TMDB_KEY);
   let recTitle: string | undefined;
   const perSourceSummary: Record<string, number> = {};
   const record = (streams: number, outcome: 'ok' | 'empty' | 'error') => {
@@ -944,7 +999,7 @@ async function handleStream(req: express.Request, res: express.Response, type: s
     recordUserActivity(who, {
       mediaType: type, contentId: id, title: recTitle,
       streams, outcome, detail: JSON.stringify(perSourceSummary), log: logForOutcome,
-    });
+    }, whoKeyHash);
   };
 
   try {

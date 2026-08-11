@@ -5,6 +5,7 @@ import * as path from 'path';
 import { extractStream, detectExtractor, ExtractorConfig, ExtractorId } from '../extractors';
 import { cached } from '../cache';
 import { applyMultiAudio } from '../multiaudio';
+import { tmdbReq } from '../tmdb-auth';
 
 // FrenchStream is a DataLife-Engine (DLE) site whose front domain rotates
 // (fs03.lol -> fs21.lol -> ...). The stable portal fstream.info publishes the
@@ -513,10 +514,8 @@ async function fetchFrenchStreamStreams(
       `tmdb:${tmdbEndpoint}-fr:${tmdbId}`,
       TMDB_TTL_MS,
       async () => {
-        const { data } = await axios.get(
-          `https://api.themoviedb.org/3/${tmdbEndpoint}/${tmdbId}?api_key=${apiKey}&language=fr-FR`,
-          { timeout: 10000 }
-        );
+        const rq = tmdbReq(`${tmdbEndpoint}/${tmdbId}?language=fr-FR`, apiKey);
+        const { data } = await axios.get(rq.url, { headers: rq.headers, timeout: 10000 });
         return data;
       },
       { scope: 'tmdb', shouldCache: r => !!r }

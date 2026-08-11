@@ -25,9 +25,33 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_ua_ts ON user_activity(ts);
 `);
 
+// Migration : hash (court) de la clé TMDB du user -> identifie « le même utilisateur »
+// pour l'unicité du pseudo (deux clés TMDB différentes ne peuvent pas partager un pseudo).
+try { db.exec('ALTER TABLE user_activity ADD COLUMN key_hash TEXT'); } catch { /* déjà présente */ }
+
+// Propriété d'un pseudo : le 1er (clé TMDB) à le REVENDIQUER le possède. Rempli à la
+// génération du lien (configure) ET au stream (couvre les 80 users existants sans action).
+// Une clé peut posséder plusieurs pseudos ; un pseudo n'appartient qu'à UNE clé. NOCASE.
+db.exec(`CREATE TABLE IF NOT EXISTS pseudo_owner (
+  pseudo TEXT COLLATE NOCASE PRIMARY KEY,
+  key_hash TEXT NOT NULL,
+  ts INTEGER NOT NULL
+);`);
+const ownerStmt = db.prepare('SELECT key_hash FROM pseudo_owner WHERE pseudo = ?');
+const claimStmt = db.prepare('INSERT OR IGNORE INTO pseudo_owner (pseudo, key_hash, ts) VALUES (?, ?, ?)');
+
+/** Revendique un pseudo pour une clé. Renvoie true si OK (libre ou déjà à cette clé),
+ *  false s'il appartient à une AUTRE clé. Idempotent (INSERT OR IGNORE). */
+export function claimPseudo(pseudo: string, keyHash: string): boolean {
+  if (!pseudo || !keyHash) return true;
+  claimStmt.run(pseudo, keyHash, Date.now()); // no-op si déjà revendiqué
+  const owner = (ownerStmt.get(pseudo) as { key_hash?: string } | undefined)?.key_hash;
+  return owner === keyHash;
+}
+
 const insertStmt = db.prepare(
-  `INSERT INTO user_activity (pseudo, media_type, content_id, title, streams, outcome, detail, log, ts)
-   VALUES (@pseudo,@media_type,@content_id,@title,@streams,@outcome,@detail,@log,@ts)`
+  `INSERT INTO user_activity (pseudo, media_type, content_id, title, streams, outcome, detail, log, ts, key_hash)
+   VALUES (@pseudo,@media_type,@content_id,@title,@streams,@outcome,@detail,@log,@ts,@key_hash)`
 );
 
 export interface ActivityInput {
@@ -35,13 +59,16 @@ export interface ActivityInput {
   streams: number; outcome: 'ok' | 'empty' | 'error'; detail?: string; log?: string | null;
 }
 
-export function recordUserActivity(pseudo: string, e: ActivityInput): void {
+export function recordUserActivity(pseudo: string, e: ActivityInput, keyHash?: string): void {
   try {
     insertStmt.run({
       pseudo, media_type: e.mediaType ?? null, content_id: e.contentId ?? null,
       title: e.title ?? null, streams: e.streams | 0, outcome: e.outcome,
       detail: e.detail ?? null, log: e.log ? e.log.slice(0, 8192) : null, ts: Date.now(),
+      key_hash: keyHash || null,
     });
+    // Revendique le pseudo pour cette clé (couvre les users existants qui ne re-génèrent pas).
+    if (keyHash && pseudo && pseudo !== '(anonyme)') claimPseudo(pseudo, keyHash);
   } catch (err: any) { console.error('[UserActivity] insert failed:', err.message); }
 }
 
@@ -60,6 +87,14 @@ const requestsStmt = db.prepare(
   `SELECT id, title, media_type mediaType, content_id contentId, streams, outcome, detail, ts
    FROM user_activity WHERE pseudo = ? ORDER BY ts DESC LIMIT ?`
 );
+// Unicité du pseudo : appartient-il à une clé TMDB DIFFÉRENTE ? (même clé = même user qui
+// re-configure -> pas une collision). Lit la table de propriété (pseudo_owner).
+export function isPseudoTakenByOther(pseudo: string, keyHash: string): boolean {
+  if (!pseudo || !keyHash) return false;
+  const owner = (ownerStmt.get(pseudo) as { key_hash?: string } | undefined)?.key_hash;
+  return !!owner && owner !== keyHash;
+}
+
 export function getUserRequests(pseudo: string, limit = 20) {
   return requestsStmt.all(pseudo, limit) as any[];
 }

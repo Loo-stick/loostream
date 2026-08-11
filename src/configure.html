@@ -171,10 +171,14 @@
           <!-- 3 : Clés -->
           <div class="wstep" id="s3">
             <div class="eyebrow">Tes clés — privées, jamais partagées</div>
-            <div class="callout">🔑 La clé TMDB résout titres, saisons et épisodes. Gratuite en 2 min sur <a href="https://www.themoviedb.org/settings/api" target="_blank">themoviedb.org → Paramètres → API</a>.</div>
+            <div class="callout">🔑 La clé TMDB résout titres, saisons et épisodes. Gratuite en 2 min sur <a href="https://www.themoviedb.org/settings/api" target="_blank">themoviedb.org → Paramètres → API</a>. Les <b>deux</b> formats marchent : « API Key » (v3) <b>ou</b> « API Read Access Token » (v4).</div>
             <div class="input-group show">
-              <label>Clé API TMDB (v3)</label>
-              <input type="text" id="tmdb-key" class="mono" placeholder="ex. 80860a1db80b00fafc3a94b4f76da5d1">
+              <label>Clé API TMDB <span class="hint">— v3 (32 caractères) ou v4 (token eyJ…)</span></label>
+              <div style="display:flex;gap:8px;align-items:center;">
+                <input type="text" id="tmdb-key" class="mono" style="flex:1;" placeholder="clé v3 ou token v4" oninput="document.getElementById('tmdb-test-result').textContent='';">
+                <button type="button" class="btn" onclick="testTmdbKey()" style="white-space:nowrap;">Tester</button>
+              </div>
+              <div id="tmdb-test-result" style="font-size:0.85em;margin-top:6px;"></div>
             </div>
             <div class="input-group" id="mf-config">
               <label>URL MediaFlow <span class="hint">— requis pour le mode MediaFlow</span></label>
@@ -185,7 +189,11 @@
             </div>
             <div class="input-group show" style="margin-top:16px">
               <label>Clé d'accès <span class="hint">— seulement si l'hébergeur l'exige</span></label>
-              <input type="text" id="access-key" class="mono" placeholder="optionnel — laisse vide si non requise">
+              <div style="display:flex;gap:8px;align-items:center;">
+                <input type="text" id="access-key" class="mono" style="flex:1;" placeholder="optionnel — laisse vide si non requise" oninput="document.getElementById('access-test-result').textContent='';">
+                <button type="button" class="btn" onclick="testAccessKey()" style="white-space:nowrap;">Tester</button>
+              </div>
+              <div id="access-test-result" style="font-size:0.85em;margin-top:6px;"></div>
             </div>
             <div class="input-group show" style="margin-top:16px">
               <label>nakastream <span class="hint">— optionnel, source bonus (films + FR + anime, sous-titres)</span>
@@ -270,8 +278,9 @@
             <div class="callout">👤 Le pseudo est <b>obligatoire</b> : il permet au support de t'identifier si tu signales un souci. Sans lui, l'addon ne renvoie aucun flux.</div>
             <div class="input-group show">
               <label>Pseudo <span class="hint">— requis</span></label>
-              <input type="text" id="pseudo" maxlength="24" placeholder="ex. Wallace" autocomplete="off" required>
+              <input type="text" id="pseudo" maxlength="24" placeholder="ex. Wallace" autocomplete="off" required oninput="document.getElementById('pseudo-msg').textContent='';">
               <p class="sub">Lettres, chiffres, espace, <code>_ . -</code> — 24 caractères max.</p>
+              <div id="pseudo-msg" style="font-size:0.85em;margin-top:4px;"></div>
             </div>
             <div class="result" id="result">
               <label>Ton lien d'installation</label>
@@ -344,9 +353,47 @@
             .filter(b => !b.classList.contains('on')).map(b => b.dataset.q);
         }
 
-        function generateUrl() {
+        async function testTmdbKey() {
+          const key = document.getElementById('tmdb-key').value.trim();
+          const out = document.getElementById('tmdb-test-result');
+          if (!key) { out.innerHTML = '<span style="color:#e0b0b0;">Entre une clé d\'abord.</span>'; return; }
+          out.textContent = 'Test en cours…';
+          try {
+            const j = await (await fetch('/api/tmdb/check?key=' + encodeURIComponent(key))).json();
+            if (j.valid) out.innerHTML = '<span style="color:#8fce8f;">✓ Clé valide (' + j.type + ')</span>';
+            else if (j.type === 'unknown') out.innerHTML = '<span style="color:#e0b0b0;">✗ Format non reconnu — colle la clé <b>v3</b> (32 caractères) ou le token <b>v4</b> (eyJ…).</span>';
+            else out.innerHTML = '<span style="color:#e0b0b0;">✗ Clé ' + j.type + ' refusée par TMDB (révoquée ou incorrecte).</span>';
+          } catch (e) { out.innerHTML = '<span style="color:#e0b0b0;">✗ Erreur réseau, réessaie.</span>'; }
+        }
+
+        async function testAccessKey() {
+          const key = document.getElementById('access-key').value.trim();
+          const out = document.getElementById('access-test-result');
+          out.textContent = 'Test en cours…';
+          try {
+            const j = await (await fetch('/api/access/check?key=' + encodeURIComponent(key))).json();
+            if (!j.required) out.innerHTML = '<span style="color:#8fce8f;">✓ Cet hébergeur n\'exige pas de clé d\'accès (laisse vide).</span>';
+            else if (j.valid) out.innerHTML = '<span style="color:#8fce8f;">✓ Clé d\'accès valide.</span>';
+            else out.innerHTML = '<span style="color:#e0b0b0;">✗ Clé d\'accès incorrecte.</span>';
+          } catch (e) { out.innerHTML = '<span style="color:#e0b0b0;">✗ Erreur réseau, réessaie.</span>'; }
+        }
+
+        async function generateUrl() {
           const tmdbKey = document.getElementById('tmdb-key').value.trim();
           if (!tmdbKey) { alert('Entre ta clé API TMDB (étape 3).'); go(3); return; }
+          // Valide la clé AVANT de générer : un lien avec une clé KO ne renvoie aucun flux.
+          try {
+            const j = await (await fetch('/api/tmdb/check?key=' + encodeURIComponent(tmdbKey))).json();
+            if (!j.valid) {
+              go(3);
+              const out = document.getElementById('tmdb-test-result');
+              out.innerHTML = j.type === 'unknown'
+                ? '<span style="color:#e0b0b0;">✗ Format de clé non reconnu — v3 (32 car.) ou token v4 (eyJ…). Corrige avant de générer.</span>'
+                : '<span style="color:#e0b0b0;">✗ Clé ' + j.type + ' refusée par TMDB. Vérifie-la (bouton Tester) avant de générer.</span>';
+              document.getElementById('tmdb-key').focus();
+              return;
+            }
+          } catch (e) { /* incident réseau : on ne bloque pas (le serveur gère v3 ET v4) */ }
 
           let config = { tmdbKey };
 
@@ -370,6 +417,16 @@
 
           const accessKey = document.getElementById('access-key').value.trim();
           if (accessKey) config.accessKey = accessKey;
+          // Valide la clé d'accès si l'hébergeur en exige une (sinon lien inutilisable : 401).
+          try {
+            const ja = await (await fetch('/api/access/check?key=' + encodeURIComponent(accessKey))).json();
+            if (ja.required && !ja.valid) {
+              go(3);
+              document.getElementById('access-test-result').innerHTML = '<span style="color:#e0b0b0;">✗ Clé d\'accès requise/incorrecte. Corrige-la (bouton Tester) avant de générer.</span>';
+              document.getElementById('access-key').focus();
+              return;
+            }
+          } catch (e) { /* incident réseau : on ne bloque pas */ }
 
           const ownerKey = document.getElementById('owner-key').value.trim();
           if (ownerKey) config.ownerKey = ownerKey;
@@ -377,6 +434,19 @@
           const pseudo = document.getElementById('pseudo').value.trim();
           if (!pseudo) { alert('Le pseudo est obligatoire (étape 5).'); go(5); document.getElementById('pseudo').focus(); return; }
           config.pseudo = pseudo;
+          // Unicité : REVENDIQUE le pseudo pour cette clé TMDB (réserve si libre). Bloqué s'il
+          // appartient à une AUTRE clé. Ta clé peut avoir plusieurs pseudos ; en re-config la clé
+          // pré-remplie -> même hash -> revendication idempotente (pas de faux positif).
+          try {
+            const jp = await (await fetch('/api/pseudo/claim', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ pseudo, key: tmdbKey }) })).json();
+            if (jp.taken) {
+              go(5);
+              const pm = document.getElementById('pseudo-msg');
+              if (pm) pm.innerHTML = '<span style="color:#e0b0b0;">✗ Ce pseudo est déjà utilisé par quelqu\'un d\'autre. Choisis-en un autre.</span>';
+              document.getElementById('pseudo').focus();
+              return;
+            }
+          } catch (e) { /* incident réseau : on ne bloque pas */ }
 
           if (nakastreamToken) config.nakastreamToken = nakastreamToken;
 

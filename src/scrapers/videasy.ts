@@ -1,6 +1,7 @@
 import axios from 'axios';
 import { cached } from '../cache';
 import { makeEndpointConfig } from '../endpoint-config';
+import { tmdbReq } from '../tmdb-auth';
 
 // Videasy — gros agrégateur (VO anglais + sous-titres) keyé TMDB. Protocole repris
 // du VideasyExtractor d'Onyx + capture navigateur du player actuel (player.videasy.to) :
@@ -51,7 +52,8 @@ async function getTmdb(tmdbId: string, mediaType: 'movie' | 'series', apiKey: st
     12 * 60 * 60 * 1000,
     async () => {
       try {
-        const { data } = await axios.get(`https://api.themoviedb.org/3/${endpoint}/${tmdbId}?api_key=${apiKey}&append_to_response=external_ids`, { timeout: 10000 });
+        const rq = tmdbReq(`${endpoint}/${tmdbId}?append_to_response=external_ids`, apiKey);
+        const { data } = await axios.get(rq.url, { headers: rq.headers, timeout: 10000 });
         return {
           title: data?.title || data?.name || '',
           year: String(data?.release_date || data?.first_air_date || '').slice(0, 4),
