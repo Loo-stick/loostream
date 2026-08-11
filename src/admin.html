@@ -831,7 +831,8 @@ async function loadUserDetail(pseudo) {
         const { requests } = await (await fetch('/api/users/' + encodeURIComponent(pseudo))).json();
         const head = `<div style="display:flex;align-items:center;gap:11px;padding:16px 18px;border-bottom:1px solid rgba(255,255,255,0.07);">
             <span class="uava" style="width:34px;height:34px;border-radius:9px;font-size:0.9em;background:${pseudo==='(anonyme)'?'#7a7a8a':avaColor(pseudo)}">${pseudo==='(anonyme)'?'?':esc(pseudo[0].toUpperCase())}</span>
-            <div><div style="font-weight:600;">${esc(pseudo)}</div><div style="color:var(--dim);font-size:0.8em;">${requests.length} requête(s) récente(s)</div></div></div>`;
+            <div><div style="font-weight:600;">${esc(pseudo)}</div><div style="color:var(--dim);font-size:0.8em;">${requests.length} requête(s) récente(s)</div></div>
+            <button class="btn danger small" style="margin-left:auto" onclick='deleteUser(${JSON.stringify(pseudo)})'>🗑 Supprimer</button></div>`;
         const rows = requests.map(r => {
             let pills = '';
             try { const d = JSON.parse(r.detail || '{}'); pills = Object.entries(d).map(([s,n]) => `<span class="pill">${esc(s)} ${n}</span>`).join(''); } catch {}
@@ -844,6 +845,16 @@ async function loadUserDetail(pseudo) {
         }).join('') || '<div style="padding:16px;color:var(--dim);">Aucune requête.</div>';
         box.innerHTML = head + '<div>' + rows + '</div>';
     } catch { box.innerHTML = '<div style="padding:18px;color:var(--down);">Erreur de chargement.</div>'; }
+}
+
+async function deleteUser(pseudo) {
+    if (!confirm('Supprimer l\'utilisateur « ' + pseudo + ' » ?\nToute son activité sera effacée et son pseudo libéré (re-revendicable). Irréversible.')) return;
+    try {
+        const r = await api('/api/users/' + encodeURIComponent(pseudo), { method: 'DELETE' });
+        const j = await r.json(); if (!r.ok || j.ok === false) throw new Error(j.error || 'HTTP ' + r.status);
+        document.getElementById('user-detail').innerHTML = '<div style="padding:18px;color:var(--ok);">✓ « ' + esc(pseudo) + ' » supprimé (' + j.removed + ' requête(s)).</div>';
+        loadUsers();
+    } catch (e) { if (e.message !== 'session') alert('Échec : ' + e.message); }
 }
 
 async function toggleReqLog(el, id) {

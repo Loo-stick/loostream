@@ -224,6 +224,14 @@
               <div class="hint" style="margin-top:6px">« Inconnu » = sources en « HD » sans résolution mesurée (Movix, Coflix…). Décoche-le pour aussi les exclure.</div>
             </div>
             <div class="input-group show" style="margin-top:18px">
+              <label>Si aucun flux ne correspond à tes filtres</label>
+              <select id="filter-mode">
+                <option value="soft">Montrer les meilleurs flux dispos (souple)</option>
+                <option value="strict">Ne rien montrer — respecter mes exclusions (strict)</option>
+              </select>
+              <div class="hint" style="margin-top:6px">Souple : relâche la langue mais GARDE tes exclusions de qualité. Strict : liste vide plutôt qu'un flux non voulu (ex. que du 360p sur un film pas encore sorti).</div>
+            </div>
+            <div class="input-group show" style="margin-top:18px">
               <label>Qualité préférée <span class="hint">— remontée en tête au tri</span></label>
               <select id="pref-quality">
                 <option value="1080p">1080p (Full HD)</option>
@@ -414,6 +422,7 @@
 
           const ex = getExcludeQualities();
           if (ex.length) config.excludeQualities = ex;
+          if (document.getElementById('filter-mode').value === 'strict') config.strictFilter = true;
 
           const accessKey = document.getElementById('access-key').value.trim();
           if (accessKey) config.accessKey = accessKey;
@@ -545,6 +554,7 @@
               if (config.prefQuality) document.getElementById('pref-quality').value = config.prefQuality;
               if (config.minStreams !== undefined && config.minStreams !== null) document.getElementById('min-streams').value = String(config.minStreams);
               if (config.sortBy) document.getElementById('sort-by').value = config.sortBy;
+              document.getElementById('filter-mode').value = config.strictFilter === true ? 'strict' : 'soft';
               if (config.langOrder && Array.isArray(config.langOrder)) setLangOrder(config.langOrder);
               if (config.excludeQualities && Array.isArray(config.excludeQualities)) {
                 document.querySelectorAll('#quality-toggles .qt').forEach(b => {

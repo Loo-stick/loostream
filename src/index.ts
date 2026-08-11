@@ -28,7 +28,7 @@ import { getModeRaw, autoWhitelistEnabled, updateSettings, settingsView, netfree
 import { sanitizePseudo, pseudoLabel } from './pseudo';
 import { tmdbReq, tmdbKeyType } from './tmdb-auth';
 import { runWithLogCapture, capturedLines } from './request-log';
-import { recordUserActivity, getUsersOverview, getUserRequests, getRequestLog, isPseudoTakenByOther, claimPseudo } from './user-activity';
+import { recordUserActivity, getUsersOverview, getUserRequests, getRequestLog, isPseudoTakenByOther, claimPseudo, deleteUser } from './user-activity';
 import { setPoolEnabled, poolStatus } from './netfree-pool';
 import { canDirect } from './deliver';
 import * as fsSync from 'fs';
@@ -164,6 +164,8 @@ interface UserConfig {
   sortBy?: 'language' | 'quality'; // priorité de tri : langue d'abord (défaut) ou qualité d'abord
   pseudo?: string;       // libellé libre auto-déclaré (support) — optionnel, cf. src/pseudo.ts
   excludeQualities?: string[]; // qualités à EXCLURE (ex. ["4K","360p"]) — filtre opt-in, cf. prefs.ts
+  strictFilter?: boolean; // true = exclusion STRICTE (liste vide si rien ne matche) ; false/absent
+                          // = souple (relâche la langue mais garde l'exclusion de qualité). cf. filterAndSortStreams
   nakastreamToken?: string; // token de pairing nakastream (per-user, opt-in) — cf. scrapers/nakastream.ts
 }
 
@@ -299,6 +301,7 @@ function parseConfig(configStr: string): UserConfig | null {
       langOrder,
       minStreams,
       sortBy,
+      strictFilter: parsed.strictFilter === true,
       pseudo: parsed.pseudo !== undefined ? (sanitizePseudo(parsed.pseudo) || undefined) : undefined,
       excludeQualities,
       nakastreamToken: (typeof parsed.nakastreamToken === 'string' && /^[A-Za-z0-9._-]{10,120}$/.test(parsed.nakastreamToken))
@@ -435,9 +438,14 @@ function filterAndSortStreams(streams: StreamWithMeta[], config: UserConfig | nu
   // Langue + exclusion de qualité opt-in (excludeQualities) ; la qualité départage au tri.
   let filtered = streams.filter(s => passesPreferences(s._meta, langOrder, config.excludeQualities));
 
-  // If filtering removed everything, return original streams sorted
-  if (filtered.length === 0) {
-    filtered = streams;
+  // Filtre strict vide. Deux comportements au CHOIX de l'utilisateur (config.strictFilter) :
+  //  - STRICT (strictFilter=true) : on respecte les exclusions à la lettre -> liste VIDE assumée.
+  //  - SOUPLE (défaut) : dégradation gracieuse -> on relâche la LANGUE (préférence) mais on GARDE
+  //    l'exclusion de qualité (choix explicite -> jamais réafficher un palier exclu, ex. 360p/480p
+  //    sur Toy Story 5 non sorti). Dernier recours (rien ne passe même l'exclusion) : tout.
+  if (filtered.length === 0 && !config.strictFilter) {
+    filtered = streams.filter(s => passesPreferences(s._meta, DEFAULT_LANG_ORDER, config.excludeQualities));
+    if (filtered.length === 0) filtered = streams;
   }
 
   // Tri : langue d'abord (défaut) ou qualité d'abord, selon config.sortBy.
@@ -730,7 +738,7 @@ function getManifest(req: express.Request) {
 
   return {
     id: 'community.loostream.stremio',
-    version: '1.18.0',
+    version: '1.18.1',
     name: 'LooStream',
     logo: `${baseUrl}/logo.png`,
     description: 'Netflix, Prime, Disney+ mirrors + StreamFlix + Movix VF/VOSTFR',
@@ -2445,6 +2453,14 @@ app.get('/api/users/request/:id', requireAdminSession, (req, res) => {
 });
 app.get('/api/users/:pseudo', requireAdminSession, (req, res) => {
   res.json({ requests: getUserRequests(req.params.pseudo) });
+});
+// Supprime un utilisateur : toute son activité + libère son pseudo (re-revendicable ensuite).
+app.delete('/api/users/:pseudo', requireAdminSession, (req, res) => {
+  const pseudo = String(req.params.pseudo || '');
+  if (!pseudo) return res.status(400).json({ ok: false, error: 'pseudo manquant' });
+  const removed = deleteUser(pseudo);
+  console.log(`[Admin] Utilisateur supprimé: "${pseudo}" (${removed} requête(s))`);
+  return res.json({ ok: true, pseudo, removed });
 });
 
 // Retry a probe request on transient network/TLS errors. Some CDN edge nodes

@@ -105,6 +105,17 @@ export function getRequestLog(id: number): string | null {
   return r?.log ?? null;
 }
 
+// Supprime TOUTE l'activité d'un pseudo + libère la propriété du pseudo (pseudo_owner, NOCASE ->
+// re-revendicable ensuite par n'importe quelle clé). Renvoie le nb de lignes d'activité supprimées.
+const delActivityStmt = db.prepare('DELETE FROM user_activity WHERE pseudo = ?');
+const delOwnerStmt = db.prepare('DELETE FROM pseudo_owner WHERE pseudo = ?');
+export function deleteUser(pseudo: string): number {
+  if (!pseudo) return 0;
+  const n = delActivityStmt.run(pseudo).changes;
+  delOwnerStmt.run(pseudo);
+  return n;
+}
+
 const purgeStmt = db.prepare('DELETE FROM user_activity WHERE ts < ?');
 export function purgeOldActivity(): number {
   return purgeStmt.run(Date.now() - RETENTION_MS).changes;
