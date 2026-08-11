@@ -734,8 +734,11 @@ async function setCaptureAll(on) {
 }
 async function setCacheMult(field, v) {
     const msg = document.getElementById('msg-cm-' + field); if (msg) { msg.textContent = '…'; msg.className = 'cfg-msg'; }
+    // Le handler /api/settings attend les clés PLATES cacheMultStreams/Netmirror/Empty, pas
+    // streams/netmirror/empty (qui étaient silencieusement ignorées -> les boutons ×N ne faisaient rien).
+    const KEY = { streams: 'cacheMultStreams', netmirror: 'cacheMultNetmirror', empty: 'cacheMultEmpty' };
     try {
-        const r = await api('/api/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ [field]: v }) });
+        const r = await api('/api/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ [KEY[field] || field]: v }) });
         const j = await r.json(); if (!r.ok || j.ok === false) throw new Error(j.error || 'HTTP ' + r.status);
         loadPartage();
     } catch (e) { if (e.message !== 'session' && msg) { msg.textContent = '✗ ' + e.message; msg.className = 'cfg-msg err'; } }
