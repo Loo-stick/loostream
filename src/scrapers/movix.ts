@@ -367,6 +367,40 @@ async function fetchFStream(
   }
 }
 
+// J1F (Movix, « 1jour1film ») : provider embed. Renvoie players.{vf,vostfr} = [{name,url}].
+// Les hôtes utiles = vidara.* (extracteur `vidara`) ; marcus.p2pstream (P2P) est ignoré à
+// l'extraction (detectExtractor le rejette).
+async function fetchJ1f(
+  tmdbId: string,
+  mediaType: 'movie' | 'series',
+  season?: number,
+  episode?: number
+): Promise<CpasmalLink[]> {
+  const url = mediaType === 'series'
+    ? `${endpoints.api}/api/j1f/tv/${tmdbId}/season/${season || 1}?episode=${episode || 1}`
+    : `${endpoints.api}/api/j1f/movie/${tmdbId}`;
+  console.log(`[Movix] J1F: ${url}`);
+  try {
+    const { data } = await axios.get(url, { headers: buildHeaders(), timeout: 10000 });
+    const players = data?.players || {};
+    const links: CpasmalLink[] = [];
+    for (const [bucket, lang] of [['vf', 'VF'], ['vostfr', 'VOSTFR']] as const) {
+      const items = players[bucket];
+      if (!Array.isArray(items)) continue;
+      for (const item of items) {
+        if (item?.url) {
+          const host = String(item.name || item.url).replace(/^https?:\/\//, '').split('/')[0];
+          links.push({ server: host.toLowerCase(), url: item.url, language: lang });
+        }
+      }
+    }
+    return links;
+  } catch (e: any) {
+    logMovixFail('J1F', e);
+    return [];
+  }
+}
+
 // KissKH (Movix) : drama coréen/chinois/thaï + anime asiatique. Renvoie un m3u8 DIRECT
 // (CDN ouvert, aucun header requis) -> comme purstream, pas d'extraction. Endpoint :
 // /api/kisskh/tv/<id>?season=&episode= (séries) et /api/kisskh/movie/<id>. Résolution
@@ -490,20 +524,21 @@ async function fetchMovixStreams(
   console.log(`[Movix] Searching for TMDB ${tmdbId}...`);
 
   // Fetch en parallèle. purstream + kisskh + seekstreaming = m3u8 DIRECTS ; cpasmal + fstream = embeds.
-  const [purstreamResults, cpasmalLinks, fstreamLinks, kisskhResults, seekResults] = await Promise.all([
+  const [purstreamResults, cpasmalLinks, fstreamLinks, kisskhResults, seekResults, j1fLinks] = await Promise.all([
     fetchPurstream(tmdbId, mediaType, season, episode),
     fetchCpasmal(tmdbId, mediaType, season, episode),
     fetchFStream(tmdbId, mediaType, season, episode),
     fetchKisskh(tmdbId, mediaType, season, episode),
     fetchSeekStreaming(tmdbId, mediaType, season, episode),
+    fetchJ1f(tmdbId, mediaType, season, episode),
   ]);
 
-  console.log(`[Movix] Purstream=${purstreamResults.length}, Cpasmal=${cpasmalLinks.length}, FStream=${fstreamLinks.length}, KissKH=${kisskhResults.length}, Seek=${seekResults.length}`);
+  console.log(`[Movix] Purstream=${purstreamResults.length}, Cpasmal=${cpasmalLinks.length}, FStream=${fstreamLinks.length}, KissKH=${kisskhResults.length}, Seek=${seekResults.length}, J1F=${j1fLinks.length}`);
 
   const streams: MovixStream[] = [...purstreamResults, ...kisskhResults, ...seekResults];
 
   // Merge embed links, extract those our extractor supports.
-  const embedStreams = await extractMovixEmbeds([...cpasmalLinks, ...fstreamLinks], extractorConfig);
+  const embedStreams = await extractMovixEmbeds([...cpasmalLinks, ...fstreamLinks, ...j1fLinks], extractorConfig);
   streams.push(...embedStreams);
 
   console.log(`[Movix] Total: ${streams.length} stream(s) extracted`);
@@ -538,7 +573,9 @@ async function extractMovixEmbeds(
     if (seen.has(k)) return false;
     seen.add(k);
     return true;
-  }).slice(0, 8);
+  }).slice(0, 12); // relevé de 8 : la dédup (serveur+langue) borne déjà la diversité, mais
+                   // 8 starvait les providers ajoutés en dernier (j1f/vidara). Extraction //
+                   // parallèle -> coût quasi nul.
 
   console.log(`[Movix] Extracting ${deduped.length} embed(s) in parallel`);
 

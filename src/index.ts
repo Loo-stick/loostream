@@ -14,6 +14,7 @@ import { getCoflixStreams, getCoflixEndpoints, reloadCoflixEndpoints } from './s
 import { getStreamFlixStreams, reloadStreamflixEndpoints, getStreamflixEndpoints } from './scrapers/streamflix';
 import { getVideasyStreams, reloadVideasyEndpoints, getVideasyEndpoints } from './scrapers/videasy';
 import { getMovixStreams, getMovixAnimeStreams, reloadMovixEndpoints, getMovixEndpoints } from './scrapers/movix';
+import { getWavewatchStreams } from './scrapers/wavewatch';
 import { getNakastreamStreams, NakastreamAuthError, getNakastreamEndpoints } from './scrapers/nakastream';
 import { getVostfreeStreams, getVostfreeEndpoints, reloadVostfreeEndpoints } from './scrapers/vostfree';
 import { getFrenchStreamStreams, reloadFrenchStreamEndpoints, getFrenchStreamEndpoints } from './scrapers/frenchstream';
@@ -73,6 +74,7 @@ interface Stats {
     animesama: { requests: number; success: number; errors: number; lastSuccess: number | null };
     nakastream: { requests: number; success: number; errors: number; lastSuccess: number | null };
     vostfree: { requests: number; success: number; errors: number; lastSuccess: number | null };
+    wavewatch: { requests: number; success: number; errors: number; lastSuccess: number | null };
   };
   streamsServed: {
     movix: number;
@@ -89,6 +91,7 @@ interface Stats {
     animesama: number;
     nakastream: number;
     vostfree: number;
+    wavewatch: number;
   };
 }
 
@@ -110,11 +113,12 @@ const stats: Stats = {
     animesama: { requests: 0, success: 0, errors: 0, lastSuccess: null },
     nakastream: { requests: 0, success: 0, errors: 0, lastSuccess: null },
     vostfree: { requests: 0, success: 0, errors: 0, lastSuccess: null },
+    wavewatch: { requests: 0, success: 0, errors: 0, lastSuccess: null },
   },
-  streamsServed: { movix: 0, netmirror: 0, streamflix: 0, frenchstream: 0, wiflix: 0, voirdrama: 0, moviebox: 0, voiranime: 0, nabistream: 0, coflix: 0, videasy: 0, animesama: 0, nakastream: 0, vostfree: 0 },
+  streamsServed: { movix: 0, netmirror: 0, streamflix: 0, frenchstream: 0, wiflix: 0, voirdrama: 0, moviebox: 0, voiranime: 0, nabistream: 0, coflix: 0, videasy: 0, animesama: 0, nakastream: 0, vostfree: 0, wavewatch: 0 },
 };
 
-function trackSourceResult(source: 'movix' | 'netmirror' | 'streamflix' | 'frenchstream' | 'wiflix' | 'voirdrama' | 'moviebox' | 'voiranime' | 'nabistream' | 'coflix' | 'videasy' | 'animesama' | 'nakastream' | 'vostfree', success: boolean, streamCount: number = 0) {
+function trackSourceResult(source: 'movix' | 'netmirror' | 'streamflix' | 'frenchstream' | 'wiflix' | 'voirdrama' | 'moviebox' | 'voiranime' | 'nabistream' | 'coflix' | 'videasy' | 'animesama' | 'nakastream' | 'vostfree' | 'wavewatch', success: boolean, streamCount: number = 0) {
   stats.sources[source].requests++;
   if (success) {
     stats.sources[source].success++;
@@ -285,7 +289,10 @@ function parseConfig(configStr: string): UserConfig | null {
       proxy,
       mfUrl: parsed.mfUrl ? sanitizeString(parsed.mfUrl, 500) : undefined,
       mfPass: parsed.mfPass ? sanitizeString(parsed.mfPass, 100) : undefined,
-      tmdbKey: parsed.tmdbKey ? sanitizeString(parsed.tmdbKey, 64) : undefined,
+      // ⚠️ 512, PAS 64 : un token v4 (« API Read Access Token ») est un JWT de ~240 car.
+      // Tronqué à 64 il perd ses 2e/3e parties -> tmdbKeyType ne le voit plus comme v4 ->
+      // repart en ?api_key= avec un token cassé -> 401 -> aucun flux. (v3 = 32 hex, OK.)
+      tmdbKey: parsed.tmdbKey ? sanitizeString(parsed.tmdbKey, 512) : undefined,
       accessKey: parsed.accessKey ? sanitizeString(parsed.accessKey, 128) : undefined,
       ownerKey: parsed.ownerKey ? sanitizeString(parsed.ownerKey, 128) : undefined,
       prefQuality,
@@ -723,7 +730,7 @@ function getManifest(req: express.Request) {
 
   return {
     id: 'community.loostream.stremio',
-    version: '1.17.0',
+    version: '1.18.0',
     name: 'LooStream',
     logo: `${baseUrl}/logo.png`,
     description: 'Netflix, Prime, Disney+ mirrors + StreamFlix + Movix VF/VOSTFR',
@@ -1136,9 +1143,16 @@ async function handleStream(req: express.Request, res: express.Response, type: s
         : Promise.resolve([]))
         .then(r => { if (info.originalLanguage === 'ja') { trackSourceResult('vostfree', true, r.length); recordOutcome('vostfree', r.length > 0 ? 'success' : 'empty'); } return r; })
         .catch(e => { console.log('[Vostfree] Error:', e); trackSourceResult('vostfree', false); recordOutcome('vostfree', 'error', e?.message); return []; }),
+      // WaveWatch / ToFlix : agrégateur d'embeds keyé par tmdbId (finepulfe m3u8 direct +
+      // hôtes vidzy/uqload/vidara/fsvid…). Skippé sans tmdbId (return [] interne).
+      (isSourceEnabled('wavewatch') && info.tmdbId
+        ? getWavewatchStreams(info.tmdbId, type as 'movie' | 'series', parsed.season, parsed.episode, extractorConfig)
+        : Promise.resolve([]))
+        .then(r => { if (info.tmdbId) { trackSourceResult('wavewatch', true, r.length); recordOutcome('wavewatch', r.length > 0 ? 'success' : 'empty'); } return r; })
+        .catch(e => { console.log('[Wavewatch] Error:', e); trackSourceResult('wavewatch', false); recordOutcome('wavewatch', 'error', e?.message); return []; }),
     ];
 
-    const SOURCE_NAMES = ['netmirror', 'streamflix', 'movix', 'frenchstream', 'wiflix', 'voirdrama', 'moviebox', 'voiranime', 'nabistream', 'coflix', 'videasy', 'animesama', 'nakastream', 'vostfree'];
+    const SOURCE_NAMES = ['netmirror', 'streamflix', 'movix', 'frenchstream', 'wiflix', 'voirdrama', 'moviebox', 'voiranime', 'nabistream', 'coflix', 'videasy', 'animesama', 'nakastream', 'vostfree', 'wavewatch'];
     const collected = await collectSources(
       sourcePromises.map((promise, i) => ({
         name: SOURCE_NAMES[i],
@@ -1178,6 +1192,7 @@ async function handleStream(req: express.Request, res: express.Response, type: s
     const animesamaResults = collected[11] as Awaited<ReturnType<typeof getAnimeSamaStreams>>;
     const nakastreamResults = collected[12] as Awaited<ReturnType<typeof getNakastreamStreams>>;
     const vostfreeResults = collected[13] as Awaited<ReturnType<typeof getVostfreeStreams>>;
+    const wavewatchResults = collected[14] as Awaited<ReturnType<typeof getWavewatchStreams>>;
 
     // On accumule des "drafts" (streams sans name/title). name/title sont posés
     // en UNE passe centralisée plus bas (src/display.ts), pour un rendu uniforme.
@@ -1237,6 +1252,68 @@ async function handleStream(req: express.Request, res: express.Response, type: s
           language: mv.language,
           source: 'movix',
           server: mv.server,
+        },
+      });
+    }
+
+    // Process WaveWatch results (agrégateur tmdbId). Deux types :
+    //  - direct (finepulfe m3u8 multi-audio) : le CDN 403 tout refetch serveur (Cloudflare)
+    //    -> livraison DIRECTE stricte (opts={}), surtout PAS fixaudio (qui refetch le master).
+    //  - embed résolu (vidzy/uqload/vidara/vidsonic…) : même logique que Movix.
+    for (const wv of wavewatchResults) {
+      let finalUrl: string;
+      let proxyHdrs: Record<string, string> | undefined;
+
+      const mfUrl = config?.mfUrl || DEFAULT_MEDIAFLOW_URL;
+      const isMediaFlowUrl = mfUrl && wv.url.includes(new URL(mfUrl).hostname);
+
+      if (isMediaFlowUrl) {
+        finalUrl = wv.url;
+      } else if (wv.forceProxy) {
+        // m3u8 direct UA-gaté (finepulfe) : segments 403 sur l'UA du player -> DOIT passer par un
+        // proxy qui fetch avec CDN_UA + réécrit le manifeste (multi-audio + subs). deliver() renvoie
+        // null en mode 'direct' -> on construit l'URL nous-mêmes, comme NetMirror. MFP -> MediaFlow
+        // (offload) ; sinon proxy LOCAL, gaté `localProxyAllowed` (owner/local) pour ne pas faire
+        // tirer 200 users publics sur notre bande passante. Ni l'un ni l'autre -> non offert.
+        const mfU = config?.mfUrl || DEFAULT_MEDIAFLOW_URL;
+        let purl: string | null = null;
+        if (config?.proxy === 'mediaflow' && mfU) {
+          purl = buildProxyUrl(wv.url, { ...wv.headers }, false, req, config, false, true);
+        } else if (localProxyAllowed) {
+          purl = buildProxyUrl(wv.url, { ...wv.headers }, false, req, config, true, true);
+        }
+        if (!purl) continue;
+        finalUrl = purl;
+      } else {
+        const proxyHeaders: Record<string, string> = {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+          ...wv.headers,
+        };
+        const isHls = wv.format === 'm3u8';
+        // Embed résolu (fsvid/vidara/…) : livraison DIRECTE comme Movix (fixaudio refetch = troll).
+        // EXCEPTION vidsonic : son CDN résolu (encoder-fin.vidsonic.net) matche encore son propre
+        // extracteur -> serait vu comme « résolu » et livré brut. Or Nuvio ne lit PAS le HLS brut
+        // (les flux qui MARCHENT passent par le proxy) -> on le route via fixaudio (master proxifié).
+        const isResolvedEmbed = detectExtractor(wv.url) !== null && !/vidsonic\.net/i.test(wv.url);
+        const opts = isResolvedEmbed ? {} : { forceHls: isHls, fixAudioHls: isHls };
+        const d = await deliver(wv.url, proxyHeaders, opts, req, config);
+        if (!d) continue;
+        finalUrl = d.url;
+        proxyHdrs = d.proxyHeaders;
+      }
+
+      drafts.push({
+        url: finalUrl,
+        behaviorHints: {
+          notWebReady: !!proxyHdrs,
+          bingeGroup: 'wavewatch',
+          ...(proxyHdrs ? { proxyHeaders: { request: proxyHdrs } } : {}),
+        },
+        _meta: {
+          quality: wv.quality,
+          language: wv.language,
+          source: 'wavewatch',
+          server: wv.server,
         },
       });
     }
@@ -2519,6 +2596,18 @@ app.get('/api/health', async (_req, res) => {
     results.coflix = { status: ok ? 'up' : 'degraded', latency: Date.now() - cofStart };
   } catch (e: any) {
     results.coflix = { status: 'down', error: e.message };
+  }
+
+  // WaveWatch : le resolver zeus.php sert la page player (200 + <title>) pour un tmdbId connu.
+  const wwStart = Date.now();
+  try {
+    const resp = await probeGet('https://apis.wavewatch.top/zeus.php?type=movie&id=550', {
+      timeout: 10000, validateStatus: (s: number) => s < 500,
+    });
+    const ok = resp.status === 200 && /<title/i.test(String(resp.data || ''));
+    results.wavewatch = { status: ok ? 'up' : 'degraded', latency: Date.now() - wwStart };
+  } catch (e: any) {
+    results.wavewatch = { status: 'down', error: e.message };
   }
 
   const allUp = Object.values(results).every(r => r.status === 'up');

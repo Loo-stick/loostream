@@ -118,6 +118,7 @@ const PROVIDER_LABELS: Record<string, string> = {
   voiranime: 'VoirAnime',
   nabistream: 'Nabistream',
   coflix: 'Coflix',
+  wavewatch: 'WaveWatch',
 };
 
 export function providerLabel(source: string): string {

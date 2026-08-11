@@ -1,98 +1,105 @@
 {
-  "_comment": "Domaines reconnus par detectExtractor. Édité par le bot Telegram, hot-reloadé. Voir docs/superpowers/specs/2026-05-22-rotated-extractor-domains-design.md",
-  "voe": [
-    "voe",
-    "voe.sx",
-    "vidara.so",
-    "vidara.to",
-    "smoki.cc",
-    "kinoger.ru",
-    "ralphysuccessfull",
-    "audaciousdefaulthouse",
-    "launchreliantcleaverriver",
-    "reputationsheriffkennethsand",
-    "greaseball6eventual20",
-    "timberwoodanotia",
-    "yodelswartlike",
-    "figeterpiazine",
-    "chromotypic",
-    "wolfdyslectic",
-    "charlestoughrace",
-    "kathyinformationwhether.com",
-    "bryantenunder.com",
-    "vidaraa.cc",
-    "sandratableother.com",
-    "ss6846545.com"
-  ],
-  "uqload": [
-    "uqload"
-  ],
-  "doodstream": [
-    "dood",
-    "doodstream",
-    "dsvplay",
-    "d0o0d",
-    "dooood",
-    "d0000d",
-    "ds2play",
-    "dood.re",
-    "doply.net",
-    "kokoflix.lol",
-    "playmogo.com",
-    "kakaflix.lol",
-    "vidply.com"
-  ],
-  "filemoon": [
-    "filemoon",
-    "filmoon",
-    "moonlink",
-    "bysebuho",
-    "moonplayer",
-    "lukefirst.lol"
-  ],
-  "vidoza": [
-    "vidoza"
-  ],
-  "vidmoly": [
-    "vidmoly",
-    "molystream",
-    "vidhide"
-  ],
-  "streamtape": [
-    "streamtape",
-    "strcloud",
-    "shavetape",
-    "tapewithadblock"
-  ],
-  "mixdrop": [
-    "mixdrop",
-    "mdrop",
-    "mdy48tn97"
-  ],
-  "sharecloudy": [
-    "sharecloudy",
-    "moovbob",
-    "moovtop"
-  ],
-  "lulustream": [
-    "luluvdo",
-    "lulustream",
-    "lulu.st",
-    "luluvid.com"
-  ],
-  "filelions": [
-    "filelions",
-    "minochinos",
-    "javplaya",
-    "lionshare"
-  ],
-  "streamwish": [
-    "streamwish",
-    "hgcloud",
-    "awish",
-    "embedwish",
-    "strwish",
-    "playerwish.com"
-  ],
-  "lastUpdatedAt": "2026-07-29T10:50:17.649Z"
+    "_comment": "Domaines reconnus par detectExtractor. Édité par le bot Telegram, hot-reloadé. Voir docs/superpowers/specs/2026-05-22-rotated-extractor-domains-design.md",
+    "voe": [
+        "voe",
+        "voe.sx",
+        "smoki.cc",
+        "kinoger.ru",
+        "ralphysuccessfull",
+        "audaciousdefaulthouse",
+        "launchreliantcleaverriver",
+        "reputationsheriffkennethsand",
+        "greaseball6eventual20",
+        "timberwoodanotia",
+        "yodelswartlike",
+        "figeterpiazine",
+        "chromotypic",
+        "wolfdyslectic",
+        "charlestoughrace",
+        "kathyinformationwhether.com",
+        "bryantenunder.com",
+        "sandratableother.com",
+        "ss6846545.com"
+    ],
+    "uqload": [
+        "uqload"
+    ],
+    "doodstream": [
+        "dood",
+        "doodstream",
+        "dsvplay",
+        "d0o0d",
+        "dooood",
+        "d0000d",
+        "ds2play",
+        "dood.re",
+        "doply.net",
+        "kokoflix.lol",
+        "playmogo.com",
+        "kakaflix.lol",
+        "vidply.com"
+    ],
+    "filemoon": [
+        "filemoon",
+        "filmoon",
+        "moonlink",
+        "bysebuho",
+        "moonplayer",
+        "lukefirst.lol"
+    ],
+    "vidoza": [
+        "vidoza"
+    ],
+    "vidmoly": [
+        "vidmoly",
+        "molystream",
+        "vidhide"
+    ],
+    "streamtape": [
+        "streamtape",
+        "strcloud",
+        "shavetape",
+        "tapewithadblock"
+    ],
+    "mixdrop": [
+        "mixdrop",
+        "mdrop",
+        "mdy48tn97"
+    ],
+    "sharecloudy": [
+        "sharecloudy",
+        "moovbob",
+        "moovtop"
+    ],
+    "lulustream": [
+        "luluvdo",
+        "lulustream",
+        "lulu.st",
+        "luluvid.com"
+    ],
+    "filelions": [
+        "filelions",
+        "minochinos",
+        "javplaya",
+        "lionshare",
+        "smoothpre",
+        "hanerix"
+    ],
+    "streamwish": [
+        "streamwish",
+        "hgcloud",
+        "awish",
+        "embedwish",
+        "strwish",
+        "playerwish.com"
+    ],
+    "lastUpdatedAt": "2026-07-29T10:50:17.649Z",
+    "vidara": [
+        "vidara.to",
+        "vidara.so",
+        "vidaraa.cc"
+    ],
+    "vidsonic": [
+        "vidsonic"
+    ]
 }

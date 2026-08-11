@@ -45,22 +45,28 @@ export interface ExtractorConfig {
   mediaFlowPassword?: string;
 }
 
-export type ExtractorId ='voe' | 'uqload' | 'doodstream' | 'filemoon' | 'vidoza' | 'vidmoly' | 'streamtape' | 'mixdrop' | 'sharecloudy' | 'lulustream' | 'filelions' | 'streamwish' | 'fsvid' | 'vidzy' | 'mailru' | 'sibnet' | 'livavid' | 'ansembed';
+export type ExtractorId ='voe' | 'uqload' | 'doodstream' | 'filemoon' | 'vidoza' | 'vidmoly' | 'streamtape' | 'mixdrop' | 'sharecloudy' | 'lulustream' | 'filelions' | 'streamwish' | 'fsvid' | 'vidzy' | 'mailru' | 'sibnet' | 'livavid' | 'ansembed' | 'vidara' | 'vidsonic';
 
 export const EXTRACTOR_IDS: ExtractorId[] = [
   'voe', 'uqload', 'doodstream', 'filemoon', 'vidoza', 'vidmoly',
   'streamtape', 'mixdrop', 'sharecloudy', 'lulustream', 'filelions',
-  'streamwish', 'fsvid', 'vidzy', 'mailru', 'sibnet', 'livavid', 'ansembed',
+  'streamwish', 'fsvid', 'vidzy', 'mailru', 'sibnet', 'livavid', 'ansembed', 'vidara', 'vidsonic',
 ];
 
 export const DEFAULT_EXTRACTOR_DOMAINS: Record<ExtractorId, string[]> = {
+  // ⚠️ vidara.* N'EST PAS voe : c'est son propre player (JWPlayer + API /api/stream). Il
+  // était mal classé ici -> voe échouait dessus. Déplacé vers l'extracteur `vidara`.
   voe: [
-    'voe', 'voe.sx', 'vidara.so', 'vidara.to', 'smoki.cc', 'kinoger.ru',
+    'voe', 'voe.sx', 'smoki.cc', 'kinoger.ru',
     'ralphysuccessfull', 'audaciousdefaulthouse', 'launchreliantcleaverriver',
     'reputationsheriffkennethsand', 'greaseball6eventual20', 'timberwoodanotia',
     'yodelswartlike', 'figeterpiazine', 'chromotypic', 'wolfdyslectic',
     'charlestoughrace',
   ],
+  vidara: ['vidara.to', 'vidara.so', 'vidaraa.cc'],
+  // vidsonic : player maison, m3u8 sur encoder-fin-N.vidsonic.net/<shard>/<id>/master.m3u8
+  // (host+shard lus dans l'og:image de la page ; id = dernier segment d'URL). Sans token.
+  vidsonic: ['vidsonic'],
   uqload: ['uqload'],
   doodstream: ['dood', 'doodstream', 'dsvplay', 'd0o0d', 'dooood', 'd0000d', 'ds2play', 'dood.re'],
   filemoon: ['filemoon', 'filmoon', 'moonlink', 'bysebuho', 'moonplayer'],
@@ -75,7 +81,8 @@ export const DEFAULT_EXTRACTOR_DOMAINS: Record<ExtractorId, string[]> = {
   // Familles P.A.C.K.E.R. (extractPackedJs) — listes alignées sur Onyx.
   lulustream: ['luluvdo', 'lulustream', 'lulu.st', 'luluvid', 'luluvdoo'],
   filelions: ['filelions', 'minochinos', 'minochinoos', 'javplaya', 'lionshare',
-    'vidhide', 'moflix-stream', 'dhtpre', 'dingtezuni', 'dintezuvio', 'morencius', 'lecteurvideo'],
+    'vidhide', 'moflix-stream', 'dhtpre', 'dingtezuni', 'dintezuvio', 'morencius', 'lecteurvideo',
+    'smoothpre', 'hanerix'],
   streamwish: ['streamwish', 'hgcloud', 'awish', 'embedwish', 'strwish', 'asnwish',
     'hlswish', 'playerwish', 'swishsrv', 'swiftplayers', 'uqloads.xyz'],
   // Serveurs FrenchStream ("premium" et "vidzy") : page avec JS packé P.A.C.K.E.R.
@@ -288,6 +295,80 @@ export async function extractVidmoly(embedUrl: string): Promise<ExtractedStream 
 /**
  * Extract video URL from Uqload embed
  */
+// Vidara (vidara.to/.so/aa.cc) — player maison JWPlayer, PAS voe. Le m3u8 s'obtient par
+// une simple API : POST /api/stream {filecode} -> { streaming_url }. Le filecode = dernier
+// segment de l'URL d'embed (/e/<code>). Token IP-bound (l'IP est dans le token) -> livraison
+// proxy/MFP (cf. PROXY_FORCED_HOSTS). Aucune obfuscation, aucune WebView.
+export async function extractVidara(embedUrl: string): Promise<ExtractedStream | null> {
+  try {
+    const u = new URL(embedUrl);
+    const filecode = (u.pathname.split('/').filter(Boolean).pop() || '').replace(/\.html$/, '');
+    if (!filecode) return null;
+    const { data } = await axios.post(`${u.origin}/api/stream`, { filecode }, {
+      headers: {
+        ...HEADERS, Referer: `${u.origin}/`, Origin: u.origin,
+        'X-Requested-With': 'XMLHttpRequest', 'Content-Type': 'application/json', Accept: 'application/json',
+      },
+      timeout: 12000, httpsAgent: INSECURE_AGENT,
+    });
+    const src = data?.streaming_url;
+    if (typeof src !== 'string' || !/^https?:\/\//.test(src)) {
+      console.log(`[Extractor] Vidara: pas de streaming_url (${filecode})`);
+      return null;
+    }
+    // Token IP-bound (l'IP du serveur extracteur est DANS le token) -> injouable en direct
+    // depuis l'IP du player. On marque `asn=srv` : isDirectable force alors la livraison via
+    // proxy/MFP (le CDN tolère le param en plus). Survit à la rotation de domaine CDN.
+    const url = `${src}${src.includes('?') ? '&' : '?'}asn=srv`;
+    return { url, quality: 'HD', format: /\.m3u8|\/hls/i.test(src) ? 'hls' : 'mp4', headers: { Referer: `${u.origin}/` } };
+  } catch (e: any) {
+    console.log('[Extractor] Vidara error:', e.message);
+    return null;
+  }
+}
+
+/**
+ * vidsonic.net — player maison sans obfuscation ni token. La page /e/<id> expose
+ * l'hôte encodeur + le shard dans l'og:image (`encoder-fin-N.vidsonic.net/<shard>/<id>/...`).
+ * Le master HLS vit à `https://<host>/<shard>/<id>/master.m3u8` (clair, pas de signature).
+ * L'id est le dernier segment d'URL (`/e/<id>`).
+ */
+export async function extractVidsonic(embedUrl: string): Promise<ExtractedStream | null> {
+  try {
+    const u = new URL(embedUrl);
+    const id = (u.pathname.split('/').filter(Boolean).pop() || '').replace(/\.html$/, '');
+    if (!id) return null;
+    const { data: html } = await axios.get(embedUrl, {
+      headers: { ...IFRAME_HEADERS, Referer: `${u.origin}/` },
+      timeout: 12000, httpsAgent: INSECURE_AGENT,
+    });
+    // Host encodeur + shard : lus dans n'importe quelle URL encoder-fin-N/<shard>/<id> de la page
+    // (og:image poster, thumbnails…). Robuste à la rotation de shard.
+    const m = String(html).match(/(encoder-[a-z0-9-]+\.vidsonic\.net)\/(\d+)\//i);
+    if (!m) {
+      console.log(`[Extractor] Vidsonic: encodeur/shard introuvables (${id})`);
+      return null;
+    }
+    const master = `https://${m[1]}/${m[2]}/${id}/master.m3u8`;
+    // Qualité réelle : le master porte RESOLUTION=WxH. Lecture best-effort (le CDN encoder-fin
+    // est header-free) ; en cas d'échec on garde 'HD' mais on renvoie quand même l'URL jouable.
+    let quality = 'HD';
+    try {
+      const { data: m3u8 } = await axios.get(master, {
+        headers: { ...IFRAME_HEADERS, Referer: `${u.origin}/` }, timeout: 8000, httpsAgent: INSECURE_AGENT,
+      });
+      const hm = String(m3u8).match(/RESOLUTION=\d+x(\d+)/i);
+      const h = hm ? parseInt(hm[1], 10) : 0;
+      if (h >= 2160) quality = '4K'; else if (h >= 1080) quality = '1080p';
+      else if (h >= 720) quality = '720p'; else if (h >= 480) quality = '480p';
+    } catch { /* master non sondable côté serveur : 'HD' par défaut, URL reste jouable client */ }
+    return { url: master, quality, format: 'hls', headers: { Referer: `${u.origin}/` } };
+  } catch (e: any) {
+    console.log('[Extractor] Vidsonic error:', e.message);
+    return null;
+  }
+}
+
 export async function extractUqload(embedUrl: string): Promise<ExtractedStream | null> {
   try {
     // Normalize URL (remove embed- prefix if present)
@@ -715,6 +796,10 @@ async function extractLocally(embedUrl: string, extractor: string): Promise<Extr
   switch (extractor) {
     case 'voe':
       return await extractVoe(embedUrl);
+    case 'vidara':
+      return await extractVidara(embedUrl);
+    case 'vidsonic':
+      return await extractVidsonic(embedUrl);
     case 'uqload':
       return await extractUqload(embedUrl);
     case 'sharecloudy':
@@ -896,7 +981,7 @@ export async function extractStream(
   //    MediaFlow sort une URL RELATIVE cassée ("/stream/…/master.m3u8" -> "relative URL
   //    without a base") ; notre voie /dl (extractStreamWishFamily) donne une URL CDN
   //    absolue fraîche. Extraction locale, puis livraison via le proxy du mode.
-  const LOCAL_ONLY: string[] = ['fsvid', 'vidzy', 'mailru', 'sibnet', 'lulustream', 'streamwish', 'filelions', 'livavid'];
+  const LOCAL_ONLY: string[] = ['fsvid', 'vidzy', 'mailru', 'sibnet', 'lulustream', 'streamwish', 'filelions', 'livavid', 'vidsonic'];
 
   // Try MediaFlow first if configured
   if (config?.useMediaFlow && config.mediaFlowUrl && !LOCAL_ONLY.includes(extractor)) {

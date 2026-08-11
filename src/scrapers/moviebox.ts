@@ -1,7 +1,7 @@
 import axios from 'axios';
 import crypto from 'crypto';
 import { cached } from '../cache';
-import { accepts } from '../matching';
+import { accepts, titlesMatch } from '../matching';
 
 // MovieBox / aoneroom — the mobile "wefeed" API used by Onyx's CloudstreamProvider.
 // One of the largest international catalogues (Netflix originals, K-dramas…),
@@ -37,6 +37,7 @@ const X_CLIENT_INFO = JSON.stringify({
 const BEARER_TTL_MS = 30 * 60 * 1000;
 const STREAMS_TTL_MS = 15 * 60 * 1000;
 const EMPTY_TTL_MS = 5 * 60 * 1000;
+const SUBJECT_TTL_MS = 6 * 60 * 60 * 1000; // subjectId/variants d'une série : stables -> cache long
 const REQ_TIMEOUT_MS = 15000;
 
 // The stream list carries the STABLE resolve params, not the volatile CDN URL.
@@ -138,6 +139,20 @@ async function ensureBearer(force = false): Promise<string | null> {
   return null;
 }
 
+// MovieBox indexe les SÉRIES « un résultat par saison » avec la saison DANS le titre :
+// « Breaking Bad S1 », « Squid Game [English] S2 », « Rick and Morty S1-S9 » — et tous ces
+// résultats pointent le MÊME subjectId (subject multi-saisons dont la liste `resource` porte
+// se/ep pour toutes les saisons). Le matcher exige un token-set ÉGAL -> {breaking,bad,s1} ≠
+// {breaking,bad} -> il rejetait toutes ces séries. On retire ces décorations (tag de langue
+// entre [] + suffixe S<n> / S<a>-S<b>) pour matcher le titre de base.
+function stripSeriesDecorations(title: string): string {
+  return String(title)
+    .replace(/\[[^\]]*\]/g, ' ')                         // [English], [French]...
+    .replace(/\bS\d+(?:\s*-\s*S\d+)?\s*$/i, ' ')          // « S1 », « S1-S9 » en fin de titre
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 // --- title → subjectId ---
 async function findSubjectId(
   bearer: string, title: string, year: string, mediaType: 'movie' | 'series'
@@ -151,8 +166,8 @@ async function findSubjectId(
   for (const grp of (r.data.data?.results || [])) {
     if (Array.isArray(grp?.subjects)) subjects.push(...grp.subjects);
   }
-  // Sélection STRICTE via le matcher partagé (titre token-set + année), puis dub
-  // anglais en dernier (MovieBox expose des variantes doublées « ... English »).
+  // Sélection : titre token-set (base pour les séries) + année, puis dub anglais en dernier
+  // (MovieBox expose des variantes « … English » / « [English] »).
   const wanted = { titles: [title], year: year ? Number(year) : undefined };
   const cands = subjects
     .filter(s => s?.subjectId && Number(s.subjectType) === wantType)
@@ -160,9 +175,17 @@ async function findSubjectId(
       s,
       year: Number(String(s.releaseDate || s.year || '').match(/\d{4}/)?.[0]) || undefined,
       english: /\benglish\b/.test(String(s.title).toLowerCase()),
+      base: mediaType === 'series' ? stripSeriesDecorations(s.title) : String(s.title),
     }))
-    .filter(c => accepts(wanted, { title: c.s.title, year: c.year, item: c.s }))
-    .sort((a, b) => Number(a.english) - Number(b.english)); // dub anglais en dernier
+    .filter(c => {
+      if (!titlesMatch(wanted.titles, c.base)) return false;
+      // Série : l'année d'un subject par-saison (S3 = 2010…) ne colle pas à first_air_date
+      // (2008) -> ne PAS rejeter sur l'année ; le titre de base + subjectType série suffisent.
+      // Film : on garde le contrôle d'année (via accepts, plus strict).
+      if (mediaType === 'series') return true;
+      return accepts(wanted, { title: c.s.title, year: c.year, item: c.s });
+    })
+    .sort((a, b) => Number(a.english) - Number(b.english)); // dub anglais (VO) en dernier -> VF d'abord
 
   return cands[0]?.s?.subjectId || null;
 }
@@ -240,7 +263,14 @@ async function fetchMovieboxStreams(
   const bearer = await ensureBearer();
   if (!bearer) return [];
 
-  const baseSubjectId = await findSubjectId(bearer, title, year, mediaType);
+  // subjectId (recherche titre) et variants (langues) sont IDENTIQUES pour tous les épisodes
+  // d'une série -> on les cache longuement. Sans ça, chaque épisode refaisait search+get (~1,3s
+  // en plus) et MovieBox ratait l'early-exit (1s). En binge, les épisodes suivants sont instantanés.
+  const baseSubjectId = await cached(
+    `moviebox:sid:${mediaType}:${title.toLowerCase()}:${year}`, SUBJECT_TTL_MS,
+    () => findSubjectId(bearer, title, year, mediaType),
+    { scope: 'moviebox', shouldCache: v => !!v },
+  );
   if (!baseSubjectId) {
     console.log(`[MovieBox] Aucun subjectId pour "${title}" (${year})`);
     return [];
@@ -251,7 +281,11 @@ async function fetchMovieboxStreams(
 
   // Each language (VO/VF/VOSTFR) is a separate subjectId — pull its resource list
   // in parallel; one stream per real resolution, subs matched to that encode.
-  const variants = await getLangVariants(bearer, baseSubjectId);
+  const variants = await cached(
+    `moviebox:var:${baseSubjectId}`, SUBJECT_TTL_MS,
+    () => getLangVariants(bearer, baseSubjectId),
+    { scope: 'moviebox', shouldCache: v => v.length > 0 },
+  );
   const perVariant = await Promise.all(variants.map(async v => {
     const list = await getResourceList(bearer, v.subjectId, se, ep);
     const out: MovieboxStream[] = [];
@@ -261,6 +295,11 @@ async function fetchMovieboxStreams(
       const resId = String(item.resourceId || '');
       const res = Number(item.resolution) || 0;
       if (!link || !resId || !res) continue;
+      // BUG FIX : pour une série, l'API `resource` renvoie une liste PLATE de TOUS les
+      // épisodes dispos (chacun avec ses champs `se`/`ep`), en IGNORANT les params se/ep
+      // qu'on envoie. Sans filtre on prenait le 1er item -> le même épisode pour tous.
+      // On ne garde que l'épisode demandé (films : se/ep=0, pas de filtre).
+      if (mediaType === 'series' && (Number(item.se) !== se || Number(item.ep) !== ep)) continue;
       const quality = `${res}p`;
       if (seenRes.has(quality)) continue; // one per resolution per language
       seenRes.add(quality);
@@ -281,11 +320,46 @@ async function fetchMovieboxStreams(
   return streams;
 }
 
-/** resource.list[] for a subjectId (per-resolution encodes + matched captions). */
-async function getResourceList(bearer: string, subjectId: string, se: number, ep: number): Promise<any[]> {
+/**
+ * resource.list[] for a subjectId — items de l'épisode (se/ep) demandé, toutes résolutions.
+ *
+ * L'endpoint est PAGINÉ (perPage=10) et IGNORE les params se/ep : il renvoie TOUS les épisodes,
+ * page par page, ORDONNÉS par (se, ep) croissant. Une série longue (Breaking Bad = 61) tient sur
+ * ~7 pages -> charger seulement la page 1 ratait les saisons hautes. On pagine avec `page` (⚠️ ne
+ * PAS ajouter perPage, qui casse la requête) jusqu'à trouver l'épisode voulu, avec early-stop dès
+ * qu'on a dépassé (se, ep) — inutile de tout charger. Film (se/ep=0) : on renvoie la 1re page.
+ */
+// Une page de l'endpoint resource. ⚠️ On envoie TOUJOURS se=0/ep=0 : passer les vrais se/ep
+// « window » la réponse et casse l'ordre de pagination (on ratait des saisons intermédiaires).
+async function fetchResourcePage(bearer: string, subjectId: string, page: number): Promise<{ list: any[]; total: number; perPage: number } | null> {
   const r = await signedRequest('GET', '/wefeed-mobile-bff/subject-api/resource',
-    { subjectId, se, ep }, { bearer });
-  return (r?.data?.code === 0 && Array.isArray(r.data.data?.list)) ? r.data.data.list : [];
+    { subjectId, se: 0, ep: 0, page }, { bearer });
+  if (r?.data?.code !== 0) return null;
+  const data = r.data.data;
+  return {
+    list: Array.isArray(data?.list) ? data.list : [],
+    total: Number(data?.pager?.totalCount) || 0,
+    perPage: Number(data?.pager?.perPage) || 10,
+  };
+}
+
+async function getResourceList(bearer: string, subjectId: string, se: number, ep: number): Promise<any[]> {
+  const isSeries = se > 0 || ep > 0;
+  const p1 = await fetchResourcePage(bearer, subjectId, 1);
+  if (!p1) return [];
+  if (!isSeries) return p1.list; // film : une seule page d'encodes
+  // L'endpoint est PAGINÉ (perPage=10) : une série longue (Breaking Bad = 61) tient sur ~7 pages.
+  // La page 1 donne totalCount -> on lance TOUTES les pages restantes EN PARALLÈLE (latence ~2
+  // aller-retours au lieu de 7 séquentiels -> MovieBox reste dans la fenêtre de l'early-exit).
+  const all = [...p1.list];
+  const totalPages = Math.min(30, Math.ceil(p1.total / p1.perPage) || 1);
+  if (totalPages > 1) {
+    const rest = await Promise.all(
+      Array.from({ length: totalPages - 1 }, (_, i) => fetchResourcePage(bearer, subjectId, i + 2))
+    );
+    for (const p of rest) if (p) all.push(...p.list);
+  }
+  return all.filter(it => Number(it.se) === se && Number(it.ep) === ep);
 }
 
 /** Find a resource item by resourceId (fresh call). */
@@ -295,7 +369,11 @@ async function findResourceItem(
   const bearer = await ensureBearer();
   if (!bearer) return null;
   const list = await getResourceList(bearer, subjectId, se, ep);
-  return list.find(x => String(x?.resourceId || '') === resourceId) || list[0] || null;
+  // Série : la liste contient TOUS les épisodes -> restreindre à celui demandé AVANT de
+  // matcher le resourceId, sinon le fallback `|| pool[0]` peut re-servir le mauvais épisode.
+  const scoped = (se || ep) ? list.filter(x => Number(x?.se) === se && Number(x?.ep) === ep) : list;
+  const pool = scoped.length ? scoped : list;
+  return pool.find(x => String(x?.resourceId || '') === resourceId) || pool[0] || null;
 }
 
 // Fresh, playable MP4 URL for a resource item — /moviebox/stream calls this at
@@ -306,6 +384,7 @@ export async function resolveMovieboxUrl(
   const item = await findResourceItem(subjectId, se, ep, resourceId);
   return item?.resourceLink || item?.sourceUrl || null;
 }
+
 
 // Fresh subtitle CDN URL (SRT) for a resource item + language — matched to the
 // same encode as the video, resolved at load time (no stale signed URL).
