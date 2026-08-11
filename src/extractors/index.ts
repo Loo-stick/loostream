@@ -482,8 +482,12 @@ async function packedJsOnce(embedUrl: string, origin: string): Promise<string | 
     transformResponse: r => r,
     httpsAgent: INSECURE_AGENT, // certains hôtes (vidoza…) ont un cert TLS expiré
   });
-  const js = unpackFromHtml(String(data || ''));
-  if (!js) return null;
+  const raw = String(data || '');
+  if (!raw) return null;
+  // Vidzy a retiré la couche P.A.C.K.E.R. : l'IIFE obfusquée est désormais EN CLAIR dans
+  // le HTML. Repli sur le HTML brut quand il n'y a pas de packing, sinon on abandonnait
+  // (« pas de flux ») alors que evalObfuscatedUrl sait décoder l'IIFE brute.
+  const js = unpackFromHtml(raw) || raw;
   // Deux candidats : l'URL calculée par l'IIFE obfusquée (vidzy, et le VRAI flux
   // de fsvid) et l'URL en clair. fsvid met le vrai flux dans l'IIFE À CÔTÉ d'un
   // leurre /troll/ en clair -> on préfère toute URL NON-leurre (obfusquée d'abord).
@@ -526,8 +530,9 @@ async function tryDlEmbed(embedUrl: string): Promise<ExtractedStream | null> {
       validateStatus: () => true,
     });
     if (status >= 400) return null; // hôte sans endpoint /dl -> repli sur l'unpack direct
-    const js = unpackFromHtml(String(data || ''));
-    if (!js) return null;
+    const raw = String(data || '');
+    if (!raw) return null;
+    const js = unpackFromHtml(raw) || raw; // repli HTML brut si pas de packing (idem vidzy)
     const url = [evalObfuscatedUrl(js), findStreamUrl(js)].find(u => u && !isDecoyUrl(u)) || null;
     if (!url) return null;
     console.log(`[Extractor] /dl OK: ${new URL(url).host} <- ${embedUrl}`);
