@@ -184,9 +184,31 @@ export function detectExtractor(url: string): ExtractorId | null {
  * Extract video URL from Voe embed
  * Voe stores the HLS URL in a base64-encoded JSON or directly in the page
  */
-export async function extractVoe(embedUrl: string): Promise<ExtractedStream | null> {
+// Dé-obfuscation du player voe « nouveau format » (2024+) : le JSON du player est caché
+// dans <script type="application/json"> via 7 étapes (ROT13 -> retrait de marqueurs junk ->
+// base64 -> reverse -> shift -3 -> base64 -> JSON). Renvoie l'objet {source, ...} ou null.
+const VOE_JUNK = ['@$', '^^', '~@', '%?', '*~', '!!', '#&'];
+function voeDeobfuscate(scriptJson: string): any | null {
   try {
-    const { data: html } = await axios.get(embedUrl, { headers: HEADERS, timeout: 10000 });
+    let s = JSON.parse(scriptJson)[0];
+    if (typeof s !== 'string') return null;
+    s = s.replace(/[a-zA-Z]/g, (c: string) => {                        // 1. ROT13
+      const base = c <= 'Z' ? 65 : 97;
+      return String.fromCharCode(((c.charCodeAt(0) - base + 13) % 26) + base);
+    });
+    for (const j of VOE_JUNK) s = s.split(j).join('');                 // 2. retire le junk
+    s = Buffer.from(s, 'base64').toString('utf-8');                    // 3. base64
+    s = s.split('').reverse().join('');                                // 4. reverse
+    s = s.split('').map((c: string) => String.fromCharCode(c.charCodeAt(0) - 3)).join(''); // 5. shift -3
+    s = Buffer.from(s, 'base64').toString('utf-8');                    // 6. base64
+    return JSON.parse(s);                                              // 7. JSON
+  } catch { return null; }
+}
+
+export async function extractVoe(embedUrl: string, depth = 0): Promise<ExtractedStream | null> {
+  if (depth > 4) { console.log('[Extractor] Voe: trop de redirections'); return null; }
+  try {
+    const { data: html } = await axios.get(embedUrl, { headers: HEADERS, timeout: 10000, httpsAgent: INSECURE_AGENT });
 
     // Method 1: Look for HLS URL in script
     const hlsMatch = html.match(/https?:\/\/[^"'\s]+\.m3u8[^"'\s]*/);
@@ -194,7 +216,18 @@ export async function extractVoe(embedUrl: string): Promise<ExtractedStream | nu
       return { url: hlsMatch[0], quality: 'HD', format: 'hls' };
     }
 
-    // Method 2: Base64 encoded source
+    // Method 2 (NOUVEAU FORMAT) : blob obfusqué dans <script type="application/json">.
+    const jsonBlob = html.match(/<script[^>]+type=["']application\/json["'][^>]*>([\s\S]*?)<\/script>/i);
+    if (jsonBlob) {
+      const obj = voeDeobfuscate(jsonBlob[1].trim());
+      const src: unknown = obj?.source || obj?.file || obj?.direct_access_url;
+      if (typeof src === 'string' && /^https?:\/\//.test(src)) {
+        let origin = ''; try { origin = new URL(embedUrl).origin; } catch { /* ignore */ }
+        return { url: src, quality: 'HD', format: /\.m3u8|\/hls/i.test(src) ? 'hls' : 'mp4', headers: origin ? { Referer: `${origin}/` } : undefined };
+      }
+    }
+
+    // Method 3: Base64 encoded source (ancien format atob)
     const base64Match = html.match(/atob\(['"]([^'"]+)['"]\)/);
     if (base64Match) {
       const decoded = Buffer.from(base64Match[1], 'base64').toString('utf-8');
@@ -204,16 +237,10 @@ export async function extractVoe(embedUrl: string): Promise<ExtractedStream | nu
       }
     }
 
-    // Method 3: window.location redirect
-    const redirectMatch = html.match(/window\.location\.href\s*=\s*['"]([^'"]+)['"]/);
+    // Method 4: window.location redirect (chaîne de domaines rotatifs voe)
+    const redirectMatch = html.match(/window\.location\.href\s*=\s*['"](https?:\/\/[^'"]+)['"]/);
     if (redirectMatch) {
-      return await extractVoe(redirectMatch[1]);
-    }
-
-    // Method 4: JSON source in script
-    const jsonMatch = html.match(/'hls':\s*'([^']+)'/);
-    if (jsonMatch) {
-      return { url: jsonMatch[1], quality: 'HD', format: 'hls' };
+      return await extractVoe(redirectMatch[1], depth + 1);
     }
 
     console.log('[Extractor] Voe: No HLS URL found');
