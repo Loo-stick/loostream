@@ -646,6 +646,19 @@ async function loadPartage() {
         const capToggle = st.captureAllLogs
             ? `<button class="btn small" onclick="setCaptureAll(false)">Désactiver</button>`
             : `<button class="btn small" onclick="setCaptureAll(true)">Activer</button>`;
+        const mult = st.cacheMult || { streams: 1, netmirror: 1, empty: 1 };
+        const msrc = st.cacheMultSource || {};
+        const cmRow = (label, field, base, unit) => {
+            const v = mult[field] || 1;
+            const btns = [0.25, 0.5, 1, 2, 4, 8].map(m =>
+                `<button class="btn small ${m === v ? '' : 'secondary'}" onclick="setCacheMult('${field}',${m})">×${m}</button>`).join(' ');
+            const sb = `<span class="badge src">source : ${msrc[field] === 'file' ? 'admin' : (msrc[field] === 'env' ? '.env' : 'défaut')}</span>`;
+            const prev = unit === 'h' ? (base * v) + ' h' : Math.round(base * v) + ' min';
+            return `<div style="margin-bottom:14px;">
+                <div style="font-size:0.88em;margin-bottom:5px;"><b>${label}</b> <span class="badge on">×${v}</span> ${sb} <span style="color:var(--muted);">→ ~${prev}</span></div>
+                <div class="cfg-row">${btns}<span class="cfg-msg" id="msg-cm-${field}"></span></div>
+            </div>`;
+        };
         box.innerHTML = `
             <div style="margin-bottom:22px;">
                 <div style="font-weight:600;margin-bottom:6px;">Modes de livraison proposés <span class="badge src">source : ${st.modeSource === 'file' ? 'admin' : (st.modeSource === 'env' ? '.env' : 'défaut (tous)')}</span></div>
@@ -688,6 +701,18 @@ async function loadPartage() {
                     ${capToggle}
                     <button class="btn secondary small" onclick="loadPartage()">↻ Rafraîchir l'état</button>
                     <span class="cfg-msg" id="msg-capall"></span></div>
+            </div>
+            <div style="border-top:1px solid rgba(255,255,255,0.08);padding-top:18px;margin-top:22px;">
+                <div style="font-weight:600;margin-bottom:6px;">Durée du cache</div>
+                <div style="font-size:0.8em;color:var(--dim);margin-bottom:12px;">Multiplie les TTL par catégorie (×0.25 → ×8). N'affecte <b>pas</b> la résolution TMDB ni les sessions/cookies.</div>
+                ${cmRow('Flux (sources)', 'streams', 15, 'min')}
+                ${cmRow('NetMirror', 'netmirror', 2, 'h')}
+                ${cmRow('Résultat vide', 'empty', 5, 'min')}
+                <div class="cfg-row" style="margin-top:14px;">
+                    <button class="btn danger small" onclick="clearCacheAll()">🗑️ Vider tout le cache</button>
+                    <button class="btn secondary small" onclick="loadCacheStats()">Voir les stats</button>
+                    <span class="cfg-msg" id="msg-cacheclear"></span></div>
+                <div id="cache-stats" style="font-size:0.8em;color:var(--muted);margin-top:8px;"></div>
             </div>`;
     } catch (e) { if (e.message !== 'session') box.innerHTML = `<div class="error">Erreur: ${esc(e.message)}</div>`; }
 }
@@ -706,6 +731,32 @@ async function setCaptureAll(on) {
         const j = await r.json(); if (!r.ok || j.ok === false) throw new Error(j.error || 'HTTP ' + r.status);
         loadPartage();
     } catch (e) { if (e.message !== 'session' && msg) { msg.textContent = '✗ ' + e.message; msg.className = 'cfg-msg err'; } }
+}
+async function setCacheMult(field, v) {
+    const msg = document.getElementById('msg-cm-' + field); if (msg) { msg.textContent = '…'; msg.className = 'cfg-msg'; }
+    try {
+        const r = await api('/api/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ [field]: v }) });
+        const j = await r.json(); if (!r.ok || j.ok === false) throw new Error(j.error || 'HTTP ' + r.status);
+        loadPartage();
+    } catch (e) { if (e.message !== 'session' && msg) { msg.textContent = '✗ ' + e.message; msg.className = 'cfg-msg err'; } }
+}
+async function clearCacheAll() {
+    if (!confirm('Vider tout le cache des sources ? (les prochaines requêtes re-scraperont)')) return;
+    const msg = document.getElementById('msg-cacheclear'); if (msg) { msg.textContent = '…'; msg.className = 'cfg-msg'; }
+    try {
+        const r = await api('/api/cache/clear', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+        const j = await r.json(); if (!r.ok || j.ok === false) throw new Error(j.error || 'HTTP ' + r.status);
+        if (msg) { msg.textContent = '✓ ' + j.removed + ' entrées vidées'; msg.className = 'cfg-msg ok'; }
+        loadCacheStats();
+    } catch (e) { if (e.message !== 'session' && msg) { msg.textContent = '✗ ' + e.message; msg.className = 'cfg-msg err'; } }
+}
+async function loadCacheStats() {
+    const box = document.getElementById('cache-stats'); if (!box) return;
+    try {
+        const s = await (await api('/api/cache')).json();
+        const scopes = Object.entries(s.byScope || {}).sort((a, b) => b[1] - a[1]).map(([k, n]) => `${esc(k)}: ${n}`).join(' · ');
+        box.innerHTML = `${s.liveEntries} entrées vivantes · ${(s.fileSizeBytes / 1024 / 1024).toFixed(1)} Mo · hit rate ${(s.hitRate * 100).toFixed(0)}%<br>${scopes}`;
+    } catch (e) { if (e.message !== 'session') box.textContent = '✗ ' + e.message; }
 }
 async function postSettings(patch, msgId) {
     const msg = document.getElementById(msgId); msg.textContent = '…'; msg.className = 'cfg-msg';

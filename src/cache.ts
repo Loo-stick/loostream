@@ -1,6 +1,7 @@
 import Database from 'better-sqlite3';
 import * as path from 'path';
 import * as fs from 'fs';
+import { getCacheMultipliers } from './settings';
 
 const CACHE_PATH = process.env.CACHE_DB_PATH ||
   (fs.existsSync('/app/config')
@@ -32,6 +33,8 @@ const setStmt = db.prepare(
   'INSERT OR REPLACE INTO cache (key, value, expires_at, created_at, hits, scope) VALUES (?, ?, ?, ?, 0, ?)'
 );
 const delStmt = db.prepare('DELETE FROM cache WHERE key = ?');
+const clearAllStmt = db.prepare('DELETE FROM cache');
+const clearScopeStmt = db.prepare('DELETE FROM cache WHERE scope = ?');
 const purgeStmt = db.prepare('DELETE FROM cache WHERE expires_at < ?');
 const countStmt = db.prepare('SELECT COUNT(*) as n FROM cache WHERE expires_at >= ?');
 const byScopeStmt = db.prepare(
@@ -69,6 +72,31 @@ export function del(key: string): void {
   delStmt.run(key);
 }
 
+/** Vide TOUT le cache. Renvoie le nb d'entrées supprimées. */
+export function clearAll(): number {
+  return clearAllStmt.run().changes as number;
+}
+
+/** Vide le cache d'un scope (source) donné. Renvoie le nb d'entrées supprimées. */
+export function clearScope(scope: string): number {
+  return clearScopeStmt.run(scope).changes as number;
+}
+
+// Multiplicateurs (admin), par CATÉGORIE. On EXCLUT toujours :
+//  - la RÉSOLUTION de métadonnées (tmdb / anilist / cinemeta) et l'infra (hosthdr) ;
+//  - les caches de SESSION/VIVACITÉ NetMirror (netmirror:cookie / netmirror:alive) —
+//    les étirer casserait la session netfree ou fausserait la détection de flux mort.
+// Sinon : « vide » (résultat négatif) -> facteur EMPTY ; sinon scope netmirror -> NETMIRROR ;
+// sinon (autres sources) -> STREAMS.
+const FIXED_SCOPES = new Set(['tmdb', 'anilist', 'cinemeta', 'hosthdr']);
+function effectiveTtl(ttlMs: number, key: string, scope: string | undefined, isEmpty: boolean): number {
+  if (scope && FIXED_SCOPES.has(scope)) return ttlMs;
+  if (key.startsWith('netmirror:cookie') || key.startsWith('netmirror:alive')) return ttlMs;
+  const m = getCacheMultipliers();
+  const factor = isEmpty ? m.empty : (scope === 'netmirror' ? m.netmirror : m.streams);
+  return factor === 1 ? ttlMs : Math.round(ttlMs * factor);
+}
+
 export interface CachedOptions<T> {
   scope?: string;
   shouldCache?: (value: T) => boolean;
@@ -89,9 +117,9 @@ export async function cached<T>(
   const value = await fn();
   const shouldCache = opts?.shouldCache ?? (() => true);
   if (shouldCache(value)) {
-    set(key, value, ttlMs, opts?.scope);
+    set(key, value, effectiveTtl(ttlMs, key, opts?.scope, false), opts?.scope);
   } else if (opts?.negativeTtlMs) {
-    set(key, value, opts.negativeTtlMs, opts?.scope);
+    set(key, value, effectiveTtl(opts.negativeTtlMs, key, opts?.scope, true), opts?.scope);
   }
   return value;
 }

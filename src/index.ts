@@ -17,7 +17,7 @@ import { getMovixStreams, getMovixAnimeStreams, reloadMovixEndpoints, getMovixEn
 import { getNakastreamStreams, NakastreamAuthError, getNakastreamEndpoints } from './scrapers/nakastream';
 import { getVostfreeStreams, getVostfreeEndpoints, reloadVostfreeEndpoints } from './scrapers/vostfree';
 import { getFrenchStreamStreams, reloadFrenchStreamEndpoints, getFrenchStreamEndpoints } from './scrapers/frenchstream';
-import { cached, getCacheStats } from './cache';
+import { cached, getCacheStats, clearAll, clearScope } from './cache';
 import { recordOutcome, getAllMetrics } from './metrics';
 import crypto from 'crypto';
 import proxyRouter, { isAllowedUrl, addAllowedDomain, getAllowedDomains } from './proxy';
@@ -32,7 +32,7 @@ import { canDirect } from './deliver';
 import * as fsSync from 'fs';
 import * as zlib from 'zlib';
 import { getFrenchSubtitles, subtitleToVtt } from './subtitles';
-import { ExtractorConfig, reloadExtractorDomains, getExtractorDomains } from './extractors';
+import { ExtractorConfig, reloadExtractorDomains, getExtractorDomains, detectExtractor } from './extractors';
 import { getSceneMeta, buildFilename, providerLabel } from './filename';
 import { buildStreamName, buildStreamTitle } from './display';
 import { QUALITY_SCORES, passesPreferences, compareStreams } from './prefs';
@@ -1155,9 +1155,15 @@ async function handleStream(req: express.Request, res: express.Response, type: s
         // stream plays but every subtitle track is silently missing. The API
         // already tells us the format — trust it over the extension.
         const isHls = mv.format === 'm3u8';
-        // Masters Movix (seekstreaming/purstream/anime…) = multi-audio à pistes séparées
-        // sans DEFAULT=YES -> en direct, on sert le master corrigé (segments directs).
-        const d = await deliver(mv.url, proxyHeaders, { forceHls: isHls, fixAudioHls: isHls }, req, config);
+        // Un embed RÉSOLU par extracteur (fsvid/streamwish/premium…) se livre en DIRECT,
+        // comme FrenchStream : fixaudio re-fetch le master CÔTÉ SERVEUR, ce qui mint des
+        // tokens fsvid IP/rate-bound -> le player (IP résidentielle) se fait ensuite
+        // TROLLER (/troll/ FSTREAM.TOP). Seuls les masters purstream PROPRES à Movix
+        // (CDN non reconnu comme extracteur, multi-audio à pistes séparées sans DEFAULT=YES)
+        // passent par fixaudio -> on sert alors le master corrigé (segments directs).
+        const isResolvedEmbed = detectExtractor(mv.url) !== null;
+        const opts = isResolvedEmbed ? {} : { forceHls: isHls, fixAudioHls: isHls };
+        const d = await deliver(mv.url, proxyHeaders, opts, req, config);
 
         if (!d) continue; // Skip blocked URLs
         finalUrl = d.url;
@@ -2036,7 +2042,7 @@ app.get('/api/settings', (_req, res) => {
 });
 app.post('/api/settings', requireAdminSession, jsonBody, (req, res) => {
   const b = req.body || {};
-  const patch: { mode?: string | null; ownerKey?: string | null; autoWhitelist?: boolean | null; netfreeSocksPool?: boolean | null; captureAllLogs?: boolean | null } = {};
+  const patch: { mode?: string | null; ownerKey?: string | null; autoWhitelist?: boolean | null; netfreeSocksPool?: boolean | null; captureAllLogs?: boolean | null; cacheMultStreams?: number | null; cacheMultNetmirror?: number | null; cacheMultEmpty?: number | null } = {};
 
   if ('mode' in b) {
     if (b.mode === null) patch.mode = null;
@@ -2073,11 +2079,34 @@ app.post('/api/settings', requireAdminSession, jsonBody, (req, res) => {
     else if (typeof b.captureAllLogs === 'boolean') patch.captureAllLogs = b.captureAllLogs;
     else return res.status(400).json({ ok: false, error: 'captureAllLogs doit être un booléen' });
   }
+  for (const k of ['cacheMultStreams', 'cacheMultNetmirror', 'cacheMultEmpty'] as const) {
+    if (k in b) {
+      if (b[k] === null) patch[k] = null;
+      else if (typeof b[k] === 'number' && b[k] > 0) patch[k] = b[k];
+      else return res.status(400).json({ ok: false, error: `${k} doit être un nombre > 0 (borné 0.25–8)` });
+    }
+  }
 
   updateSettings(patch);
   // Applique le toggle du pool À CHAUD (démarre/arrête le scan en fond).
   if ('netfreeSocksPool' in b) setPoolEnabled(netfreeSocksPoolEnabled());
   return res.json({ ok: true, ...settingsView(), netfreePool: poolStatus() });
+});
+
+// ── Cache : stats + purge manuelle ─────────────────────────────────────────────
+// GET  /api/cache        → stats (entrées vivantes par scope, taille, hit rate).
+// POST /api/cache/clear  → vide tout, ou un scope précis ({ scope: 'movix' }).
+app.get('/api/cache', (_req, res) => {
+  res.json(getCacheStats());
+});
+app.post('/api/cache/clear', requireAdminSession, jsonBody, (req, res) => {
+  const scope = (req.body || {}).scope;
+  if (scope !== undefined && (typeof scope !== 'string' || !scope)) {
+    return res.status(400).json({ ok: false, error: 'scope doit être une chaîne non vide (ou absent pour tout vider)' });
+  }
+  const removed = scope ? clearScope(scope) : clearAll();
+  console.log(`[Cache] Vidé ${scope ? `scope "${scope}"` : 'TOUT'} depuis l'admin : ${removed} entrées`);
+  return res.json({ ok: true, scope: scope || null, removed });
 });
 
 // ── Contrôle des sources : santé (metrics) + état activé/désactivé ──────────────

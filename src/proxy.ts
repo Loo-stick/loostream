@@ -357,6 +357,7 @@ router.get('/manifest', requireQueryKey, async (req: Request, res: Response) => 
 
     res.setHeader('Content-Type', 'application/vnd.apple.mpegurl');
     res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Cache-Control', 'no-store'); // manifeste réécrit + tokené -> jamais caché (évite un manifeste périmé côté player/CDN)
     res.send(rewritten);
   } catch (e: any) {
     console.error(`[Proxy] Manifest error:`, e.message);
@@ -384,6 +385,28 @@ router.get('/fixaudio', requireQueryKey, async (req: Request, res: Response) => 
     });
     let text = String(response.data);
     if (!/#EXTM3U/.test(text)) return res.status(502).send('Not an HLS manifest');
+
+    // Les enfants (variantes/segments) ne sont PAS servables en direct dans 2 cas :
+    //   1) CDN HEADER-GATED : ils exigent Referer/Origin (ex. seekstreaming neocine.embedseek
+    //      -> 403 sans headers). Un player fetchant une URL ABSOLUE ne peut PAS les envoyer.
+    //   2) Segments DÉGUISÉS EN IMAGE (.png/.jpg = MPEG-TS, cf. NetMirror / purstream cdnvideo)
+    //      -> le player reçoit du `image/png` qu'il ne décode pas.
+    // Dans ces cas on délègue à rewriteManifest -> tout passe par le proxy LOCAL qui porte les
+    // headers h_* (fetch côté serveur, plus de 403) et transforme les segments image en TS.
+    // Sinon (CDN public + segments normaux) on garde la voie DIRECTE ci-dessous (BP nulle).
+    const hasImageSegments = text.split('\n').some(l => {
+      const t = l.trim();
+      return t.length > 0 && !t.startsWith('#') && /\.(png|jpe?g)(\?|$)/i.test(t);
+    });
+    const headerGated = Object.keys(headers).some(k => /^(referer|origin)$/i.test(k));
+    if (hasImageSegments || headerGated) {
+      const rewritten = rewriteManifest(text, url, getBaseUrl(req), headers, hasImageSegments, null);
+      res.setHeader('Content-Type', 'application/vnd.apple.mpegurl');
+      res.setHeader('Access-Control-Allow-Origin', '*');
+      res.setHeader('Cache-Control', 'no-store');
+      return res.send(rewritten);
+    }
+
     const base = url.substring(0, url.lastIndexOf('/') + 1);
     let lines = text.split('\n');
     ensureDefaultAudio(lines);
@@ -399,6 +422,7 @@ router.get('/fixaudio', requireQueryKey, async (req: Request, res: Response) => 
     });
     res.setHeader('Content-Type', 'application/vnd.apple.mpegurl');
     res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Cache-Control', 'no-store');
     res.send(lines.join('\n'));
   } catch (e: any) {
     console.error('[Proxy] fixaudio error:', e.message);

@@ -13,6 +13,17 @@ interface RuntimeSettings {
   netfreeSocksPool?: boolean;
   disabledSources?: string[];
   captureAllLogs?: boolean;
+  // Facteurs ×0.25→×8 sur les TTL du cache, par catégorie (défaut ×1 chacun) :
+  cacheMultStreams?: number;   // sources normales (positif, sauf NetMirror)
+  cacheMultNetmirror?: number; // scope netmirror (positif)
+  cacheMultEmpty?: number;     // « rien trouvé » (négatif), toutes sources
+}
+
+export const CACHE_MULT_MIN = 0.25;
+export const CACHE_MULT_MAX = 8;
+export function clampCacheMultiplier(v: number): number {
+  if (!Number.isFinite(v) || v <= 0) return 1;
+  return Math.min(CACHE_MULT_MAX, Math.max(CACHE_MULT_MIN, v));
 }
 
 const filePath = process.env.RUNTIME_SETTINGS_CONFIG ||
@@ -36,6 +47,9 @@ function load(): RuntimeSettings {
           ? raw.disabledSources.filter((x: unknown) => typeof x === 'string')
           : undefined,
         captureAllLogs: typeof raw.captureAllLogs === 'boolean' ? raw.captureAllLogs : undefined,
+        cacheMultStreams: typeof raw.cacheMultStreams === 'number' && raw.cacheMultStreams > 0 ? raw.cacheMultStreams : undefined,
+        cacheMultNetmirror: typeof raw.cacheMultNetmirror === 'number' && raw.cacheMultNetmirror > 0 ? raw.cacheMultNetmirror : undefined,
+        cacheMultEmpty: typeof raw.cacheMultEmpty === 'number' && raw.cacheMultEmpty > 0 ? raw.cacheMultEmpty : undefined,
       };
     } else {
       cache = {};
@@ -77,6 +91,23 @@ export function captureAllLogsEnabled(): boolean {
   return s.captureAllLogs !== undefined ? s.captureAllLogs : (process.env.CAPTURE_ALL_LOGS === 'true');
 }
 
+// Facteurs multiplicateurs des TTL du cache, par catégorie (cf. cache.ts). ×1 par défaut.
+// N'affectent PAS les cookies/sessions ni la résolution de métadonnées (exclus dans cache.ts).
+export interface CacheMultipliers { streams: number; netmirror: number; empty: number; }
+function readMult(fileVal: number | undefined, envName: string): number {
+  if (fileVal !== undefined) return clampCacheMultiplier(fileVal);
+  const env = Number(process.env[envName]);
+  return Number.isFinite(env) && env > 0 ? clampCacheMultiplier(env) : 1;
+}
+export function getCacheMultipliers(): CacheMultipliers {
+  const s = load();
+  return {
+    streams: readMult(s.cacheMultStreams, 'CACHE_MULT_STREAMS'),
+    netmirror: readMult(s.cacheMultNetmirror, 'CACHE_MULT_NETMIRROR'),
+    empty: readMult(s.cacheMultEmpty, 'CACHE_MULT_EMPTY'),
+  };
+}
+
 // Sources désactivées manuellement (admin) — skippées dans le fan-out. Persistant, à chaud.
 export function getDisabledSources(): string[] {
   return load().disabledSources || [];
@@ -88,6 +119,7 @@ export function isSourceEnabled(name: string): boolean {
 export function updateSettings(patch: {
   mode?: string | null; ownerKey?: string | null; autoWhitelist?: boolean | null;
   netfreeSocksPool?: boolean | null; disabledSources?: string[] | null; captureAllLogs?: boolean | null;
+  cacheMultStreams?: number | null; cacheMultNetmirror?: number | null; cacheMultEmpty?: number | null;
 }): void {
   const current: RuntimeSettings = { ...load() };
   const apply = <K extends keyof RuntimeSettings>(k: K, v: RuntimeSettings[K] | null | undefined) => {
@@ -100,6 +132,11 @@ export function updateSettings(patch: {
   apply('autoWhitelist', patch.autoWhitelist);
   apply('netfreeSocksPool', patch.netfreeSocksPool);
   apply('captureAllLogs', patch.captureAllLogs);
+  const applyMult = (k: 'cacheMultStreams' | 'cacheMultNetmirror' | 'cacheMultEmpty', v: number | null | undefined) =>
+    apply(k, v === null ? null : (v !== undefined ? clampCacheMultiplier(v) : undefined));
+  applyMult('cacheMultStreams', patch.cacheMultStreams);
+  applyMult('cacheMultNetmirror', patch.cacheMultNetmirror);
+  applyMult('cacheMultEmpty', patch.cacheMultEmpty);
   apply('disabledSources', patch.disabledSources === null ? null : (patch.disabledSources && patch.disabledSources.length ? patch.disabledSources : null));
   fs.writeFileSync(filePath, JSON.stringify(current, null, 2));
   cache = null; // invalide
@@ -111,6 +148,8 @@ export function settingsView(): {
   autoWhitelist: boolean; autoWhitelistSource: 'file' | 'env';
   netfreeSocksPool: boolean; netfreeSocksPoolSource: 'file' | 'env';
   captureAllLogs: boolean; captureAllLogsSource: 'file' | 'env';
+  cacheMult: CacheMultipliers;
+  cacheMultSource: { streams: 'file' | 'env' | 'default'; netmirror: 'file' | 'env' | 'default'; empty: 'file' | 'env' | 'default' };
 } {
   const s = load();
   const ownerFile = s.ownerKey !== undefined;
@@ -130,5 +169,11 @@ export function settingsView(): {
     netfreeSocksPoolSource: s.netfreeSocksPool !== undefined ? 'file' : 'env',
     captureAllLogs: captureAllLogsEnabled(),
     captureAllLogsSource: s.captureAllLogs !== undefined ? 'file' : 'env',
+    cacheMult: getCacheMultipliers(),
+    cacheMultSource: {
+      streams: s.cacheMultStreams !== undefined ? 'file' : (process.env.CACHE_MULT_STREAMS ? 'env' : 'default'),
+      netmirror: s.cacheMultNetmirror !== undefined ? 'file' : (process.env.CACHE_MULT_NETMIRROR ? 'env' : 'default'),
+      empty: s.cacheMultEmpty !== undefined ? 'file' : (process.env.CACHE_MULT_EMPTY ? 'env' : 'default'),
+    },
   };
 }
