@@ -1404,12 +1404,17 @@ async function handleStream(req: express.Request, res: express.Response, type: s
       }
     }
 
-    // Process StreamFlix results
+    // Process StreamFlix results.
+    // StreamFlix a ajouté une couche proxy falzey.lol : l'URL mp4 fait un DOUBLE 302 signé
+    // (mp4 -> falzey/video_proxy.php -> mp4?ff=<token temporaire> -> 206). Stremio ne suit
+    // pas cette chaîne en direct -> flux qui apparaît mais ne joue pas. On force donc le
+    // PROXY du mode (MediaFlow/local), qui suit les redirections ET reforge un token frais
+    // à chaque lecture. En direct pur -> écarté (de toute façon injouable en direct).
     for (const sf of streamflixResults) {
       const d = await deliver(sf.url, {
         ...(sf.headers || {}), // Referer streamflix.mom (V2)
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-      }, {}, req, config);
+      }, { forceProxy: true }, req, config);
 
       if (!d) continue; // Skip blocked URLs
 
