@@ -1,0 +1,4 @@
+{
+  "_comment": "Base Zone-Téléchargement (scraping de la section « Regarder en Streaming »). Domaine TRÈS rotatif (zone-telechargement.org/.com/…). Éditable à chaud (bind-mount + fs.watch) ou via l'admin ; reload forcé : /api/ztstream/endpoints?reload=true.",
+  "base": "https://zone-telechargement.org"
+}

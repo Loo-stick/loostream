@@ -1,0 +1,9 @@
+{
+  "_comment": "Miroirs Kordoz (même backend : catalogue + flux sharecloudy identiques, seuls les ids internes diffèrent). Essayés dans l'ordre ; bascule au suivant si un domaine est injoignable/blacklisté. Éditable à chaud (bind-mount + fs.watch) ou via l'admin ; reload forcé : /api/kordoz/endpoints?reload=true.",
+  "domains": [
+    "https://www.kordoz.com",
+    "https://ilmiv.com",
+    "https://www.kidraz.com",
+    "https://vogfo.com"
+  ]
+}

@@ -119,6 +119,9 @@ const PROVIDER_LABELS: Record<string, string> = {
   nabistream: 'Nabistream',
   coflix: 'Coflix',
   wavewatch: 'WaveWatch',
+  kordoz: 'Kordoz',
+  docstream: 'DocStream',
+  ztstream: 'Zone-Téléchargement',
 };
 
 export function providerLabel(source: string): string {

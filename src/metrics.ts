@@ -3,7 +3,7 @@ const CONSECUTIVE_ERRORS_DOWN = 5;
 const WARN_MIN_ERRORS = 3;      // il faut au moins ce nb d'erreurs pour un WARNING
 const WARN_ERROR_RATE = 0.25;   // ET ce taux d'erreurs sur la fenêtre
 
-export type Scraper = 'netmirror' | 'streamflix' | 'movix' | 'frenchstream' | 'wiflix' | 'voirdrama' | 'moviebox' | 'voiranime' | 'nabistream' | 'coflix' | 'videasy' | 'animesama' | 'nakastream' | 'vostfree' | 'wavewatch';
+export type Scraper = 'netmirror' | 'streamflix' | 'movix' | 'frenchstream' | 'wiflix' | 'voirdrama' | 'moviebox' | 'voiranime' | 'nabistream' | 'coflix' | 'videasy' | 'animesama' | 'nakastream' | 'vostfree' | 'wavewatch' | 'kordoz' | 'docstream' | 'ztstream';
 export type Outcome = 'success' | 'empty' | 'error';
 
 interface Entry {
@@ -28,6 +28,9 @@ const buffers: Record<Scraper, Entry[]> = {
   nakastream: [],
   vostfree: [],
   wavewatch: [],
+  kordoz: [],
+  docstream: [],
+  ztstream: [],
 };
 
 export function recordOutcome(scraper: Scraper, outcome: Outcome, error?: string): void {
@@ -135,5 +138,8 @@ export function getAllMetrics(): Record<Scraper, ScraperMetrics> {
     nakastream: getMetrics('nakastream'),
     vostfree: getMetrics('vostfree'),
     wavewatch: getMetrics('wavewatch'),
+    kordoz: getMetrics('kordoz'),
+    docstream: getMetrics('docstream'),
+    ztstream: getMetrics('ztstream'),
   };
 }

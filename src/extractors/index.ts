@@ -1,6 +1,7 @@
 import axios from 'axios';
 import * as https from 'https';
 import * as vm from 'vm';
+import * as crypto from 'crypto';
 import { unpackFromHtml, findStreamUrl } from './unpack';
 import { isStreamLive } from '../live-check';
 import { probeMaster, resLabel } from '../multiaudio';
@@ -45,12 +46,12 @@ export interface ExtractorConfig {
   mediaFlowPassword?: string;
 }
 
-export type ExtractorId ='voe' | 'uqload' | 'doodstream' | 'filemoon' | 'vidoza' | 'vidmoly' | 'streamtape' | 'mixdrop' | 'sharecloudy' | 'lulustream' | 'filelions' | 'streamwish' | 'fsvid' | 'vidzy' | 'mailru' | 'sibnet' | 'livavid' | 'ansembed' | 'vidara' | 'vidsonic';
+export type ExtractorId ='voe' | 'uqload' | 'doodstream' | 'filemoon' | 'vidoza' | 'vidmoly' | 'streamtape' | 'mixdrop' | 'sharecloudy' | 'lulustream' | 'filelions' | 'streamwish' | 'fsvid' | 'vidzy' | 'mailru' | 'sibnet' | 'livavid' | 'ansembed' | 'vidara' | 'vidsonic' | 'embedseek';
 
 export const EXTRACTOR_IDS: ExtractorId[] = [
   'voe', 'uqload', 'doodstream', 'filemoon', 'vidoza', 'vidmoly',
   'streamtape', 'mixdrop', 'sharecloudy', 'lulustream', 'filelions',
-  'streamwish', 'fsvid', 'vidzy', 'mailru', 'sibnet', 'livavid', 'ansembed', 'vidara', 'vidsonic',
+  'streamwish', 'fsvid', 'vidzy', 'mailru', 'sibnet', 'livavid', 'ansembed', 'vidara', 'vidsonic', 'embedseek',
 ];
 
 export const DEFAULT_EXTRACTOR_DOMAINS: Record<ExtractorId, string[]> = {
@@ -61,7 +62,7 @@ export const DEFAULT_EXTRACTOR_DOMAINS: Record<ExtractorId, string[]> = {
     'ralphysuccessfull', 'audaciousdefaulthouse', 'launchreliantcleaverriver',
     'reputationsheriffkennethsand', 'greaseball6eventual20', 'timberwoodanotia',
     'yodelswartlike', 'figeterpiazine', 'chromotypic', 'wolfdyslectic',
-    'charlestoughrace',
+    'charlestoughrace', 'matthewhotelscience',
   ],
   vidara: ['vidara.to', 'vidara.so', 'vidaraa.cc'],
   // vidsonic : player maison, m3u8 sur encoder-fin-N.vidsonic.net/<shard>/<id>/master.m3u8
@@ -90,6 +91,8 @@ export const DEFAULT_EXTRACTOR_DOMAINS: Record<ExtractorId, string[]> = {
   vidzy: ['vidzy'],
   // ansembed : lecteur d'AnimeSama (jwplayer, URL HLS en clair).
   ansembed: ['ansembed'],
+  // embedseek (Seekstreaming/ZT) : API chiffrée AES-128-CBC, clé/IV statiques.
+  embedseek: ['embedseek'],
 };
 
 /**
@@ -440,6 +443,42 @@ export async function extractSharecloudy(embedUrl: string): Promise<ExtractedStr
     };
   } catch (e: any) {
     console.log('[Extractor] Sharecloudy error:', e.message);
+    return null;
+  }
+}
+
+// embedseek (Seekstreaming sur Zone-Téléchargement) — SPA, id dans le fragment #<id>.
+// L'API /api/v1/video?id=<id> renvoie un payload HEX = AES-128-CBC. Clé/IV STATIQUES
+// (extraits par reverse du bundle : T()=clé, A()=IV, dérivés en dur). Le JSON déchiffré
+// porte `source` = master.m3u8 (host IP, gaté par Referer embedseek). Sous-titres FR/EN
+// dans `subtitle`. Rotation possible du domaine/clé -> re-reverser si l'API change.
+const EMBEDSEEK_KEY = Buffer.from('kiemtienmua911ca');
+const EMBEDSEEK_IV = Buffer.from('1234567890oiuytr');
+
+export async function extractEmbedseek(embedUrl: string): Promise<ExtractedStream | null> {
+  try {
+    const u = new URL(embedUrl);
+    const id = (u.hash || '').replace(/^#/, '') || u.pathname.split('/').filter(Boolean).pop();
+    if (!id) return null;
+    const origin = `${u.protocol}//${u.host}`;
+    const { data } = await axios.get(`${origin}/api/v1/video?id=${encodeURIComponent(id)}`, {
+      headers: { ...HEADERS, 'Referer': origin + '/', 'Origin': origin },
+      timeout: 10000, responseType: 'text', transformResponse: v => v, maxRedirects: 3,
+    });
+    const hex = typeof data === 'string' ? data.trim() : '';
+    if (!/^[0-9a-f]+$/i.test(hex) || hex.length % 2) return null;
+    const dec = crypto.createDecipheriv('aes-128-cbc', EMBEDSEEK_KEY, EMBEDSEEK_IV);
+    const plain = Buffer.concat([dec.update(Buffer.from(hex, 'hex')), dec.final()]).toString('utf8');
+    const src = JSON.parse(plain)?.source;
+    if (typeof src !== 'string' || !/^https?:\/\//.test(src)) return null;
+    return {
+      url: src,
+      quality: 'HD',
+      format: /\.m3u8/i.test(src) ? 'hls' : 'mp4',
+      headers: { 'Referer': origin + '/', 'Origin': origin },
+    };
+  } catch (e: any) {
+    console.log('[Extractor] embedseek error:', e.message);
     return null;
   }
 }
@@ -804,6 +843,8 @@ async function extractLocally(embedUrl: string, extractor: string): Promise<Extr
       return await extractUqload(embedUrl);
     case 'sharecloudy':
       return await extractSharecloudy(embedUrl);
+    case 'embedseek':
+      return await extractEmbedseek(embedUrl);
     case 'lulustream':
     case 'streamwish':
     case 'filelions':
@@ -981,7 +1022,7 @@ export async function extractStream(
   //    MediaFlow sort une URL RELATIVE cassée ("/stream/…/master.m3u8" -> "relative URL
   //    without a base") ; notre voie /dl (extractStreamWishFamily) donne une URL CDN
   //    absolue fraîche. Extraction locale, puis livraison via le proxy du mode.
-  const LOCAL_ONLY: string[] = ['fsvid', 'vidzy', 'mailru', 'sibnet', 'lulustream', 'streamwish', 'filelions', 'livavid', 'vidsonic'];
+  const LOCAL_ONLY: string[] = ['fsvid', 'vidzy', 'mailru', 'sibnet', 'lulustream', 'streamwish', 'filelions', 'livavid', 'vidsonic', 'embedseek'];
 
   // Try MediaFlow first if configured
   if (config?.useMediaFlow && config.mediaFlowUrl && !LOCAL_ONLY.includes(extractor)) {

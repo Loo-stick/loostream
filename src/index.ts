@@ -14,7 +14,10 @@ import { getCoflixStreams, getCoflixEndpoints, reloadCoflixEndpoints } from './s
 import { getStreamFlixStreams, reloadStreamflixEndpoints, getStreamflixEndpoints } from './scrapers/streamflix';
 import { getVideasyStreams, reloadVideasyEndpoints, getVideasyEndpoints } from './scrapers/videasy';
 import { getMovixStreams, getMovixAnimeStreams, reloadMovixEndpoints, getMovixEndpoints } from './scrapers/movix';
-import { getWavewatchStreams } from './scrapers/wavewatch';
+import { getWavewatchStreams, getWavewatchEndpoints, reloadWavewatchEndpoints } from './scrapers/wavewatch';
+import { getKordozStreams, getKordozEndpoints, reloadKordozEndpoints } from './scrapers/kordoz';
+import { getDocstreamStreams } from './scrapers/docstream';
+import { getZoneTelechargementStreams, getZoneTelechargementEndpoints, reloadZoneTelechargementEndpoints } from './scrapers/zonetelechargement';
 import { getNakastreamStreams, NakastreamAuthError, getNakastreamEndpoints } from './scrapers/nakastream';
 import { getVostfreeStreams, getVostfreeEndpoints, reloadVostfreeEndpoints } from './scrapers/vostfree';
 import { getFrenchStreamStreams, reloadFrenchStreamEndpoints, getFrenchStreamEndpoints } from './scrapers/frenchstream';
@@ -75,6 +78,9 @@ interface Stats {
     nakastream: { requests: number; success: number; errors: number; lastSuccess: number | null };
     vostfree: { requests: number; success: number; errors: number; lastSuccess: number | null };
     wavewatch: { requests: number; success: number; errors: number; lastSuccess: number | null };
+    kordoz: { requests: number; success: number; errors: number; lastSuccess: number | null };
+    docstream: { requests: number; success: number; errors: number; lastSuccess: number | null };
+    ztstream: { requests: number; success: number; errors: number; lastSuccess: number | null };
   };
   streamsServed: {
     movix: number;
@@ -92,6 +98,9 @@ interface Stats {
     nakastream: number;
     vostfree: number;
     wavewatch: number;
+    kordoz: number;
+    docstream: number;
+    ztstream: number;
   };
 }
 
@@ -114,11 +123,14 @@ const stats: Stats = {
     nakastream: { requests: 0, success: 0, errors: 0, lastSuccess: null },
     vostfree: { requests: 0, success: 0, errors: 0, lastSuccess: null },
     wavewatch: { requests: 0, success: 0, errors: 0, lastSuccess: null },
+    kordoz: { requests: 0, success: 0, errors: 0, lastSuccess: null },
+    docstream: { requests: 0, success: 0, errors: 0, lastSuccess: null },
+    ztstream: { requests: 0, success: 0, errors: 0, lastSuccess: null },
   },
-  streamsServed: { movix: 0, netmirror: 0, streamflix: 0, frenchstream: 0, wiflix: 0, voirdrama: 0, moviebox: 0, voiranime: 0, nabistream: 0, coflix: 0, videasy: 0, animesama: 0, nakastream: 0, vostfree: 0, wavewatch: 0 },
+  streamsServed: { movix: 0, netmirror: 0, streamflix: 0, frenchstream: 0, wiflix: 0, voirdrama: 0, moviebox: 0, voiranime: 0, nabistream: 0, coflix: 0, videasy: 0, animesama: 0, nakastream: 0, vostfree: 0, wavewatch: 0, kordoz: 0, docstream: 0, ztstream: 0 },
 };
 
-function trackSourceResult(source: 'movix' | 'netmirror' | 'streamflix' | 'frenchstream' | 'wiflix' | 'voirdrama' | 'moviebox' | 'voiranime' | 'nabistream' | 'coflix' | 'videasy' | 'animesama' | 'nakastream' | 'vostfree' | 'wavewatch', success: boolean, streamCount: number = 0) {
+function trackSourceResult(source: 'movix' | 'netmirror' | 'streamflix' | 'frenchstream' | 'wiflix' | 'voirdrama' | 'moviebox' | 'voiranime' | 'nabistream' | 'coflix' | 'videasy' | 'animesama' | 'nakastream' | 'vostfree' | 'wavewatch' | 'kordoz' | 'docstream' | 'ztstream', success: boolean, streamCount: number = 0) {
   stats.sources[source].requests++;
   if (success) {
     stats.sources[source].success++;
@@ -738,7 +750,7 @@ function getManifest(req: express.Request) {
 
   return {
     id: 'community.loostream.stremio',
-    version: '1.18.1',
+    version: '1.19.0',
     name: 'LooStream',
     logo: `${baseUrl}/logo.png`,
     description: 'Netflix, Prime, Disney+ mirrors + StreamFlix + Movix VF/VOSTFR',
@@ -1158,9 +1170,24 @@ async function handleStream(req: express.Request, res: express.Response, type: s
         : Promise.resolve([]))
         .then(r => { if (info.tmdbId) { trackSourceResult('wavewatch', true, r.length); recordOutcome('wavewatch', r.length > 0 ? 'success' : 'empty'); } return r; })
         .catch(e => { console.log('[Wavewatch] Error:', e); trackSourceResult('wavewatch', false); recordOutcome('wavewatch', 'error', e?.message); return []; }),
+      // Kordoz : catalogue FILMS FR (VF+VOSTFR), keyé titre (titre FR d'abord). Hôte
+      // sharecloudy -> m3u8 directable. Séries non couvertes (return [] interne).
+      (isSourceEnabled('kordoz') ? getKordozStreams(type as 'movie' | 'series', extractorConfig, info.frenchTitle || info.title, info.title, info.year ? Number(info.year) : undefined) : Promise.resolve([]))
+        .then(r => { trackSourceResult('kordoz', true, r.length); recordOutcome('kordoz', r.length > 0 ? 'success' : 'empty'); return r; })
+        .catch(e => { console.log('[Kordoz] Error:', e); trackSourceResult('kordoz', false); recordOutcome('kordoz', 'error', e?.message); return []; }),
+      // Docstream : documentaires FR (titre FR d'abord). MFP-ONLY (streamtape via MediaFlow) —
+      // return [] interne sans MediaFlow. Films uniquement.
+      (isSourceEnabled('docstream') ? getDocstreamStreams(type as 'movie' | 'series', extractorConfig, info.frenchTitle || info.title, info.title, info.year ? Number(info.year) : undefined) : Promise.resolve([]))
+        .then(r => { trackSourceResult('docstream', true, r.length); recordOutcome('docstream', r.length > 0 ? 'success' : 'empty'); return r; })
+        .catch(e => { console.log('[Docstream] Error:', e); trackSourceResult('docstream', false); recordOutcome('docstream', 'error', e?.message); return []; }),
+      // Zone-Téléchargement (streaming) : gros catalogue FR WEB-DL (titre FR d'abord).
+      // Hôtes lulustream/embedseek via le protecteur zoneurs. Films uniquement pour l'instant.
+      (isSourceEnabled('ztstream') ? getZoneTelechargementStreams(type as 'movie' | 'series', extractorConfig, info.frenchTitle || info.title, info.title, info.year ? Number(info.year) : undefined, parsed.season, parsed.episode) : Promise.resolve([]))
+        .then(r => { trackSourceResult('ztstream', true, r.length); recordOutcome('ztstream', r.length > 0 ? 'success' : 'empty'); return r; })
+        .catch(e => { console.log('[ZT-Stream] Error:', e); trackSourceResult('ztstream', false); recordOutcome('ztstream', 'error', e?.message); return []; }),
     ];
 
-    const SOURCE_NAMES = ['netmirror', 'streamflix', 'movix', 'frenchstream', 'wiflix', 'voirdrama', 'moviebox', 'voiranime', 'nabistream', 'coflix', 'videasy', 'animesama', 'nakastream', 'vostfree', 'wavewatch'];
+    const SOURCE_NAMES = ['netmirror', 'streamflix', 'movix', 'frenchstream', 'wiflix', 'voirdrama', 'moviebox', 'voiranime', 'nabistream', 'coflix', 'videasy', 'animesama', 'nakastream', 'vostfree', 'wavewatch', 'kordoz', 'docstream', 'ztstream'];
     const collected = await collectSources(
       sourcePromises.map((promise, i) => ({
         name: SOURCE_NAMES[i],
@@ -1201,6 +1228,9 @@ async function handleStream(req: express.Request, res: express.Response, type: s
     const nakastreamResults = collected[12] as Awaited<ReturnType<typeof getNakastreamStreams>>;
     const vostfreeResults = collected[13] as Awaited<ReturnType<typeof getVostfreeStreams>>;
     const wavewatchResults = collected[14] as Awaited<ReturnType<typeof getWavewatchStreams>>;
+    const kordozResults = collected[15] as Awaited<ReturnType<typeof getKordozStreams>>;
+    const docstreamResults = collected[16] as Awaited<ReturnType<typeof getDocstreamStreams>>;
+    const ztstreamResults = collected[17] as Awaited<ReturnType<typeof getZoneTelechargementStreams>>;
 
     // On accumule des "drafts" (streams sans name/title). name/title sont posés
     // en UNE passe centralisée plus bas (src/display.ts), pour un rendu uniforme.
@@ -1560,6 +1590,89 @@ async function handleStream(req: express.Request, res: express.Response, type: s
           language: cf.language,
           source: 'coflix',
           server: cf.server,
+        },
+      });
+    }
+
+    // Process Kordoz results (films FR VF+VOSTFR ; sharecloudy -> m3u8 directable,
+    // CORS ouvert + pas d'asn -> joue en direct ET via proxy).
+    for (const kz of kordozResults) {
+      const d = await deliver(kz.url, {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        ...(kz.headers || {}),
+      }, { forceHls: true }, req, config);
+
+      if (!d) continue; // Skip blocked URLs
+
+      drafts.push({
+        url: d.url,
+        behaviorHints: {
+          notWebReady: !!d.proxyHeaders,
+          bingeGroup: `kordoz-${kz.server}`,
+          ...(d.proxyHeaders ? { proxyHeaders: { request: d.proxyHeaders } } : {}),
+        },
+        _meta: {
+          quality: kz.quality,
+          language: kz.language,
+          source: 'kordoz',
+          server: kz.server,
+        },
+      });
+    }
+
+    // Process Docstream results (documentaires FR ; streamtape résolu via MediaFlow ->
+    // URL MediaFlow déjà jouable, mp4 le plus souvent). MFP-only en amont.
+    for (const ds of docstreamResults) {
+      const isHls = /\.m3u8/i.test(ds.url);
+      const d = await deliver(ds.url, {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        ...(ds.headers || {}),
+      }, { forceHls: isHls }, req, config);
+
+      if (!d) continue; // Skip blocked URLs
+
+      drafts.push({
+        url: d.url,
+        behaviorHints: {
+          notWebReady: !!d.proxyHeaders,
+          bingeGroup: `docstream-${ds.server}`,
+          ...(d.proxyHeaders ? { proxyHeaders: { request: d.proxyHeaders } } : {}),
+        },
+        _meta: {
+          quality: ds.quality,
+          language: ds.language,
+          source: 'docstream',
+          server: ds.server,
+        },
+      });
+    }
+
+    // Process Zone-Téléchargement results (gros catalogue FR WEB-DL, HLS extrait des hôtes).
+    // Comme Coflix : lulustream résout vers tnmr (proxy-forcé + anti-datacenter) -> injouable
+    // en direct/MediaFlow, SEUL le proxy local (UA exact) marche -> forceLocal + réservé aux
+    // configs qui peuvent l'utiliser (owner key / mode local).
+    for (const zt of ztstreamResults) {
+      const needsLocalProxy = /tnmr/i.test(zt.url);
+      if (needsLocalProxy && !localProxyAllowed) continue;
+      const d = await deliver(zt.url, {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        ...(zt.headers || {}),
+      }, { forceHls: true, forceLocal: needsLocalProxy }, req, config);
+
+      if (!d) continue; // Skip blocked URLs
+
+      drafts.push({
+        url: d.url,
+        behaviorHints: {
+          notWebReady: !!d.proxyHeaders,
+          bingeGroup: `ztstream-${zt.server}`,
+          ...(d.proxyHeaders ? { proxyHeaders: { request: d.proxyHeaders } } : {}),
+        },
+        _meta: {
+          quality: zt.quality,
+          language: zt.language,
+          source: 'ztstream',
+          server: zt.server,
         },
       });
     }
@@ -2103,6 +2216,18 @@ app.get('/api/coflix/endpoints', (req, res) => {
   const reload = req.query.reload === 'true';
   res.json({ ...(reload ? reloadCoflixEndpoints() : getCoflixEndpoints()), reloaded: reload });
 });
+app.get('/api/kordoz/endpoints', (req, res) => {
+  const reload = req.query.reload === 'true';
+  res.json({ ...(reload ? reloadKordozEndpoints() : getKordozEndpoints()), reloaded: reload });
+});
+app.get('/api/wavewatch/endpoints', (req, res) => {
+  const reload = req.query.reload === 'true';
+  res.json({ ...(reload ? reloadWavewatchEndpoints() : getWavewatchEndpoints()), reloaded: reload });
+});
+app.get('/api/ztstream/endpoints', (req, res) => {
+  const reload = req.query.reload === 'true';
+  res.json({ ...(reload ? reloadZoneTelechargementEndpoints() : getZoneTelechargementEndpoints()), reloaded: reload });
+});
 
 // ── Écriture des endpoints depuis l'admin (authentifié) ────────────────────
 // Écrit un fichier config/<name> en préservant son _comment, puis appelle le
@@ -2149,6 +2274,8 @@ const singleBaseSources: Array<{ path: string; file: string; reload: () => unkno
   { path: 'coflix', file: 'coflix-endpoints.json', reload: reloadCoflixEndpoints },
   { path: 'videasy', file: 'videasy-endpoints.json', reload: reloadVideasyEndpoints },
   { path: 'animesama', file: 'animesama-endpoints.json', reload: reloadAnimesamaEndpoints },
+  { path: 'wavewatch', file: 'wavewatch-endpoints.json', reload: reloadWavewatchEndpoints },
+  { path: 'ztstream', file: 'zonetelechargement-endpoints.json', reload: reloadZoneTelechargementEndpoints },
 ];
 for (const src of singleBaseSources) {
   app.post(`/api/${src.path}/endpoints`, requireAdminSession, jsonBody, (req, res) => {
@@ -2158,6 +2285,15 @@ for (const src of singleBaseSources) {
     return res.json({ ok: true, ...(src.reload() as object) });
   });
 }
+
+// Kordoz : liste de domaines miroirs (essayés dans l'ordre), pas une base unique.
+app.post('/api/kordoz/endpoints', requireAdminSession, jsonBody, (req, res) => {
+  const raw = Array.isArray(req.body?.domains) ? req.body.domains : [];
+  const domains = raw.map(cleanBaseUrl).filter((d: string | null): d is string => !!d);
+  if (!domains.length) return res.status(400).json({ ok: false, error: 'au moins un domaine valide requis' });
+  writeConfigFile('kordoz-endpoints.json', { domains });
+  return res.json({ ok: true, ...reloadKordozEndpoints() });
+});
 
 // Whitelist des domaines : lecture (+ statut auto), ajout manuel (authentifié).
 app.get('/api/whitelist', (_req, res) => {
@@ -2617,13 +2753,50 @@ app.get('/api/health', async (_req, res) => {
   // WaveWatch : le resolver zeus.php sert la page player (200 + <title>) pour un tmdbId connu.
   const wwStart = Date.now();
   try {
-    const resp = await probeGet('https://apis.wavewatch.top/zeus.php?type=movie&id=550', {
+    const resp = await probeGet(`${getWavewatchEndpoints().base}/zeus.php?type=movie&id=550`, {
       timeout: 10000, validateStatus: (s: number) => s < 500,
     });
     const ok = resp.status === 200 && /<title/i.test(String(resp.data || ''));
     results.wavewatch = { status: ok ? 'up' : 'degraded', latency: Date.now() - wwStart };
   } catch (e: any) {
     results.wavewatch = { status: 'down', error: e.message };
+  }
+
+  // Kordoz : la racine expose le token de session dans un <a href="…"> alphanumérique.
+  const kzStart = Date.now();
+  try {
+    const resp = await probeGet('https://www.kordoz.com/', {
+      timeout: 10000, headers: { 'Cookie': 'g=true' }, validateStatus: (s: number) => s < 500,
+    });
+    const ok = resp.status === 200 && /href="[a-z0-9]{8,}"/i.test(String(resp.data || ''));
+    results.kordoz = { status: ok ? 'up' : 'degraded', latency: Date.now() - kzStart };
+  } catch (e: any) {
+    results.kordoz = { status: 'down', error: e.message };
+  }
+
+  // Docstream : la home embarque le catalogue inline (const CATALOG = [ … streamtape … ]).
+  const dsStart = Date.now();
+  try {
+    const resp = await probeGet('https://docstream.fr/', {
+      timeout: 10000, validateStatus: (s: number) => s < 500,
+    });
+    const ok = resp.status === 200 && /streamtape:/i.test(String(resp.data || ''));
+    results.docstream = { status: ok ? 'up' : 'degraded', latency: Date.now() - dsStart };
+  } catch (e: any) {
+    results.docstream = { status: 'down', error: e.message };
+  }
+
+  // Zone-Téléchargement : la recherche ajax renvoie des fiches /NNNNN-slug.html.
+  const ztStart = Date.now();
+  try {
+    const base = getZoneTelechargementEndpoints().base.replace(/\/$/, '');
+    const resp = await probeGet(`${base}/engine/ajax/controller.php?mod=filter&catid=0&q=avatar&categorie%5B%5D=2&art=0&AiffchageMode=0&inputTirePar=0&cstart=0`, {
+      timeout: 10000, headers: { 'X-Requested-With': 'XMLHttpRequest', 'Referer': `${base}/` }, validateStatus: (s: number) => s < 500,
+    });
+    const ok = resp.status === 200 && /\/\d+-[^"]+\.html/i.test(String(resp.data || ''));
+    results.ztstream = { status: ok ? 'up' : 'degraded', latency: Date.now() - ztStart };
+  } catch (e: any) {
+    results.ztstream = { status: 'down', error: e.message };
   }
 
   const allUp = Object.values(results).every(r => r.status === 'up');

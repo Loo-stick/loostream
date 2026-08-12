@@ -3,6 +3,7 @@ import * as https from 'https';
 import { extractStream, detectExtractor, ExtractorConfig } from '../extractors';
 import { cached } from '../cache';
 import { applyMultiAudio } from '../multiaudio';
+import { makeEndpointConfig } from '../endpoint-config';
 
 // WaveWatch / ToFlix — agrégateur d'embeds keyé par tmdbId (zéro title-matching).
 // Le frontend (tfx05.lol) n'est qu'une vitrine ; le moteur est `apis.wavewatch.top`.
@@ -12,15 +13,25 @@ import { applyMultiAudio } from '../multiaudio';
 // un embed (vidzy/uqload/vidara/fsvid… qu'on résout via nos extracteurs).
 
 const STREAMS_TTL_MS = 15 * 60 * 1000;
-const SSE_BASE = 'https://apis.wavewatch.top/zeus.php';
 const SSE_TIMEOUT_MS = 10_000;
 const INSECURE_AGENT = new https.Agent({ rejectUnauthorized: false });
 
-const HEADERS = {
-  'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
-  'Referer': 'https://apis.wavewatch.top/',
-  'Accept': 'text/event-stream',
-};
+// Base API éditable à chaud (config/wavewatch-endpoints.json, bind-monté + hot-reload)
+// ou via l'admin — le domaine `apis.wavewatch.top` peut tourner ; pas de rebuild.
+const siteEndpoints = makeEndpointConfig('wavewatch-endpoints.json', 'WAVEWATCH_ENDPOINTS_CONFIG', {
+  base: 'https://apis.wavewatch.top',
+});
+export const reloadWavewatchEndpoints = siteEndpoints.reload;
+export const getWavewatchEndpoints = siteEndpoints.get;
+
+// En-têtes SSE : le Referer suit le domaine courant (relu à chaud).
+function wwHeaders(): Record<string, string> {
+  return {
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+    'Referer': `${siteEndpoints.get().base}/`,
+    'Accept': 'text/event-stream',
+  };
+}
 
 // Le CDN finepulfe (m3u8 direct) a un WAF qui 403 les UA de bibliothèque (curl/python/okhttp
 // des players) mais laisse passer un UA navigateur SIMPLE (sans Origin/Referer/sec-ch-ua, qui
@@ -113,7 +124,7 @@ function normQuality(raw?: string): string {
  */
 async function readZeusSse(url: string): Promise<WwSource[]> {
   const resp = await axios.get(url, {
-    headers: HEADERS, responseType: 'stream', timeout: SSE_TIMEOUT_MS, httpsAgent: INSECURE_AGENT,
+    headers: wwHeaders(), responseType: 'stream', timeout: SSE_TIMEOUT_MS, httpsAgent: INSECURE_AGENT,
   });
   const stream = resp.data as NodeJS.ReadableStream;
   return await new Promise<WwSource[]>((resolve) => {
@@ -205,7 +216,7 @@ async function fetchWavewatchStreams(
   extractorConfig?: ExtractorConfig,
 ): Promise<WavewatchStream[]> {
   const type = mediaType === 'series' ? 'tv' : 'movie';
-  let url = `${SSE_BASE}?sse&type=${type}&id=${encodeURIComponent(tmdbId)}`;
+  let url = `${siteEndpoints.get().base}/zeus.php?sse&type=${type}&id=${encodeURIComponent(tmdbId)}`;
   if (type === 'tv') url += `&s=${season || 1}&e=${episode || 1}`;
 
   let sources: WwSource[];

@@ -541,13 +541,19 @@ const SOURCES = [
     { path: 'nabistream', label: 'Nabistream', fields: ['base'], note: 'API dramas asiatiques VOSTFR (keyée TMDB, HLS direct + subs FR)' },
     { path: 'coflix', label: 'Coflix', fields: ['base'], note: 'scraping FR généraliste VF+VOSTFR (domaine tournant, fallbacks intégrés)' },
     { path: 'animesama', label: 'AnimeSama', fields: ['base'], note: 'anime VOSTFR/VF (domaine rotatif : anime-sama.to/.pw ; gaté sur l\'anime)' },
+    { path: 'kordoz', label: 'Kordoz', fields: ['domains'], list: true, note: 'films FR VF (1080p). Miroirs du même backend, essayés dans l\'ordre — un domaine par ligne (kordoz.com / ilmiv.com / kidraz.com / vogfo.com…)' },
+    { path: 'wavewatch', label: 'WaveWatch', fields: ['base'], note: 'agrégateur VO keyé tmdbId (moteur SSE zeus.php). Base API tournante — le frontend tfx05.lol n\'est qu\'une vitrine' },
+    { path: 'ztstream', label: 'Zone-Téléchargement', fields: ['base'], note: 'section streaming de ZT (WEB-DL FR ; hôtes lulustream/embedseek via zoneurs). Domaine TRÈS rotatif (.org/.com/…)' },
 ];
 async function loadEndpoints() {
     const box = document.getElementById('endpoints');
     try {
         const data = await Promise.all(SOURCES.map(async s => ({ s, v: await (await api('/api/' + s.path + '/endpoints')).json() })));
         box.innerHTML = data.map(({ s, v }) => {
-            const rows = s.fields.map(f => `<div class="cfg-row"><label>${f}</label>
+            const rows = s.fields.map(f => s.list
+                ? `<div class="cfg-row"><label>${f}</label>
+                <textarea id="ep-${s.path}-${f}" rows="4" placeholder="un par ligne" style="flex:1;font:inherit;">${esc((v[f] || []).join('\n'))}</textarea></div>`
+                : `<div class="cfg-row"><label>${f}</label>
                 <input id="ep-${s.path}-${f}" placeholder="${f}" value="${esc(v[f] || '')}"></div>`).join('');
             return `<div style="margin-bottom:16px;padding-bottom:12px;border-bottom:1px solid rgba(255,255,255,0.06);">
                 <div style="font-weight:600;margin-bottom:8px;">${s.label}</div>${rows}
@@ -562,7 +568,10 @@ async function saveEndpoint(path) {
     const src = SOURCES.find(s => s.path === path);
     const msg = document.getElementById('msg-' + path);
     const body = {};
-    for (const f of src.fields) body[f] = document.getElementById('ep-' + path + '-' + f).value.trim();
+    for (const f of src.fields) {
+        const val = document.getElementById('ep-' + path + '-' + f).value;
+        body[f] = src.list ? val.split('\n').map(x => x.trim()).filter(Boolean) : val.trim();
+    }
     msg.textContent = '…'; msg.className = 'cfg-msg';
     try {
         const r = await api('/api/' + path + '/endpoints', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });

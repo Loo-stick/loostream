@@ -1,0 +1,4 @@
+{
+  "_comment": "Base API WaveWatch (moteur SSE zeus.php). Le frontend (tfx05.lol) n'est qu'une vitrine ; le domaine d'API peut tourner. Éditable à chaud (bind-mount + fs.watch) ou via l'admin ; reload forcé : /api/wavewatch/endpoints?reload=true.",
+  "base": "https://apis.wavewatch.top"
+}
