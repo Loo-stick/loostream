@@ -97,6 +97,12 @@ export function probeTarget(url: string, headers?: Record<string, string>): { ur
  * 403 ne s'applique qu'aux URLs BRUTES (mode local) : en mode MediaFlow, c'est
  * MediaFlow qui livre (autre IP), on ne préjuge pas de sa capacité — on garde.
  */
+// Hôtes dont le CDN throttle (rate/IP) et renvoie 403 par intermittence — PAS un blocage
+// datacenter permanent. On ne les écarte pas sur un 403 de sonde (faux positif).
+function isTrollHost(url: string): boolean {
+  try { return /vidzy|fsvid/i.test(new URL(url).hostname); } catch { return false; }
+}
+
 export async function applyMultiAudio<T extends Labellable>(streams: T[]): Promise<T[]> {
   const t0 = Date.now();
   let probed = 0;
@@ -105,7 +111,12 @@ export async function applyMultiAudio<T extends Labellable>(streams: T[]): Promi
     const t = probeTarget(s.url, s.headers);
     const { langs, height } = await probeMaster(t.url, t.headers);
     probed++;
-    if (langs === BLOCKED && !t.viaMediaFlow) return null; // CDN 403 en local -> drop
+    // CDN 403 sur la sonde serveur -> drop, SAUF hôtes-troll (vidzy/fsvid) : leur 403 est un
+    // throttle rate/IP TRANSITOIRE (pas un blocage datacenter permanent). Les jeter privait le
+    // user de flux jouables — en direct le CLIENT fetch (sonde serveur hors-sujet), en local le
+    // proxy les sert avec IFRAME_HEADERS + retries. Sans cette exemption : "No streams found"
+    // intermittent sur les titres servis UNIQUEMENT par vidzy/fsvid (ex. The Shards).
+    if (langs === BLOCKED && !t.viaMediaFlow && !isTrollHost(t.url)) return null;
     if (langs >= 2 && !/multi/i.test(s.language)) s.language = 'MULTI'; // upgrade sur confirmation
     // Qualité RÉELLE : le master est déjà téléchargé -> on remplace le 'HD' générique
     // par la résolution mesurée (coût ~0, juste un regex). Zéro fetch en plus.
