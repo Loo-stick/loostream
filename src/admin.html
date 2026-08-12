@@ -634,7 +634,9 @@ async function loadPartage() {
     const box = document.getElementById('partage');
     try {
         const st = await (await api('/api/settings')).json();
-        const modes = st.mode ? st.mode.split(/[;,]/).map(m => m.trim().toUpperCase()) : ['DIRECT', 'MFP', 'LOCAL'];
+        // Défaut RESTRICTIF (aligné sur le serveur) : sans réglage, on NE coche PAS Proxy(local)
+        // — l'offrir par défaut exposerait la bande passante du serveur à tous les users.
+        const modes = st.mode ? st.mode.split(/[;,]/).map(m => m.trim().toUpperCase()) : ['DIRECT', 'MFP'];
         const chk = m => modes.includes(m) ? 'checked' : '';
         const ok = st.ownerKey.configured;
         const owner = ok
@@ -670,7 +672,7 @@ async function loadPartage() {
         };
         box.innerHTML = `
             <div style="margin-bottom:22px;">
-                <div style="font-weight:600;margin-bottom:6px;">Modes de livraison proposés <span class="badge src">source : ${st.modeSource === 'file' ? 'admin' : (st.modeSource === 'env' ? '.env' : 'défaut (tous)')}</span></div>
+                <div style="font-weight:600;margin-bottom:6px;">Modes de livraison proposés <span class="badge src">source : ${st.modeSource === 'file' ? 'admin' : (st.modeSource === 'env' ? '.env' : 'défaut (Direct + MFP)')}</span></div>
                 <div style="font-size:0.8em;color:var(--dim);margin-bottom:10px;">Ce que voient les utilisateurs dans /configure. Le direct est toujours prioritaire ; le mode ne choisit que le repli des flux non-directables. Le 1er coché est le défaut.</div>
                 <label class="switch" style="margin-right:16px;"><input type="checkbox" id="m-direct" ${chk('DIRECT')}> DIRECT</label>
                 <label class="switch" style="margin-right:16px;"><input type="checkbox" id="m-mfp" ${chk('MFP')}> MFP (MediaFlow)</label>

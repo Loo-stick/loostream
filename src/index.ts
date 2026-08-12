@@ -226,10 +226,14 @@ const MODE_ALIAS: Record<string, 'direct' | 'mediaflow' | 'local'> = {
   direct: 'direct', mfp: 'mediaflow', mediaflow: 'mediaflow', local: 'local',
 };
 function allowedModes(): ('direct' | 'mediaflow' | 'local')[] {
+  // Défaut RESTRICTIF : sans MODE explicite, on N'AUTORISE PAS le proxy local — sinon un
+  // self-hoster sans MODE exposerait la bande passante de son serveur à TOUS ses users
+  // (le proxy local était offert par défaut = footgun). Le local ne s'active que si
+  // l'opérateur le met dans MODE (ex. `DIRECT;MFP;LOCAL`) ou via l'owner key (localProxyAllowed).
   const raw = getModeRaw().trim();
-  if (!raw) return ['direct', 'mediaflow', 'local'];
+  if (!raw) return ['direct', 'mediaflow'];
   const list = raw.split(/[;,]/).map(s => MODE_ALIAS[s.trim().toLowerCase()]).filter(Boolean);
-  return list.length ? [...new Set(list)] as ('direct' | 'mediaflow' | 'local')[] : ['direct', 'mediaflow', 'local'];
+  return list.length ? [...new Set(list)] as ('direct' | 'mediaflow' | 'local')[] : ['direct', 'mediaflow'];
 }
 
 // Parse and validate config from base64 URL param
