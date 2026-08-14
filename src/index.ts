@@ -754,7 +754,7 @@ function getManifest(req: express.Request) {
 
   return {
     id: 'community.loostream.stremio',
-    version: '1.19.0',
+    version: '1.19.1',
     name: 'LooStream',
     logo: `${baseUrl}/logo.png`,
     description: 'Netflix, Prime, Disney+ mirrors + StreamFlix + Movix VF/VOSTFR',
@@ -1209,12 +1209,14 @@ async function handleStream(req: express.Request, res: express.Response, type: s
         : []
     );
 
-    // Résumé par source pour le tracking Users (nb de flux rendus par chaque source).
-    SOURCE_NAMES.forEach((n, i) => {
-      const r = collected[i];
-      if (Array.isArray(r) && r.length) perSourceSummary[n] = r.length;
-    });
-
+    // Construction des drafts extraite en closure ré-exécutable. Raison : l'early-exit
+    // compte les flux passant langue/qualité mais IGNORE la livrabilité (le mode
+    // direct/MFP écarte forceProxy/forceLocal dans deliver()). On bâtit d'abord sur le
+    // snapshot de l'early-exit ; si trop peu de flux LIVRABLES en sortent alors que des
+    // sources tournent encore, on attend le reste et on reconstruit (cf. plus bas).
+    const assembleDrafts = async (
+      collected: any[][],
+    ): Promise<Omit<StreamWithMeta, 'name' | 'title'>[]> => {
     // collectSources is order-preserving but untyped (heterogeneous tuple), so
     // restore each source's real element type here.
     const netmirrorResults = collected[0] as Awaited<ReturnType<typeof getNetmirrorStreams>>;
@@ -1819,6 +1821,37 @@ async function handleStream(req: express.Request, res: express.Response, type: s
         },
       });
     }
+
+      return drafts;
+    }; // fin assembleDrafts
+
+    // 1ʳᵉ passe : on bâtit les drafts sur le snapshot de l'early-exit.
+    let finalResults: any[][] = collected;
+    let drafts = await assembleDrafts(collected);
+
+    // Filet de sécurité « livrabilité » : si l'early-exit a rendu trop peu de flux
+    // LIVRABLES (< minStreams) alors que des sources n'avaient pas fini, on attend le
+    // reste puis on reconstruit — mieux vaut un poil plus lent qu'un « No streams found »
+    // à tort (le compteur early-exit ne voit pas les flux jetés par le mode direct/MFP).
+    // Promise.all sur des promesses DÉJÀ réglées revient tout de suite : aucune pénalité
+    // quand toutes les sources étaient prêtes au moment de l'early-exit.
+    if (minStreams > 0 && drafts.length < minStreams) {
+      const full = await Promise.all(sourcePromises);
+      const grew = full.some(
+        (r, i) => (Array.isArray(r) ? r.length : 0) !== (Array.isArray(collected[i]) ? collected[i].length : 0),
+      );
+      if (grew) {
+        const retry = await assembleDrafts(full);
+        if (retry.length > drafts.length) { drafts = retry; finalResults = full; }
+      }
+    }
+
+    // Résumé par source (tracking Users) calculé sur les résultats FINAUX,
+    // après l'éventuelle attente complémentaire ci-dessus.
+    SOURCE_NAMES.forEach((n, i) => {
+      const r = finalResults[i];
+      if (Array.isArray(r) && r.length) perSourceSummary[n] = r.length;
+    });
 
     if (drafts.length === 0) {
       console.log('[Stream] No streams found');
