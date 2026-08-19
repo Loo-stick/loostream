@@ -83,6 +83,72 @@ export function getUsersOverview() {
   return overviewStmt.all(Date.now() - 7 * 24 * 60 * 60 * 1000) as any[];
 }
 
+// Stats AGRÉGÉES tous utilisateurs (dashboard/admin). Sans session persistante, la vraie
+// concurrence n'est pas mesurable -> « en ligne » = pseudos distincts actifs sur une courte
+// fenêtre (ONLINE_WINDOW_MS), proxy honnête du « combien sont là en même temps ». Le pseudo
+// '(anonyme)' (users sans pseudo, agrégat fourre-tout) est EXCLU des décomptes d'utilisateurs
+// distincts mais reste dans le volume de requêtes/outcomes.
+const ONLINE_WINDOW_MS = 10 * 60 * 1000;
+
+const claimedCountStmt = db.prepare('SELECT COUNT(*) n FROM pseudo_owner');
+const activityAggStmt = db.prepare(`
+  SELECT
+    COUNT(DISTINCT CASE WHEN pseudo != '(anonyme)' THEN pseudo END) distinctActive,
+    COUNT(DISTINCT CASE WHEN pseudo != '(anonyme)' AND ts > @online THEN pseudo END) online,
+    COUNT(DISTINCT CASE WHEN pseudo != '(anonyme)' AND ts > @d1 THEN pseudo END) active24h,
+    COUNT(DISTINCT CASE WHEN pseudo != '(anonyme)' AND ts > @d7 THEN pseudo END) active7d,
+    COUNT(DISTINCT CASE WHEN pseudo != '(anonyme)' AND ts > @d30 THEN pseudo END) active30d,
+    COUNT(*) totalRequests,
+    COALESCE(SUM(outcome='ok'),0) ok,
+    COALESCE(SUM(outcome='empty'),0) empty,
+    COALESCE(SUM(outcome='error'),0) error,
+    COALESCE(SUM(media_type='movie'),0) movies,
+    COALESCE(SUM(media_type='series'),0) series
+  FROM user_activity
+`);
+const topTitlesStmt = db.prepare(`
+  SELECT title, media_type mediaType, content_id contentId, COUNT(*) count
+  FROM user_activity WHERE content_id IS NOT NULL
+  GROUP BY content_id ORDER BY count DESC, MAX(ts) DESC LIMIT 10
+`);
+
+export interface UserStats {
+  totalClaimed: number;                 // pseudos revendiqués (permanent, pseudo_owner)
+  distinctActive: number;               // pseudos distincts sur la fenêtre de rétention (30 j)
+  online: number;                       // actifs sur les ~10 dernières min (proxy « en même temps »)
+  active24h: number; active7d: number; active30d: number;
+  totalRequests: number;
+  outcomes: { ok: number; empty: number; error: number };
+  media: { movies: number; series: number };
+  topTitles: { title: string | null; mediaType: string | null; contentId: string; count: number }[];
+  onlineWindowMin: number;
+  retentionDays: number;
+}
+
+export function getUserStats(): UserStats {
+  const now = Date.now();
+  const agg = activityAggStmt.get({
+    online: now - ONLINE_WINDOW_MS,
+    d1: now - 24 * 60 * 60 * 1000,
+    d7: now - 7 * 24 * 60 * 60 * 1000,
+    d30: now - 30 * 24 * 60 * 60 * 1000,
+  }) as any;
+  const claimed = (claimedCountStmt.get() as { n: number }).n;
+  const top = topTitlesStmt.all() as any[];
+  return {
+    totalClaimed: claimed,
+    distinctActive: agg.distinctActive,
+    online: agg.online,
+    active24h: agg.active24h, active7d: agg.active7d, active30d: agg.active30d,
+    totalRequests: agg.totalRequests,
+    outcomes: { ok: agg.ok, empty: agg.empty, error: agg.error },
+    media: { movies: agg.movies, series: agg.series },
+    topTitles: top.map(t => ({ title: t.title, mediaType: t.mediaType, contentId: t.contentId, count: t.count })),
+    onlineWindowMin: ONLINE_WINDOW_MS / 60000,
+    retentionDays: RETENTION_MS / (24 * 60 * 60 * 1000),
+  };
+}
+
 const requestsStmt = db.prepare(
   `SELECT id, title, media_type mediaType, content_id contentId, streams, outcome, detail, ts
    FROM user_activity WHERE pseudo = ? ORDER BY ts DESC LIMIT ?`

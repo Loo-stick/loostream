@@ -31,7 +31,7 @@ import { getModeRaw, autoWhitelistEnabled, updateSettings, settingsView, netfree
 import { sanitizePseudo, pseudoLabel } from './pseudo';
 import { tmdbReq, tmdbKeyType } from './tmdb-auth';
 import { runWithLogCapture, capturedLines } from './request-log';
-import { recordUserActivity, getUsersOverview, getUserRequests, getRequestLog, isPseudoTakenByOther, claimPseudo, deleteUser } from './user-activity';
+import { recordUserActivity, getUsersOverview, getUserRequests, getRequestLog, isPseudoTakenByOther, claimPseudo, deleteUser, getUserStats } from './user-activity';
 import { setPoolEnabled, poolStatus } from './netfree-pool';
 import { canDirect } from './deliver';
 import * as fsSync from 'fs';
@@ -754,7 +754,7 @@ function getManifest(req: express.Request) {
 
   return {
     id: 'community.loostream.stremio',
-    version: '1.19.1',
+    version: '1.19.2',
     name: 'LooStream',
     logo: `${baseUrl}/logo.png`,
     description: 'Netflix, Prime, Disney+ mirrors + StreamFlix + Movix VF/VOSTFR',
@@ -2625,6 +2625,11 @@ app.get('/api/logs', requireAdminSession, (req, res) => {
 // AVANT `/:pseudo` sinon "request" serait capturé comme un pseudo.
 app.get('/api/users', requireAdminSession, (_req, res) => {
   res.json({ users: getUsersOverview() });
+});
+// Stats agrégées utilisateurs (compteurs, en ligne ~10 min, outcomes, top titres).
+// DÉCLARÉ AVANT `/:pseudo` sinon "stats" serait capturé comme un pseudo.
+app.get('/api/users/stats', requireAdminSession, (_req, res) => {
+  res.json(getUserStats());
 });
 app.get('/api/users/request/:id', requireAdminSession, (req, res) => {
   res.json({ log: getRequestLog(Number(req.params.id)) });

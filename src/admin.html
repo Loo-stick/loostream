@@ -210,6 +210,8 @@
                 </div>
             </div>
             <div class="kpis" id="kpis"><div class="loader">Chargement…</div></div>
+            <h2 style="font-size:0.82em;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:12px;">Utilisateurs</h2>
+            <div class="kpis" id="user-kpis"><div class="loader">Chargement…</div></div>
             <h2 style="font-size:0.82em;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:12px;">Santé des sources</h2>
             <div class="grid" id="dash-sources"><div class="loader">Chargement…</div></div>
             <div class="card">
@@ -229,6 +231,7 @@
         <section class="view" data-view="users">
             <div class="view-head"><h1>Utilisateurs</h1><button class="btn" onclick="loadUsers()">Rafraîchir</button></div>
             <p style="color:var(--muted);font-size:0.85em;margin:-10px 0 18px;">Qui utilise l'addon, et surtout qui a rencontré un problème récemment. Clic sur une ligne → ses requêtes et leurs logs détaillés.</p>
+            <div class="kpis" id="users-kpis" style="margin-bottom:20px;"><div class="loader">Chargement…</div></div>
             <div class="ucols">
                 <div class="card" style="padding:0;overflow:hidden;">
                     <div style="overflow-x:auto;"><table class="utable">
@@ -249,6 +252,12 @@
                 <div class="card"><h2>Cache</h2><div class="kv" id="cache"></div></div>
                 <div class="card"><h2>Requêtes</h2><div class="kv" id="requests"></div></div>
                 <div class="card"><h2>Streams servis</h2><div class="kv" id="served"></div></div>
+            </div>
+            <h2 style="font-size:0.82em;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin:8px 0 12px;">Utilisateurs</h2>
+            <div class="grid" style="grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));">
+                <div class="card"><h2>Fréquentation</h2><div class="kv" id="ustat-counts"></div></div>
+                <div class="card"><h2>Résultats vécus</h2><div class="kv" id="ustat-outcomes"></div></div>
+                <div class="card"><h2>Top titres demandés (30 j)</h2><div id="ustat-top"></div></div>
             </div>
             <h2 style="font-size:0.82em;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin:8px 0 12px;">Détail par source (20 dernières requêtes)</h2>
             <div class="grid" id="scrapers"><div class="loader">Chargement…</div></div>
@@ -423,6 +432,62 @@ async function loadStats() {
     } catch (e) {
         if (e.message !== 'session') document.getElementById('meta').innerHTML = `<span class="error">Erreur: ${esc(e.message)}</span>`;
     }
+    loadUserStats();
+}
+
+// Stats utilisateurs agrégées (/api/users/stats) -> alimente les 3 emplacements présents
+// (dashboard, en-tête vue Utilisateurs, bloc vue Stats). Chaque cible est gardée par sa
+// présence dans le DOM, donc un seul fetch sert tout. « En ligne » = actifs ~10 min (pas de
+// vraie session -> proxy honnête de la concurrence).
+const kpiTiles = pairs => pairs.map(([v, l]) => `<div class="kpi"><div class="val">${v}</div><div class="lbl">${l}</div></div>`).join('');
+async function loadUserStats() {
+    let s;
+    try { s = await (await api('/api/users/stats')).json(); }
+    catch { return; } // session/réseau : silencieux (les autres vues signalent déjà)
+    const total = s.outcomes.ok + s.outcomes.empty + s.outcomes.error;
+    const rate = total ? Math.round(100 * s.outcomes.ok / total) : 0;
+
+    const dash = document.getElementById('user-kpis');
+    if (dash) dash.innerHTML = kpiTiles([
+        [s.totalClaimed, 'Utilisateurs'],
+        [s.online, `En ligne (~${s.onlineWindowMin} min)`],
+        [s.active24h, 'Actifs 24 h'],
+        [s.active7d, 'Actifs 7 j'],
+    ]);
+
+    const uk = document.getElementById('users-kpis');
+    if (uk) uk.innerHTML = kpiTiles([
+        [s.totalClaimed, 'Utilisateurs'],
+        [s.online, `En ligne (~${s.onlineWindowMin} min)`],
+        [s.active24h, 'Actifs 24 h'],
+        [s.active7d, 'Actifs 7 j'],
+        [s.active30d, 'Actifs 30 j'],
+        [s.totalRequests, 'Requêtes (30 j)'],
+        [rate + '%', 'Taux de succès'],
+    ]);
+
+    const counts = document.getElementById('ustat-counts');
+    if (counts) counts.innerHTML = `
+        <span class="k">Utilisateurs (revendiqués)</span><span class="v">${s.totalClaimed}</span>
+        <span class="k">En ligne (~${s.onlineWindowMin} min)</span><span class="v">${s.online}</span>
+        <span class="k">Actifs 24 h / 7 j / 30 j</span><span class="v">${s.active24h} / ${s.active7d} / ${s.active30d}</span>
+        <span class="k">Requêtes (${s.retentionDays} j)</span><span class="v">${s.totalRequests}</span>
+        <span class="k">Films / Séries</span><span class="v">${s.media.movies} / ${s.media.series}</span>`;
+
+    const out = document.getElementById('ustat-outcomes');
+    if (out) { const pct = n => total ? Math.round(100 * n / total) + '%' : '0%';
+        out.innerHTML = `
+        <span class="k">✓ Succès</span><span class="v">${s.outcomes.ok} (${pct(s.outcomes.ok)})</span>
+        <span class="k">⚠ À vide</span><span class="v">${s.outcomes.empty} (${pct(s.outcomes.empty)})</span>
+        <span class="k">✕ Erreur</span><span class="v">${s.outcomes.error} (${pct(s.outcomes.error)})</span>`;
+    }
+
+    const top = document.getElementById('ustat-top');
+    if (top) top.innerHTML = s.topTitles.length ? s.topTitles.map(t =>
+        `<div style="display:flex;justify-content:space-between;gap:10px;padding:5px 0;border-bottom:1px solid rgba(255,255,255,0.05);font-size:0.9em;">
+            <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${t.mediaType === 'series' ? '📺' : '🎬'} ${esc(t.title || t.contentId)}</span>
+            <span class="v" style="color:var(--muted);white-space:nowrap;">${t.count}×</span></div>`).join('')
+        : '<div style="color:var(--dim);font-size:0.88em;">Pas encore de données.</div>';
 }
 
 async function checkHealth() {
@@ -810,6 +875,7 @@ const outcomeChip = (o, n) => o === 'ok' ? `<span class="chip ok">✓ ${n}</span
     : o === 'empty' ? '<span class="chip warn">⚠ 0</span>' : '<span class="chip crit">✕</span>';
 
 async function loadUsers() {
+    loadUserStats();
     const tb = document.getElementById('users-tbody');
     try {
         const { users } = await (await fetch('/api/users')).json();
