@@ -754,7 +754,7 @@ function getManifest(req: express.Request) {
 
   return {
     id: 'community.loostream.stremio',
-    version: '1.19.2',
+    version: '1.19.3',
     name: 'LooStream',
     logo: `${baseUrl}/logo.png`,
     description: 'Netflix, Prime, Disney+ mirrors + StreamFlix + Movix VF/VOSTFR',
@@ -777,6 +777,15 @@ app.get('/configure', (_req, res) => {
 // Configure page with existing config (allows reconfiguration)
 app.get('/:config/configure', (_req, res) => {
   res.sendFile(path.join(__dirname, 'configure.html'));
+});
+
+// Cible de l'entrée-nudge « nakastream déconnecté » (voir handleStream). L'entrée porte
+// cette `url` pour être visible sur les clients url-only (Nuvio, qui ignorent externalUrl) ;
+// au tap on redirige (302) vers la page configure pré-remplie pour re-pairer le token.
+// Pas un flux -> hors du gate requireQueryKey (qui ne couvre que /netmirror /moviebox /nabistream).
+app.get('/nakastream/reconnect', (req, res) => {
+  const c = typeof req.query.c === 'string' ? req.query.c : '';
+  res.redirect(302, c ? `/${c}/configure` : '/configure');
 });
 
 // Test d'une clé TMDB (v3 api_key OU v4 Bearer) — utilisé par le wizard configure
@@ -1927,13 +1936,25 @@ async function handleStream(req: express.Request, res: express.Response, type: s
 
     // nakastream déconnecté (token 401) : entrée informative NON-bloquante en fin de liste,
     // qui ouvre le configure pré-rempli pour reconnecter. Les autres flux restent normaux.
+    // On pose une VRAIE `url` (vers /nakastream/reconnect -> 302 configure) EN PLUS de
+    // `externalUrl` : les clients url-only (Nuvio) ignorent externalUrl et ne rendaient donc
+    // pas l'entrée -> le nudge était invisible. Stremio garde externalUrl (ouvre le navigateur).
     const outStreams: any[] = cleanStreams;
     if (nakastreamAuthFailed) {
       const proto = (req.headers['x-forwarded-proto'] as string) || req.protocol || 'http';
       const host = (req.headers['x-forwarded-host'] as string) || req.headers.host;
+      const base = `${proto}://${host}`;
       const cfgParam = (req.params as { config?: string }).config;
-      const cfgUrl = cfgParam ? `${proto}://${host}/${cfgParam}/configure` : `${proto}://${host}/configure`;
-      outStreams.push({ name: 'nakastream ⚠️', title: 'nakastream déconnecté\nReconnecte-le dans la configuration.', externalUrl: cfgUrl });
+      const cfgUrl = cfgParam ? `${base}/${cfgParam}/configure` : `${base}/configure`;
+      const reconnectUrl = cfgParam
+        ? `${base}/nakastream/reconnect?c=${encodeURIComponent(cfgParam)}`
+        : `${base}/nakastream/reconnect`;
+      outStreams.push({
+        name: 'nakastream ⚠️',
+        title: 'nakastream déconnecté\nReconnecte-le dans la configuration.',
+        url: reconnectUrl,     // visible sur les clients url-only (Nuvio)
+        externalUrl: cfgUrl,   // Stremio : ouvre configure dans le navigateur
+      });
     }
 
     console.log(`[Stream] Returning ${cleanStreams.length} streams${breakdown ? ` (${breakdown})` : ''}`);
