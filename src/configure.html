@@ -278,6 +278,18 @@
                 </li>
               </ul>
             </div>
+            <div class="input-group show" style="margin-top:18px">
+              <label>Sous-titres LooStream <span class="hint">— si tu utilises déjà ton propre addon de sous-titres</span></label>
+              <label style="display:flex;align-items:center;gap:10px;cursor:pointer;margin-top:6px">
+                <input type="checkbox" id="subs-enabled" checked style="width:16px;height:16px;accent-color:var(--accent);flex:none" onchange="var e=document.getElementById('subs-external');e.disabled=!this.checked;document.getElementById('ext-subs-row').style.opacity=this.checked?'1':'.45'">
+                <span>Proposer des sous-titres</span>
+              </label>
+              <label id="ext-subs-row" style="display:flex;align-items:center;gap:10px;cursor:pointer;margin-top:8px;padding-left:22px">
+                <input type="checkbox" id="subs-external" checked style="width:16px;height:16px;accent-color:var(--accent);flex:none">
+                <span>Sous-titres externes (OpenSubtitles FR) <span class="hint">— nombreux ; décoche pour ne garder que ceux embarqués aux flux</span></span>
+              </label>
+              <p class="sub">Décoche « Proposer des sous-titres » pour que LooStream disparaisse complètement du sélecteur de sous-titres de ton lecteur.</p>
+            </div>
           </div>
 
           <!-- 5 : Pseudo + lien -->
@@ -424,6 +436,10 @@
           if (ex.length) config.excludeQualities = ex;
           if (document.getElementById('filter-mode').value === 'strict') config.strictFilter = true;
 
+          // Sous-titres : n'écrire le champ QUE s'il est désactivé (défaut = activé côté serveur).
+          if (!document.getElementById('subs-enabled').checked) config.subs = false;
+          if (!document.getElementById('subs-external').checked) config.extSubs = false;
+
           const accessKey = document.getElementById('access-key').value.trim();
           if (accessKey) config.accessKey = accessKey;
           // Valide la clé d'accès si l'hébergeur en exige une (sinon lien inutilisable : 401).
@@ -555,6 +571,11 @@
               if (config.minStreams !== undefined && config.minStreams !== null) document.getElementById('min-streams').value = String(config.minStreams);
               if (config.sortBy) document.getElementById('sort-by').value = config.sortBy;
               document.getElementById('filter-mode').value = config.strictFilter === true ? 'strict' : 'soft';
+              // Sous-titres (défaut = activés ; seul un false explicite décoche).
+              document.getElementById('subs-enabled').checked = config.subs !== false;
+              document.getElementById('subs-external').checked = config.extSubs !== false;
+              document.getElementById('subs-external').disabled = config.subs === false;
+              document.getElementById('ext-subs-row').style.opacity = config.subs === false ? '.45' : '1';
               if (config.langOrder && Array.isArray(config.langOrder)) setLangOrder(config.langOrder);
               if (config.excludeQualities && Array.isArray(config.excludeQualities)) {
                 document.querySelectorAll('#quality-toggles .qt').forEach(b => {

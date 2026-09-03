@@ -179,6 +179,10 @@ interface UserConfig {
   strictFilter?: boolean; // true = exclusion STRICTE (liste vide si rien ne matche) ; false/absent
                           // = souple (relâche la langue mais garde l'exclusion de qualité). cf. filterAndSortStreams
   nakastreamToken?: string; // token de pairing nakastream (per-user, opt-in) — cf. scrapers/nakastream.ts
+  subs?: boolean;        // sous-titres LooStream (défaut true). false = LooStream n'expose AUCUN sous-titre
+                         // (ressource retirée du manifeste + handleSubtitles renvoie vide).
+  extSubs?: boolean;     // sous-titres externes OpenSubtitles FR (défaut true). false = uniquement les
+                         // sous-titres EMBARQUÉS (moviebox/videasy/nabistream/nakastream), pas le flot externe.
 }
 
 // Stream with metadata for filtering/sorting
@@ -322,6 +326,10 @@ function parseConfig(configStr: string): UserConfig | null {
       excludeQualities,
       nakastreamToken: (typeof parsed.nakastreamToken === 'string' && /^[A-Za-z0-9._-]{10,120}$/.test(parsed.nakastreamToken))
         ? parsed.nakastreamToken : undefined,
+      // Sous-titres : activés par DÉFAUT (undefined -> true) pour ne rien changer aux configs
+      // existantes ; seul un `false` explicite désactive.
+      subs: parsed.subs !== false,
+      extSubs: parsed.extSubs !== false,
     };
   } catch {
     return null;
@@ -746,19 +754,23 @@ app.use('/proxy', proxyRouter);
 // (Le proxy gère sa propre garde en interne pour épargner /proxy/domains au bot.)
 app.use(['/netmirror', '/moviebox', '/nabistream'], requireQueryKey);
 
-// Manifest generator
-function getManifest(req: express.Request) {
+// Manifest generator. Config-aware : si l'utilisateur a coupé les sous-titres LooStream
+// (config.subs === false), on RETIRE la ressource 'subtitles' du manifeste -> LooStream
+// disparaît carrément du sélecteur de sous-titres de Stremio (il n'est même plus interrogé).
+function getManifest(req: express.Request, config?: UserConfig | null) {
   const proto = req.headers['x-forwarded-proto'] || req.protocol || 'http';
   const host = req.headers['x-forwarded-host'] || req.headers.host;
   const baseUrl = `${proto}://${host}`;
 
+  const resources = config?.subs === false ? ['stream'] : ['stream', 'subtitles'];
+
   return {
     id: 'community.loostream.stremio',
-    version: '1.19.3',
+    version: '1.19.4',
     name: 'LooStream',
     logo: `${baseUrl}/logo.png`,
     description: 'Netflix, Prime, Disney+ mirrors + StreamFlix + Movix VF/VOSTFR',
-    resources: ['stream', 'subtitles'],
+    resources,
     types: ['movie', 'series'],
     catalogs: [],
     idPrefixes: ['tt', 'tmdb:'],
@@ -843,7 +855,7 @@ app.get('/:config/manifest.json', (req, res) => {
     return res.status(400).json({ error: 'Invalid configuration' });
   }
   if (denyIfNoAccess(config, res)) return;
-  res.json(getManifest(req));
+  res.json(getManifest(req, config));
 });
 
 // TMDB API helper
@@ -1991,6 +2003,10 @@ app.get('/:config/stream/:type/:id.json', async (req, res) => {
 // endpoints en text/vtt.
 async function handleSubtitles(req: express.Request, res: express.Response, type: string, id: string, config: UserConfig | null) {
   try {
+    // Sous-titres LooStream coupés par l'utilisateur -> aucune piste. La ressource est aussi
+    // retirée du manifeste (getManifest config-aware), mais un client déjà installé avant le
+    // changement peut encore appeler cet endpoint -> on court-circuite ici aussi.
+    if (config?.subs === false) { res.json({ subtitles: [] }); return; }
     const parsed = parseStremioId(decodeURIComponent(id));
     const info = await getTmdbInfo(type, parsed.baseId, config);
     if (!info) { res.json({ subtitles: [] }); return; }
@@ -2067,9 +2083,10 @@ async function handleSubtitles(req: express.Request, res: express.Response, type
     }
 
     // Sous-titres FR EXTERNES (OpenSubtitles legacy) — complètent les flux VO
-    // (Videasy…) qui ne portent pas de FR. Toujours proposés ; ignorés sur du VF.
+    // (Videasy…) qui ne portent pas de FR. Proposés par défaut ; coupables via config.extSubs
+    // (= false -> on garde seulement les sous-titres EMBARQUÉS, sans le flot externe).
     try {
-      if (info.imdbId) {
+      if (config?.extSubs !== false && info.imdbId) {
         const ext = await getFrenchSubtitles(
           info.imdbId,
           type === 'series' ? parsed.season : undefined,
