@@ -25,6 +25,9 @@ const HOSTS = [
   'https://api6.aoneroom.com', 'https://api.aoneroom.com', 'https://api1.aoneroom.com',
   'https://api2.aoneroom.com', 'https://api3.aoneroom.com', 'https://api6sg.aoneroom.com',
 ];
+// Surface « TV » (app com.community.mbox.tv) : la seule dont les URLs de lecture
+// ne sont pas empoisonnées — voir resolveMovieboxUrl.
+const TV_HOSTS = ['https://tv.aoneroom.com'];
 const DEVICE_ID = crypto.randomBytes(8).toString('hex'); // stable for the process
 // IMPORTANT: a MINIMAL device profile makes play-info return direct **MP4**
 // streams. A full profile (os_version/brand/model/…) makes it return a single
@@ -95,11 +98,11 @@ async function signedRequest(
   method: 'GET' | 'POST',
   path: string,
   params: Record<string, string | number>,
-  opts: { bearer?: string; body?: any; wantHeaders?: boolean } = {}
+  opts: { bearer?: string; body?: any; wantHeaders?: boolean; hosts?: string[] } = {}
 ): Promise<{ data: any; headers: Record<string, string> } | null> {
   const q = method === 'GET' ? sortedQuery(params) : '';
   const bodyStr = opts.body ? JSON.stringify(opts.body) : '';
-  for (const host of HOSTS) {
+  for (const host of (opts.hosts || HOSTS)) {
     try {
       const headers = signedHeaders(method, path, q, bodyStr);
       if (opts.bearer) headers['Authorization'] = `Bearer ${opts.bearer}`;
@@ -362,6 +365,77 @@ async function getResourceList(bearer: string, subjectId: string, se: number, ep
   return all.filter(it => Number(it.se) === se && Number(it.ep) === ep);
 }
 
+// ---------------------------------------------------------------------------
+// Contournement de l'empoisonnement des URLs (constaté le 2026-09-07)
+//
+// Depuis le 2026-09-04, `subject-api/resource` et `subject-api/play-info`
+// (mobile-bff) renvoient LA MÊME vidéo-notice de 952 Ko pour tous les titres —
+// « Installation Failed? … moviebox download.com », sous /other/AAAA/MM/JJ/*.mp4.
+// Les métadonnées (résolution, taille, durée, extCaptions) restent VRAIES : seule
+// l'URL de lecture est substituée. Ni l'UA, ni la region, ni le profil device, ni
+// les hôtes inmoviebox n'y changent quoi que ce soit.
+//
+// Onyx v1.7.248 (CloudstreamProvider) contourne par deux surfaces encore saines,
+// qu'on essaie dans cet ordre :
+//   1. tv-bff  — tv.aoneroom.com/wefeed-tv-bff/subject/play-info/v2 → data.resources[]
+//   2. get     — subject-api/get → data.resourceDetectors[].resolutionList[]
+// ---------------------------------------------------------------------------
+
+/** La notice est servie sous /other/<date>/ ; les vrais encodes sont sous /bt/, /resource/, /convert-*. */
+function isPoisonedUrl(url: string): boolean {
+  return /\/other\/\d{4}\/\d{2}\/\d{2}\//.test(url);
+}
+
+interface PlayCandidate { url: string; resolution: number; hls: boolean; }
+
+const resNum = (v: any) => Number(String(v ?? '').match(/\d+/)?.[0]) || 0;
+
+/** Meilleur candidat pour la résolution voulue : exact, sinon le plus proche en dessous, sinon le plus gros. */
+function pickCandidate(cands: PlayCandidate[], wanted: number): PlayCandidate | null {
+  const usable = cands.filter(c => c.url && !isPoisonedUrl(c.url));
+  if (!usable.length) return null;
+  const mp4First = (a: PlayCandidate, b: PlayCandidate) => Number(a.hls) - Number(b.hls);
+  const exact = usable.filter(c => c.resolution === wanted).sort(mp4First);
+  if (exact.length) return exact[0];
+  const below = usable.filter(c => c.resolution <= wanted).sort((a, b) => b.resolution - a.resolution || mp4First(a, b));
+  if (below.length) return below[0];
+  return usable.sort((a, b) => b.resolution - a.resolution || mp4First(a, b))[0];
+}
+
+/** tv-bff : play-info/v2 de l'app TV — data.resources[] = {url, resolution, codec, linkType, se, ep}. */
+async function tvBffCandidates(bearer: string, subjectId: string, se: number, ep: number): Promise<PlayCandidate[]> {
+  const r = await signedRequest('GET', '/wefeed-tv-bff/subject/play-info/v2',
+    // se/ep vides pour un film (comme Onyx) ; l'endpoint respecte se/ep pour les séries.
+    { subjectId, se: se || '', ep: ep || '', vipLevel: 0, host: 'tv.aoneroom.com' },
+    { bearer, hosts: TV_HOSTS });
+  if (r?.data?.code !== 0) return [];
+  const list: any[] = Array.isArray(r.data.data?.resources) ? r.data.data.resources : [];
+  return list
+    // Sécurité série : si l'endpoint renvoyait plusieurs épisodes, ne garder que le bon.
+    .filter(x => !se || !x.se || (Number(x.se) === se && Number(x.ep) === ep))
+    .map(x => ({
+      url: String(x.url || ''),
+      resolution: resNum(x.resolution),
+      hls: String(x.linkType) === '1' || /\.m3u8(\?|$)/i.test(String(x.url || '')),
+    }));
+}
+
+/** subject-api/get : resourceDetectors[].resolutionList[] porte aussi de vrais liens signés. */
+async function resourceDetectorCandidates(bearer: string, subjectId: string, se: number, ep: number): Promise<PlayCandidate[]> {
+  const r = await signedRequest('GET', '/wefeed-mobile-bff/subject-api/get', { subjectId }, { bearer });
+  if (r?.data?.code !== 0) return [];
+  const dets: any[] = Array.isArray(r.data.data?.resourceDetectors) ? r.data.data.resourceDetectors : [];
+  const out: PlayCandidate[] = [];
+  for (const det of dets) {
+    for (const it of (Array.isArray(det?.resolutionList) ? det.resolutionList : [])) {
+      if (Number(it.se || 0) !== se || Number(it.ep || 0) !== ep) continue;
+      const url = String(it.resourceLink || it.sourceUrl || '');
+      out.push({ url, resolution: resNum(it.resolution) || resNum(it.title), hls: /\.m3u8(\?|$)/i.test(url) });
+    }
+  }
+  return out;
+}
+
 /** Find a resource item by resourceId (fresh call). */
 async function findResourceItem(
   subjectId: string, se: number, ep: number, resourceId: string
@@ -378,11 +452,50 @@ async function findResourceItem(
 
 // Fresh, playable MP4 URL for a resource item — /moviebox/stream calls this at
 // play time so the signed link is never stale.
+//
+// `quality` (la résolution annoncée dans le flux, ex. 1080) évite d'avoir à
+// recharger la liste `resource` paginée juste pour retrouver la résolution du
+// resourceId — gros gain de latence sur les séries. Elle reste optionnelle :
+// sans elle on retombe sur la liste (anciennes URLs déjà dans Stremio).
 export async function resolveMovieboxUrl(
-  subjectId: string, se: number, ep: number, resourceId: string
+  subjectId: string, se: number, ep: number, resourceId: string, quality?: number
 ): Promise<string | null> {
-  const item = await findResourceItem(subjectId, se, ep, resourceId);
-  return item?.resourceLink || item?.sourceUrl || null;
+  const bearer = await ensureBearer();
+  if (!bearer) return null;
+
+  let wanted = Number(quality) || 0;
+  let item: any = null;
+  if (!wanted) {
+    item = await findResourceItem(subjectId, se, ep, resourceId);
+    wanted = resNum(item?.resolution);
+  }
+
+  for (const [name, load] of [
+    ['tv-bff', tvBffCandidates],
+    ['resourceDetectors', resourceDetectorCandidates],
+  ] as const) {
+    try {
+      const pick = pickCandidate(await load(bearer, subjectId, se, ep), wanted);
+      if (pick) {
+        if (pick.resolution !== wanted) {
+          console.log(`[MovieBox] ${name} : pas de ${wanted}p pour ${subjectId} — repli sur ${pick.resolution}p`);
+        }
+        return pick.url;
+      }
+    } catch (e: any) {
+      console.log(`[MovieBox] ${name} KO : ${e?.message || e}`);
+    }
+  }
+
+  // Dernier recours : le lien de `resource` — sauf s'il s'agit de la vidéo-notice
+  // (mieux vaut un 502 qu'une pub de 30 s à la place du film).
+  if (!item) item = await findResourceItem(subjectId, se, ep, resourceId);
+  const legacy = String(item?.resourceLink || item?.sourceUrl || '');
+  if (!legacy || isPoisonedUrl(legacy)) {
+    console.log(`[MovieBox] Aucune URL saine pour ${subjectId} se=${se} ep=${ep} (${wanted}p)`);
+    return null;
+  }
+  return legacy;
 }
 
 

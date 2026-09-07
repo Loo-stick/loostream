@@ -766,7 +766,7 @@ function getManifest(req: express.Request, config?: UserConfig | null) {
 
   return {
     id: 'community.loostream.stremio',
-    version: '1.19.4',
+    version: '1.19.5',
     name: 'LooStream',
     logo: `${baseUrl}/logo.png`,
     description: 'Netflix, Prime, Disney+ mirrors + StreamFlix + Movix VF/VOSTFR',
@@ -1784,6 +1784,7 @@ async function handleStream(req: express.Request, res: express.Response, type: s
         u.searchParams.set('se', String(mb.se));
         u.searchParams.set('ep', String(mb.ep));
         u.searchParams.set('rid', mb.resourceId);
+        u.searchParams.set('q', String(parseInt(mb.quality, 10) || 0)); // résolution -> résolution tv-bff
         drafts.push({
           url: signUrl(u).toString(), // &k= si ACCESS_KEY active
           behaviorHints: {
@@ -3008,7 +3009,7 @@ app.get('/moviebox/stream', async (req, res) => {
   const rid = String(req.query.rid || '');
   if (!sid || !rid) { res.status(400).send('missing sid/rid'); return; }
   try {
-    const url = await resolveMovieboxUrl(sid, se, ep, rid);
+    const url = await resolveMovieboxUrl(sid, se, ep, rid, Number(req.query.q) || undefined);
     if (!url) { res.status(502).send('MovieBox: resolve failed'); return; }
     res.redirect(302, url);
   } catch (e: any) {
