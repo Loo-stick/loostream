@@ -83,10 +83,12 @@ export async function getDocstreamStreams(
 ): Promise<DocstreamStream[]> {
   if (mediaType !== 'movie') return []; // FILMS uniquement (2 séries du catalogue ignorées)
   if (!title) return [];
-  // MFP-ONLY : sans MediaFlow, streamtape n'est pas résoluble -> on n'appelle même pas.
-  if (!extractorConfig.useMediaFlow || !extractorConfig.mediaFlowUrl) return [];
+  // streamtape est désormais résoluble EN LOCAL (extractStreamtape) : plus de
+  // verrou MFP. C'était le point de panne — quand /extractor/video de MediaFlow
+  // renvoie 502, docstream rendait 0 flux alors que le catalogue répondait.
   const titles = [...new Set([title, originalTitle].filter(Boolean) as string[])];
-  const key = `docstream:mf:movie:${normalize(title)}`;
+  const mode = extractorConfig.useMediaFlow ? 'mf' : 'loc';
+  const key = `docstream:${mode}:movie:${normalize(title)}`;
   return cached(
     key, STREAMS_TTL_MS,
     async () => fetchDocstreamStreams(titles, year, extractorConfig),

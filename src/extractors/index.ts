@@ -416,6 +416,59 @@ export async function extractUqload(embedUrl: string): Promise<ExtractedStream |
 
 
 /**
+ * Streamtape (+ miroirs strcloud / shavetape / tapewithadblock).
+ *
+ * La page porte TROIS <div> leurres (ideoolink / botlink / robotlink) contenant
+ * un lien get_video au token FAUX. Le vrai est reconstruit en JS juste après :
+ *
+ *   document.getElementById('robotlink').innerHTML =
+ *     '//streamtape.com/get_video?id=oe' + ('xcdYvY4…&token=eOmWcpYKe2xV').substring(2).substring(1);
+ *
+ * On rejoue cette concaténation : littéraux dans l'ordre, en appliquant les
+ * `.substring(n)` enchaînés de chacun. Prendre le contenu du <div> à la place
+ * donne un 403 (token leurre).
+ *
+ * Le get_video répond 302 vers tapecontent.net ; on garde l'URL signée telle
+ * quelle (le CDN suit le Range) — `&stream=1` évite la page de téléchargement.
+ */
+export async function extractStreamtape(embedUrl: string): Promise<ExtractedStream | null> {
+  try {
+    const { data: html } = await axios.get<string>(embedUrl, {
+      headers: HEADERS, timeout: 12000, responseType: 'text', transformResponse: v => v,
+    });
+    if (typeof html !== 'string' || html.includes('Video not found')) {
+      console.log('[Extractor] Streamtape: vidéo introuvable');
+      return null;
+    }
+
+    // Repérage LITTÉRAL de l'affectation, puis on ne travaille QUE sur cette
+    // instruction (quelques centaines d'octets) — jamais de regex sur la page entière.
+    const at = html.indexOf("getElementById('robotlink').innerHTML");
+    if (at < 0) { console.log('[Extractor] Streamtape: robotlink absent'); return null; }
+    const eq = html.indexOf('=', at);
+    const end = html.indexOf(';', eq);
+    if (eq < 0 || end < 0) { console.log('[Extractor] Streamtape: instruction illisible'); return null; }
+    const stmt = html.slice(eq + 1, end);
+
+    let path = '';
+    const part = /(['"])(.*?)\1[\s)]*((?:\.substring\(\d+\)[\s)]*)*)/g;
+    for (const m of stmt.matchAll(part)) {
+      let text = m[2];
+      for (const s of m[3].matchAll(/\.substring\((\d+)\)/g)) text = text.slice(Number(s[1]));
+      path += text;
+    }
+    if (!path.includes('get_video')) { console.log('[Extractor] Streamtape: lien reconstruit invalide'); return null; }
+
+    const url = (path.startsWith('//') ? 'https:' + path : 'https://' + path.replace(/^\/+/, ''))
+      + (path.includes('stream=1') ? '' : '&stream=1');
+    return { url, quality: 'HD', format: 'mp4', headers: { Referer: embedUrl } };
+  } catch (e: any) {
+    console.log('[Extractor] Streamtape error:', e.message);
+    return null;
+  }
+}
+
+/**
  * Extract video URL from Sharecloudy / Moovbob iframe.
  * The m3u8 is inlined in a JWPlayer `sources: [{ file: "..." }]` block — no obfuscation.
  */
@@ -843,6 +896,8 @@ async function extractLocally(embedUrl: string, extractor: string): Promise<Extr
       return await extractUqload(embedUrl);
     case 'sharecloudy':
       return await extractSharecloudy(embedUrl);
+    case 'streamtape':
+      return await extractStreamtape(embedUrl);
     case 'embedseek':
       return await extractEmbedseek(embedUrl);
     case 'lulustream':

@@ -50,6 +50,7 @@ export async function getStreamFlixStreams(
   season?: number,
   episode?: number,
   _tmdbKey?: string, // conservé pour compat de signature (plus nécessaire : API keyée TMDB)
+  title?: string,    // requis pour les séries : /api/series/{id} veut l'id INTERNE (cf. findSeriesId)
 ): Promise<StreamFlixStream[]> {
   if (!tmdbId) return [];
   if (mediaType === 'series' && (!season || !episode)) return [];
@@ -57,9 +58,21 @@ export async function getStreamFlixStreams(
   return cached(
     key,
     STREAMS_TTL_MS,
-    () => fetchStreamFlixStreams(tmdbId, mediaType, season, episode),
+    () => fetchStreamFlixStreams(tmdbId, mediaType, season, episode, title),
     { scope: 'streamflix', shouldCache: r => r.length > 0 },
   );
+}
+
+// Séries : /api/series/{x} interprète x comme l'id INTERNE, pas comme un tmdbId
+// (contrairement à /api/movies/{tmdbId}). Lui passer un tmdbId ne renvoie PAS une
+// erreur mais une AUTRE série : 1396 (Breaking Bad) -> « Warrior ». On résout donc
+// l'id interne via /api/search, en ne retenant que l'entrée dont le tmdbId
+// correspond — c'est un match d'identifiant, pas de titre : aucun homonyme possible.
+async function findSeriesId(base: string, tmdbId: string, title: string): Promise<string | null> {
+  const hits = await getJson<any[]>(`${base}/api/search?q=${encodeURIComponent(title)}`);
+  if (!Array.isArray(hits)) return null;
+  const hit = hits.find(h => String(h?.tmdbId ?? h?.tmdb_id ?? '') === String(tmdbId));
+  return hit?.id != null ? String(hit.id) : null;
 }
 
 async function fetchStreamFlixStreams(
@@ -67,13 +80,29 @@ async function fetchStreamFlixStreams(
   mediaType: 'movie' | 'series',
   season?: number,
   episode?: number,
+  searchTitle?: string,
 ): Promise<StreamFlixStream[]> {
   const base = BASE();
-  // 1. Résoudre le contenu par tmdbId -> id interne + métadonnées.
+  // 1. Résoudre le contenu -> id interne + métadonnées.
+  //    Film  : /api/movies/{tmdbId} résout bien par tmdb.
+  //    Série : passer par /api/search (l'id interne n'est PAS le tmdbId).
   const kind = mediaType === 'movie' ? 'movies' : 'series';
-  const meta = await getJson<any>(`${base}/api/${kind}/${encodeURIComponent(tmdbId)}`);
+  let lookupId = tmdbId;
+  if (mediaType === 'series') {
+    if (!searchTitle) { console.log(`[StreamFlix] Pas de titre pour la série tmdb ${tmdbId}`); return []; }
+    const internal = await findSeriesId(base, tmdbId, searchTitle);
+    if (!internal) { console.log(`[StreamFlix] Série hors catalogue : "${searchTitle}" (tmdb ${tmdbId})`); return []; }
+    lookupId = internal;
+  }
+  const meta = await getJson<any>(`${base}/api/${kind}/${encodeURIComponent(lookupId)}`);
   if (!meta?.id) {
     console.log(`[StreamFlix] Hors catalogue (tmdb ${tmdbId})`);
+    return [];
+  }
+  // Garde-fou : l'API a déjà servi une autre œuvre sans le signaler. Si elle
+  // annonce un tmdb_id, il DOIT être celui demandé — sinon on jette.
+  if (meta.tmdb_id != null && String(meta.tmdb_id) !== String(tmdbId)) {
+    console.log(`[StreamFlix] Mauvaise correspondance : tmdb ${tmdbId} -> "${meta.title || meta.name}" (tmdb ${meta.tmdb_id}) — ignoré`);
     return [];
   }
   if (meta.has_video === false) {
