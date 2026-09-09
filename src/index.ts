@@ -16,9 +16,11 @@ import { getVideasyStreams, reloadVideasyEndpoints, getVideasyEndpoints } from '
 import { getMovixStreams, getMovixAnimeStreams, reloadMovixEndpoints, getMovixEndpoints } from './scrapers/movix';
 import { getWavewatchStreams, getWavewatchEndpoints, reloadWavewatchEndpoints } from './scrapers/wavewatch';
 import { getKordozStreams, getKordozEndpoints, reloadKordozEndpoints } from './scrapers/kordoz';
+import { getCinestreamStreams, cinestreamProbe, getCinestreamEndpoints, reloadCinestreamEndpoints } from './scrapers/cinestream';
+import { getDulourdStreams, dulourdProbe, getDulourdEndpoints, reloadDulourdEndpoints } from './scrapers/dulourd';
 import { getDocstreamStreams } from './scrapers/docstream';
 import { getZoneTelechargementStreams, getZoneTelechargementEndpoints, reloadZoneTelechargementEndpoints } from './scrapers/zonetelechargement';
-import { getNakastreamStreams, NakastreamAuthError, getNakastreamEndpoints } from './scrapers/nakastream';
+import { getNakastreamStreams, NakastreamAuthError, getNakastreamEndpoints, reloadNakastreamEndpoints } from './scrapers/nakastream';
 import { getVostfreeStreams, getVostfreeEndpoints, reloadVostfreeEndpoints } from './scrapers/vostfree';
 import { getFrenchStreamStreams, reloadFrenchStreamEndpoints, getFrenchStreamEndpoints } from './scrapers/frenchstream';
 import { cached, getCacheStats, clearAll, clearScope } from './cache';
@@ -81,6 +83,8 @@ interface Stats {
     kordoz: { requests: number; success: number; errors: number; lastSuccess: number | null };
     docstream: { requests: number; success: number; errors: number; lastSuccess: number | null };
     ztstream: { requests: number; success: number; errors: number; lastSuccess: number | null };
+    cinestream: { requests: number; success: number; errors: number; lastSuccess: number | null };
+    dulourd: { requests: number; success: number; errors: number; lastSuccess: number | null };
   };
   streamsServed: {
     movix: number;
@@ -101,6 +105,8 @@ interface Stats {
     kordoz: number;
     docstream: number;
     ztstream: number;
+    cinestream: number;
+    dulourd: number;
   };
 }
 
@@ -126,11 +132,13 @@ const stats: Stats = {
     kordoz: { requests: 0, success: 0, errors: 0, lastSuccess: null },
     docstream: { requests: 0, success: 0, errors: 0, lastSuccess: null },
     ztstream: { requests: 0, success: 0, errors: 0, lastSuccess: null },
+    cinestream: { requests: 0, success: 0, errors: 0, lastSuccess: null },
+    dulourd: { requests: 0, success: 0, errors: 0, lastSuccess: null },
   },
-  streamsServed: { movix: 0, netmirror: 0, streamflix: 0, frenchstream: 0, wiflix: 0, voirdrama: 0, moviebox: 0, voiranime: 0, nabistream: 0, coflix: 0, videasy: 0, animesama: 0, nakastream: 0, vostfree: 0, wavewatch: 0, kordoz: 0, docstream: 0, ztstream: 0 },
+  streamsServed: { movix: 0, netmirror: 0, streamflix: 0, frenchstream: 0, wiflix: 0, voirdrama: 0, moviebox: 0, voiranime: 0, nabistream: 0, coflix: 0, videasy: 0, animesama: 0, nakastream: 0, vostfree: 0, wavewatch: 0, kordoz: 0, docstream: 0, ztstream: 0, cinestream: 0, dulourd: 0 },
 };
 
-function trackSourceResult(source: 'movix' | 'netmirror' | 'streamflix' | 'frenchstream' | 'wiflix' | 'voirdrama' | 'moviebox' | 'voiranime' | 'nabistream' | 'coflix' | 'videasy' | 'animesama' | 'nakastream' | 'vostfree' | 'wavewatch' | 'kordoz' | 'docstream' | 'ztstream', success: boolean, streamCount: number = 0) {
+function trackSourceResult(source: 'movix' | 'netmirror' | 'streamflix' | 'frenchstream' | 'wiflix' | 'voirdrama' | 'moviebox' | 'voiranime' | 'nabistream' | 'coflix' | 'videasy' | 'animesama' | 'nakastream' | 'vostfree' | 'wavewatch' | 'kordoz' | 'docstream' | 'ztstream' | 'cinestream' | 'dulourd', success: boolean, streamCount: number = 0) {
   stats.sources[source].requests++;
   if (success) {
     stats.sources[source].success++;
@@ -766,7 +774,7 @@ function getManifest(req: express.Request, config?: UserConfig | null) {
 
   return {
     id: 'community.loostream.stremio',
-    version: '1.19.6',
+    version: '1.20.0',
     name: 'LooStream',
     logo: `${baseUrl}/logo.png`,
     description: 'Netflix, Prime, Disney+ mirrors + StreamFlix + Movix VF/VOSTFR',
@@ -1210,9 +1218,21 @@ async function handleStream(req: express.Request, res: express.Response, type: s
       (isSourceEnabled('ztstream') ? getZoneTelechargementStreams(type as 'movie' | 'series', extractorConfig, info.frenchTitle || info.title, info.title, info.year ? Number(info.year) : undefined, parsed.season, parsed.episode) : Promise.resolve([]))
         .then(r => { trackSourceResult('ztstream', true, r.length); recordOutcome('ztstream', r.length > 0 ? 'success' : 'empty'); return r; })
         .catch(e => { console.log('[ZT-Stream] Error:', e); trackSourceResult('ztstream', false); recordOutcome('ztstream', 'error', e?.message); return []; }),
+      // CineStream : ~25 000 FILMS FR (VF+VOSTFR), keyé tmdbId — le titre ne sert
+      // qu'à bâtir le slug de la fiche, qui est le Referer exigé par /player/.
+      // Séries non couvertes (return [] interne : leur catalogue est 100 % films).
+      (isSourceEnabled('cinestream') ? getCinestreamStreams(type as 'movie' | 'series', extractorConfig, info.tmdbId, info.frenchTitle || info.title, info.title, info.year ? Number(info.year) : undefined) : Promise.resolve([]))
+        .then(r => { trackSourceResult('cinestream', true, r.length); recordOutcome('cinestream', r.length > 0 ? 'success' : 'empty'); return r; })
+        .catch(e => { console.log('[CineStream] Error:', e); trackSourceResult('cinestream', false); recordOutcome('cinestream', 'error', e?.message); return []; }),
+      // dulourd : SÉRIES FR (VF+VOSTFR), moteur DLE. Keyé titre (titre FR d'abord) ;
+      // l'URL d'épisode se construit, la langue est déclarée par le site.
+      // Films non couverts (return [] interne : leur catalogue est 100 % séries).
+      (isSourceEnabled('dulourd') ? getDulourdStreams(type as 'movie' | 'series', extractorConfig, info.frenchTitle || info.title, info.title, info.year ? Number(info.year) : undefined, parsed.season, parsed.episode) : Promise.resolve([]))
+        .then(r => { trackSourceResult('dulourd', true, r.length); recordOutcome('dulourd', r.length > 0 ? 'success' : 'empty'); return r; })
+        .catch(e => { console.log('[Dulourd] Error:', e); trackSourceResult('dulourd', false); recordOutcome('dulourd', 'error', e?.message); return []; }),
     ];
 
-    const SOURCE_NAMES = ['netmirror', 'streamflix', 'movix', 'frenchstream', 'wiflix', 'voirdrama', 'moviebox', 'voiranime', 'nabistream', 'coflix', 'videasy', 'animesama', 'nakastream', 'vostfree', 'wavewatch', 'kordoz', 'docstream', 'ztstream'];
+    const SOURCE_NAMES = ['netmirror', 'streamflix', 'movix', 'frenchstream', 'wiflix', 'voirdrama', 'moviebox', 'voiranime', 'nabistream', 'coflix', 'videasy', 'animesama', 'nakastream', 'vostfree', 'wavewatch', 'kordoz', 'docstream', 'ztstream', 'cinestream', 'dulourd'];
     const collected = await collectSources(
       sourcePromises.map((promise, i) => ({
         name: SOURCE_NAMES[i],
@@ -1258,6 +1278,8 @@ async function handleStream(req: express.Request, res: express.Response, type: s
     const kordozResults = collected[15] as Awaited<ReturnType<typeof getKordozStreams>>;
     const docstreamResults = collected[16] as Awaited<ReturnType<typeof getDocstreamStreams>>;
     const ztstreamResults = collected[17] as Awaited<ReturnType<typeof getZoneTelechargementStreams>>;
+    const cinestreamResults = collected[18] as Awaited<ReturnType<typeof getCinestreamStreams>>;
+    const dulourdResults = collected[19] as Awaited<ReturnType<typeof getDulourdStreams>>;
 
     // On accumule des "drafts" (streams sans name/title). name/title sont posés
     // en UNE passe centralisée plus bas (src/display.ts), pour un rendu uniforme.
@@ -1705,6 +1727,61 @@ async function handleStream(req: express.Request, res: express.Response, type: s
           language: zt.language,
           source: 'ztstream',
           server: zt.server,
+        },
+      });
+    }
+
+    // CineStream : mêmes familles d'hôtes que ZT (lulustream/tnmr, vidara) -> le CDN
+    // tnmr refuse les datacenters en direct, d'où le proxy local forcé.
+    for (const cs of cinestreamResults) {
+      const needsLocalProxy = /tnmr/i.test(cs.url);
+      if (needsLocalProxy && !localProxyAllowed) continue;
+      const d = await deliver(cs.url, {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        ...(cs.headers || {}),
+      }, { forceHls: /\.m3u8/i.test(cs.url), forceLocal: needsLocalProxy }, req, config);
+
+      if (!d) continue;
+
+      drafts.push({
+        url: d.url,
+        behaviorHints: {
+          notWebReady: !!d.proxyHeaders,
+          bingeGroup: `cinestream-${cs.server}`,
+          ...(d.proxyHeaders ? { proxyHeaders: { request: d.proxyHeaders } } : {}),
+        },
+        _meta: {
+          quality: cs.quality,
+          language: cs.language,
+          source: 'cinestream',
+          server: cs.server,
+        },
+      });
+    }
+
+    // dulourd : HLS Voe (CDN derrière des domaines jetables) — même livraison que ZT.
+    for (const dl of dulourdResults) {
+      const needsLocalProxy = /tnmr/i.test(dl.url);
+      if (needsLocalProxy && !localProxyAllowed) continue;
+      const d = await deliver(dl.url, {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        ...(dl.headers || {}),
+      }, { forceHls: /\.m3u8/i.test(dl.url), forceLocal: needsLocalProxy }, req, config);
+
+      if (!d) continue;
+
+      drafts.push({
+        url: d.url,
+        behaviorHints: {
+          notWebReady: !!d.proxyHeaders,
+          bingeGroup: `dulourd-${dl.server}`,
+          ...(d.proxyHeaders ? { proxyHeaders: { request: d.proxyHeaders } } : {}),
+        },
+        _meta: {
+          quality: dl.quality,
+          language: dl.language,
+          source: 'dulourd',
+          server: dl.server,
         },
       });
     }
@@ -2309,6 +2386,18 @@ app.get('/api/ztstream/endpoints', (req, res) => {
   const reload = req.query.reload === 'true';
   res.json({ ...(reload ? reloadZoneTelechargementEndpoints() : getZoneTelechargementEndpoints()), reloaded: reload });
 });
+app.get('/api/cinestream/endpoints', (req, res) => {
+  const reload = req.query.reload === 'true';
+  res.json({ ...(reload ? reloadCinestreamEndpoints() : getCinestreamEndpoints()), reloaded: reload });
+});
+app.get('/api/dulourd/endpoints', (req, res) => {
+  const reload = req.query.reload === 'true';
+  res.json({ ...(reload ? reloadDulourdEndpoints() : getDulourdEndpoints()), reloaded: reload });
+});
+app.get('/api/nakastream/endpoints', (req, res) => {
+  const reload = req.query.reload === 'true';
+  res.json({ ...(reload ? reloadNakastreamEndpoints() : getNakastreamEndpoints()), reloaded: reload });
+});
 
 // ── Écriture des endpoints depuis l'admin (authentifié) ────────────────────
 // Écrit un fichier config/<name> en préservant son _comment, puis appelle le
@@ -2357,6 +2446,9 @@ const singleBaseSources: Array<{ path: string; file: string; reload: () => unkno
   { path: 'animesama', file: 'animesama-endpoints.json', reload: reloadAnimesamaEndpoints },
   { path: 'wavewatch', file: 'wavewatch-endpoints.json', reload: reloadWavewatchEndpoints },
   { path: 'ztstream', file: 'zonetelechargement-endpoints.json', reload: reloadZoneTelechargementEndpoints },
+  { path: 'cinestream', file: 'cinestream-endpoints.json', reload: reloadCinestreamEndpoints },
+  { path: 'dulourd', file: 'dulourd-endpoints.json', reload: reloadDulourdEndpoints },
+  { path: 'nakastream', file: 'nakastream-endpoints.json', reload: reloadNakastreamEndpoints },
 ];
 for (const src of singleBaseSources) {
   app.post(`/api/${src.path}/endpoints`, requireAdminSession, jsonBody, (req, res) => {
@@ -2883,6 +2975,22 @@ app.get('/api/health', async (_req, res) => {
     results.ztstream = { status: ok ? 'up' : 'degraded', latency: Date.now() - ztStart };
   } catch (e: any) {
     results.ztstream = { status: 'down', error: e.message };
+  }
+
+  const csStart = Date.now();
+  try {
+    const ok = await cinestreamProbe();
+    results.cinestream = { status: ok ? 'up' : 'degraded', latency: Date.now() - csStart };
+  } catch (e: any) {
+    results.cinestream = { status: 'down', error: e.message };
+  }
+
+  const dlStart = Date.now();
+  try {
+    const ok = await dulourdProbe();
+    results.dulourd = { status: ok ? 'up' : 'degraded', latency: Date.now() - dlStart };
+  } catch (e: any) {
+    results.dulourd = { status: 'down', error: e.message };
   }
 
   const allUp = Object.values(results).every(r => r.status === 'up');

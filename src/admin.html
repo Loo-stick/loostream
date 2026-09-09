@@ -609,6 +609,9 @@ const SOURCES = [
     { path: 'kordoz', label: 'Kordoz', fields: ['domains'], list: true, note: 'films FR VF (1080p). Miroirs du même backend, essayés dans l\'ordre — un domaine par ligne (kordoz.com / ilmiv.com / kidraz.com / vogfo.com…)' },
     { path: 'wavewatch', label: 'WaveWatch', fields: ['base'], note: 'agrégateur VO keyé tmdbId (moteur SSE zeus.php). Base API tournante — le frontend tfx05.lol n\'est qu\'une vitrine' },
     { path: 'ztstream', label: 'Zone-Téléchargement', fields: ['base'], note: 'section streaming de ZT (WEB-DL FR ; hôtes lulustream/embedseek via zoneurs). Domaine TRÈS rotatif (.org/.com/…)' },
+    { path: 'cinestream', label: 'CineStream', fields: ['base'], note: 'films FR VF+VOSTFR keyés tmdbId (~25 000 fiches, films uniquement). Le domaine est bloqué en DNS par Orange : la source le résout via un DNS public (champ resolver du fichier config, 1.1.1.1 par défaut)' },
+    { path: 'dulourd', label: 'dulourd', fields: ['base'], note: 'SÉRIES FR VF+VOSTFR (moteur DataLife Engine ; aucun film au catalogue). Domaine bloqué en DNS par le FAI : rattrapé par src/dns-resolve.ts' },
+    { path: 'nakastream', label: 'Nakastream', fields: ['base'], note: 'agrégateur keyé TMDB, opt-in par token de pairing. Domaine TOURNANT (nakastream.tv -> .wiki -> .cc) : la nouvelle adresse est annoncée sur leur Telegram/Discord' },
 ];
 async function loadEndpoints() {
     const box = document.getElementById('endpoints');

@@ -1,0 +1,4 @@
+{
+  "_comment": "Base du site CineStream (films FR VF+VOSTFR, keyé tmdbId, films uniquement). Le domaine est bloqué en DNS par le FAI de l'hébergeur (résolution en ::1) : c'est src/dns-resolve.ts qui rattrape ça pour toute l'app, en re-résolvant via un DNS public (variable d'env DNS_FALLBACK_RESOLVER, 1.1.1.1 par défaut). Éditable à chaud (bind-mount + fs.watch) ou via l'admin ; reload forcé : /api/cinestream/endpoints?reload=true",
+  "base": "https://cinestream.info"
+}

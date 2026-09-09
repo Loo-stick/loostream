@@ -1,0 +1,4 @@
+{
+  "_comment": "Base de l'API Nakastream (agrégateur keyé TMDB, opt-in par token de pairing). Le domaine TOURNE : nakastream.tv -> nakastream.wiki (page d'attente) -> nakastream.cc au 2026-09-09 ; la nouvelle adresse est annoncée sur leur Telegram/Discord. Éditable à chaud (bind-mount + fs.watch) ou via l'admin ; reload forcé : /api/nakastream/endpoints?reload=true",
+  "base": "https://nakastream.cc"
+}

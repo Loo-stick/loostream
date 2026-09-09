@@ -1,5 +1,6 @@
 import axios from 'axios';
 import * as https from 'https';
+import { makeDnsSafeAgent } from '../dns-resolve';
 import * as vm from 'vm';
 import * as crypto from 'crypto';
 import { unpackFromHtml, findStreamUrl } from './unpack';
@@ -8,10 +9,13 @@ import { probeMaster, resLabel } from '../multiaudio';
 import * as fs from 'fs';
 import * as path from 'path';
 
-// Certains hôtes FR (uqload.bz, mirrors) tournent avec un certificat TLS expiré.
-// Agent permissif réservé à ces extracteurs — on ne relaie que du média public,
-// pas de secret, donc tolérer un cert périmé est acceptable ici.
-const INSECURE_AGENT = new https.Agent({ rejectUnauthorized: false });
+// Agent partagé des extracteurs, permissif sur deux points :
+//  • TLS : certains hôtes FR (uqload.bz, miroirs) ont un certificat expiré. On ne
+//    relaie que du média public, aucun secret -> tolérable ici.
+//  • DNS : le FAI de l'hébergeur fait résoudre plusieurs hôtes d'embed (voe.sx…)
+//    en ::1, ce qui envoyait nos requêtes sur notre PROPRE localhost (échec TLS
+//    ou page vide trompeuse). makeDnsSafeAgent rattrape ces réponses menteuses.
+const INSECURE_AGENT = makeDnsSafeAgent({ rejectUnauthorized: false });
 
 const HEADERS = {
   'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
@@ -256,7 +260,20 @@ export async function extractVoe(embedUrl: string, depth = 0): Promise<Extracted
     console.log('[Extractor] Voe: No HLS URL found');
     return null;
   } catch (e: any) {
-    console.log('[Extractor] Voe error:', e.message);
+    // Messages parlants : le comportement de Voe face à un upload SUPPRIMÉ est un
+    // carrousel de redirections vers des domaines jetables — jamais une erreur
+    // franche. Vérifié le 2026-09-07 : 30 sauts, 30 domaines tous différents, puis
+    // 520. Sans cette traduction, le log dit « Maximum number of redirects
+    // exceeded » et laisse croire à un bug de plafond côté client (piège dans
+    // lequel je suis tombé). Un 404 = upload absent, tout aussi définitif.
+    const msg = String(e?.message || '');
+    if (/redirect/i.test(msg)) {
+      console.log(`[Extractor] Voe : carrousel de redirections — upload probablement supprimé (${embedUrl})`);
+    } else if (e?.response?.status === 404) {
+      console.log(`[Extractor] Voe : upload introuvable, 404 (${embedUrl})`);
+    } else {
+      console.log('[Extractor] Voe error:', msg);
+    }
     return null;
   }
 }

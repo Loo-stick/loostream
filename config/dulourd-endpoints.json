@@ -1,0 +1,4 @@
+{
+  "_comment": "Base du site dulourd (SÉRIES FR VF+VOSTFR, moteur DataLife Engine ; séries uniquement, aucun film au catalogue). Domaine bloqué en DNS par le FAI de l'hébergeur : rattrapé par src/dns-resolve.ts. Éditable à chaud (bind-mount + fs.watch) ou via l'admin ; reload forcé : /api/dulourd/endpoints?reload=true",
+  "base": "https://www.dulourd.boo"
+}
