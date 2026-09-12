@@ -196,13 +196,13 @@
               <div id="access-test-result" style="font-size:0.85em;margin-top:6px;"></div>
             </div>
             <div class="input-group show" style="margin-top:16px">
-              <label>nakastream <span class="hint">— optionnel, source bonus (films + FR + anime, sous-titres)</span>
+              <label>nkstrm <span class="hint">— optionnel, source bonus (films + FR + anime, sous-titres)</span>
                 <button type="button" class="ihelp" onclick="document.getElementById('nk-help').classList.toggle('show')" title="Comment obtenir le code">i</button>
               </label>
-              <div id="nk-help" class="nk-help">Sur <b>nakastream.tv</b> (connecté — un email fictif suffit), lance <b>« Connecter une TV / un appareil »</b>, copie le <b>code</b> affiché et colle-le ici. Ça active nakastream juste pour toi.</div>
+              <div id="nk-help" class="nk-help">Sur <b>nkstrm.tv</b> (connecté — un email fictif suffit), lance <b>« Connecter une TV / un appareil »</b>, copie le <b>code</b> affiché et colle-le ici. Ça active nkstrm juste pour toi.</div>
               <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
                 <input type="text" id="nk-code" placeholder="ex. AFNEE" maxlength="12" autocomplete="off" style="text-transform:uppercase;flex:1;min-width:120px">
-                <button type="button" class="btn" onclick="connectNakastream()">Connecter</button>
+                <button type="button" class="btn" onclick="connectNkstrm()">Connecter</button>
               </div>
               <p class="sub" id="nk-status"></p>
             </div>
@@ -324,21 +324,21 @@
 
     <script>
         let currentMode = 'mediaflow';
-        let nakastreamToken = '';
+        let nkstrmToken = '';
         const baseUrl = window.location.origin;
 
-        // Pairing nakastream : échange le code (côté serveur) contre un token de session.
-        async function connectNakastream() {
+        // Pairing nkstrm : échange le code (côté serveur) contre un token de session.
+        async function connectNkstrm() {
           const code = (document.getElementById('nk-code').value || '').trim().toUpperCase();
           const st = document.getElementById('nk-status');
-          if (!code) { st.textContent = 'Colle d\'abord le code affiché sur nakastream.'; st.style.color = ''; return; }
+          if (!code) { st.textContent = 'Colle d\'abord le code affiché sur nkstrm.'; st.style.color = ''; return; }
           st.textContent = 'Connexion…'; st.style.color = '';
           try {
-            const r = await fetch('/api/nakastream/claim', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ code }) });
+            const r = await fetch('/api/nkstrm/claim', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ code }) });
             const j = await r.json();
-            if (j.ok && j.token) { nakastreamToken = j.token; st.textContent = '✅ nakastream connecté'; st.style.color = 'var(--good)'; document.getElementById('result').classList.remove('show'); }
+            if (j.ok && j.token) { nkstrmToken = j.token; st.textContent = '✅ nkstrm connecté'; st.style.color = 'var(--good)'; document.getElementById('result').classList.remove('show'); }
             else { st.textContent = '✗ ' + (j.error || 'Échec'); st.style.color = 'var(--crit)'; }
-          } catch (e) { st.textContent = '✗ nakastream injoignable, réessaie.'; st.style.color = 'var(--crit)'; }
+          } catch (e) { st.textContent = '✗ nkstrm injoignable, réessaie.'; st.style.color = 'var(--crit)'; }
         }
         var cur = 1, N = 5;
 
@@ -473,7 +473,7 @@
             }
           } catch (e) { /* incident réseau : on ne bloque pas */ }
 
-          if (nakastreamToken) config.nakastreamToken = nakastreamToken;
+          if (nkstrmToken) config.nkstrmToken = nkstrmToken;
 
           // base64 UTF-8-safe : btoa() seul casse sur les accents (é, è…) d'un pseudo.
           const configStr = btoa(unescape(encodeURIComponent(JSON.stringify(config))));
@@ -550,10 +550,10 @@
               const config = JSON.parse(decodeURIComponent(escape(atob(pathParts[1]))));
               if (config.tmdbKey) document.getElementById('tmdb-key').value = config.tmdbKey;
               if (config.pseudo) document.getElementById('pseudo').value = config.pseudo;
-              if (config.nakastreamToken) {
-                nakastreamToken = config.nakastreamToken;
+              if (config.nkstrmToken) {
+                nkstrmToken = config.nkstrmToken;
                 const st = document.getElementById('nk-status');
-                if (st) { st.textContent = '✅ nakastream déjà connecté (recolle un code pour changer)'; st.style.color = 'var(--good)'; }
+                if (st) { st.textContent = '✅ nkstrm déjà connecté (recolle un code pour changer)'; st.style.color = 'var(--good)'; }
               }
               if (config.accessKey) document.getElementById('access-key').value = config.accessKey;
               if (config.ownerKey) {

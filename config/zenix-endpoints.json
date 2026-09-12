@@ -1,0 +1,4 @@
+{
+  "_comment": "Base du site Zenix (films + séries FR, VF uniquement ; relaie le catalogue StreamFlix). PROXY OBLIGATOIRE : leur cookie de session est exigé au téléchargement et le jeton du CDN vit ~3 minutes, d'où la résolution au clic via /zenix/stream puis redirection vers le proxy du mode (MFP ou local). Éditable à chaud (bind-mount + fs.watch) ou via l'admin ; reload forcé : /api/zenix/endpoints?reload=true",
+  "base": "https://zenix.best"
+}

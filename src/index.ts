@@ -18,13 +18,15 @@ import { getWavewatchStreams, getWavewatchEndpoints, reloadWavewatchEndpoints } 
 import { getKordozStreams, getKordozEndpoints, reloadKordozEndpoints } from './scrapers/kordoz';
 import { getCinestreamStreams, cinestreamProbe, getCinestreamEndpoints, reloadCinestreamEndpoints } from './scrapers/cinestream';
 import { getDulourdStreams, dulourdProbe, getDulourdEndpoints, reloadDulourdEndpoints } from './scrapers/dulourd';
+import { getZenixStreams, resolveZenixStream, zenixProbe, getZenixEndpoints, reloadZenixEndpoints } from './scrapers/zenix';
 import { getDocstreamStreams } from './scrapers/docstream';
 import { getZoneTelechargementStreams, getZoneTelechargementEndpoints, reloadZoneTelechargementEndpoints } from './scrapers/zonetelechargement';
-import { getNakastreamStreams, NakastreamAuthError, getNakastreamEndpoints, reloadNakastreamEndpoints } from './scrapers/nakastream';
+import { getNkstrmStreams, NkstrmAuthError, getNkstrmEndpoints, reloadNkstrmEndpoints } from './scrapers/nkstrm';
 import { getVostfreeStreams, getVostfreeEndpoints, reloadVostfreeEndpoints } from './scrapers/vostfree';
 import { getFrenchStreamStreams, reloadFrenchStreamEndpoints, getFrenchStreamEndpoints } from './scrapers/frenchstream';
 import { cached, getCacheStats, clearAll, clearScope } from './cache';
 import { recordOutcome, getAllMetrics } from './metrics';
+import { curlJson, isCloudflareChallenge } from './curl-fetch';
 import crypto from 'crypto';
 import proxyRouter, { isAllowedUrl, addAllowedDomain, getAllowedDomains } from './proxy';
 import { accessEnabled, keyMatches, signUrl, requireQueryKey, ownerKeyMatches, ownerKeyEnabled } from './access';
@@ -77,7 +79,7 @@ interface Stats {
     coflix: { requests: number; success: number; errors: number; lastSuccess: number | null };
     videasy: { requests: number; success: number; errors: number; lastSuccess: number | null };
     animesama: { requests: number; success: number; errors: number; lastSuccess: number | null };
-    nakastream: { requests: number; success: number; errors: number; lastSuccess: number | null };
+    nkstrm: { requests: number; success: number; errors: number; lastSuccess: number | null };
     vostfree: { requests: number; success: number; errors: number; lastSuccess: number | null };
     wavewatch: { requests: number; success: number; errors: number; lastSuccess: number | null };
     kordoz: { requests: number; success: number; errors: number; lastSuccess: number | null };
@@ -85,6 +87,7 @@ interface Stats {
     ztstream: { requests: number; success: number; errors: number; lastSuccess: number | null };
     cinestream: { requests: number; success: number; errors: number; lastSuccess: number | null };
     dulourd: { requests: number; success: number; errors: number; lastSuccess: number | null };
+    zenix: { requests: number; success: number; errors: number; lastSuccess: number | null };
   };
   streamsServed: {
     movix: number;
@@ -99,7 +102,7 @@ interface Stats {
     coflix: number;
     videasy: number;
     animesama: number;
-    nakastream: number;
+    nkstrm: number;
     vostfree: number;
     wavewatch: number;
     kordoz: number;
@@ -107,6 +110,7 @@ interface Stats {
     ztstream: number;
     cinestream: number;
     dulourd: number;
+    zenix: number;
   };
 }
 
@@ -126,7 +130,7 @@ const stats: Stats = {
     coflix: { requests: 0, success: 0, errors: 0, lastSuccess: null },
     videasy: { requests: 0, success: 0, errors: 0, lastSuccess: null },
     animesama: { requests: 0, success: 0, errors: 0, lastSuccess: null },
-    nakastream: { requests: 0, success: 0, errors: 0, lastSuccess: null },
+    nkstrm: { requests: 0, success: 0, errors: 0, lastSuccess: null },
     vostfree: { requests: 0, success: 0, errors: 0, lastSuccess: null },
     wavewatch: { requests: 0, success: 0, errors: 0, lastSuccess: null },
     kordoz: { requests: 0, success: 0, errors: 0, lastSuccess: null },
@@ -134,11 +138,12 @@ const stats: Stats = {
     ztstream: { requests: 0, success: 0, errors: 0, lastSuccess: null },
     cinestream: { requests: 0, success: 0, errors: 0, lastSuccess: null },
     dulourd: { requests: 0, success: 0, errors: 0, lastSuccess: null },
+    zenix: { requests: 0, success: 0, errors: 0, lastSuccess: null },
   },
-  streamsServed: { movix: 0, netmirror: 0, streamflix: 0, frenchstream: 0, wiflix: 0, voirdrama: 0, moviebox: 0, voiranime: 0, nabistream: 0, coflix: 0, videasy: 0, animesama: 0, nakastream: 0, vostfree: 0, wavewatch: 0, kordoz: 0, docstream: 0, ztstream: 0, cinestream: 0, dulourd: 0 },
+  streamsServed: { movix: 0, netmirror: 0, streamflix: 0, frenchstream: 0, wiflix: 0, voirdrama: 0, moviebox: 0, voiranime: 0, nabistream: 0, coflix: 0, videasy: 0, animesama: 0, nkstrm: 0, vostfree: 0, wavewatch: 0, kordoz: 0, docstream: 0, ztstream: 0, cinestream: 0, dulourd: 0, zenix: 0 },
 };
 
-function trackSourceResult(source: 'movix' | 'netmirror' | 'streamflix' | 'frenchstream' | 'wiflix' | 'voirdrama' | 'moviebox' | 'voiranime' | 'nabistream' | 'coflix' | 'videasy' | 'animesama' | 'nakastream' | 'vostfree' | 'wavewatch' | 'kordoz' | 'docstream' | 'ztstream' | 'cinestream' | 'dulourd', success: boolean, streamCount: number = 0) {
+function trackSourceResult(source: 'movix' | 'netmirror' | 'streamflix' | 'frenchstream' | 'wiflix' | 'voirdrama' | 'moviebox' | 'voiranime' | 'nabistream' | 'coflix' | 'videasy' | 'animesama' | 'nkstrm' | 'vostfree' | 'wavewatch' | 'kordoz' | 'docstream' | 'ztstream' | 'cinestream' | 'dulourd' | 'zenix', success: boolean, streamCount: number = 0) {
   stats.sources[source].requests++;
   if (success) {
     stats.sources[source].success++;
@@ -186,11 +191,11 @@ interface UserConfig {
   excludeQualities?: string[]; // qualités à EXCLURE (ex. ["4K","360p"]) — filtre opt-in, cf. prefs.ts
   strictFilter?: boolean; // true = exclusion STRICTE (liste vide si rien ne matche) ; false/absent
                           // = souple (relâche la langue mais garde l'exclusion de qualité). cf. filterAndSortStreams
-  nakastreamToken?: string; // token de pairing nakastream (per-user, opt-in) — cf. scrapers/nakastream.ts
+  nkstrmToken?: string; // token de pairing nkstrm (per-user, opt-in) — cf. scrapers/nkstrm.ts
   subs?: boolean;        // sous-titres LooStream (défaut true). false = LooStream n'expose AUCUN sous-titre
                          // (ressource retirée du manifeste + handleSubtitles renvoie vide).
   extSubs?: boolean;     // sous-titres externes OpenSubtitles FR (défaut true). false = uniquement les
-                         // sous-titres EMBARQUÉS (moviebox/videasy/nabistream/nakastream), pas le flot externe.
+                         // sous-titres EMBARQUÉS (moviebox/videasy/nabistream/nkstrm), pas le flot externe.
 }
 
 // Stream with metadata for filtering/sorting
@@ -332,8 +337,14 @@ function parseConfig(configStr: string): UserConfig | null {
       strictFilter: parsed.strictFilter === true,
       pseudo: parsed.pseudo !== undefined ? (sanitizePseudo(parsed.pseudo) || undefined) : undefined,
       excludeQualities,
-      nakastreamToken: (typeof parsed.nakastreamToken === 'string' && /^[A-Za-z0-9._-]{10,120}$/.test(parsed.nakastreamToken))
-        ? parsed.nakastreamToken : undefined,
+      // Compat : les URLs d'installation distribuées AVANT le renommage portent
+      // l'ancien nom de champ. On lit les deux et on n'écrit plus que le nouveau —
+      // sans ce repli, tout utilisateur déjà appairé serait déconnecté silencieusement.
+      nkstrmToken: (() => {
+        const v = (typeof parsed.nkstrmToken === 'string' ? parsed.nkstrmToken : undefined)
+          ?? (typeof parsed.nakastreamToken === 'string' ? parsed.nakastreamToken : undefined);
+        return (typeof v === 'string' && /^[A-Za-z0-9._-]{10,120}$/.test(v)) ? v : undefined;
+      })(),
       // Sous-titres : activés par DÉFAUT (undefined -> true) pour ne rien changer aux configs
       // existantes ; seul un `false` explicite désactive.
       subs: parsed.subs !== false,
@@ -739,6 +750,10 @@ function computeDelivery(url: string, hasProxyHeaders: boolean, config: UserConf
   }
   if (url.includes('/proxy/fixaudio')) return 'direct'; // master corrigé, segments en direct CDN
   if (url.includes('/proxy/') || url.includes('/netmirror/')) return 'local';
+  // /zenix/ : notre endpoint rejoue la chaîne puis REDIRIGE vers le proxy du mode
+  // (MFP ou local) — le cookie de session étant exigé au téléchargement, ce flux
+  // n'est jamais servi en direct. Le badge suit donc le mode configuré.
+  if (url.includes('/zenix/')) return (config?.mfUrl || DEFAULT_MEDIAFLOW_URL) ? 'mediaflow' : 'local';
   if (url.includes('/moviebox/')) return 'direct'; // 302 -> CDN, aucun relais serveur
   return 'direct'; // URL CDN brute sans en-têtes = pas de relais
 }
@@ -799,11 +814,11 @@ app.get('/:config/configure', (_req, res) => {
   res.sendFile(path.join(__dirname, 'configure.html'));
 });
 
-// Cible de l'entrée-nudge « nakastream déconnecté » (voir handleStream). L'entrée porte
+// Cible de l'entrée-nudge « nkstrm déconnecté » (voir handleStream). L'entrée porte
 // cette `url` pour être visible sur les clients url-only (Nuvio, qui ignorent externalUrl) ;
 // au tap on redirige (302) vers la page configure pré-remplie pour re-pairer le token.
 // Pas un flux -> hors du gate requireQueryKey (qui ne couvre que /netmirror /moviebox /nabistream).
-app.get('/nakastream/reconnect', (req, res) => {
+app.get('/nkstrm/reconnect', (req, res) => {
   const c = typeof req.query.c === 'string' ? req.query.c : '';
   res.redirect(302, c ? `/${c}/configure` : '/configure');
 });
@@ -1109,9 +1124,9 @@ async function handleStream(req: express.Request, res: express.Response, type: s
     // 9 aller-retours). RÈGLE : jamais de proxy local si seuls MFP/direct sont permis (hors owner).
     const localProxyAllowed = allowedModes().includes('local') || ownerKeyMatches(config?.ownerKey);
 
-    // nakastream : token expiré/révoqué -> on lève NakastreamAuthError dans le .catch et
+    // nkstrm : token expiré/révoqué -> on lève NkstrmAuthError dans le .catch et
     // on pose ce flag ; en fin de handler on ajoute UNE entrée « reconnecte » NON-bloquante.
-    let nakastreamAuthFailed = false;
+    let nkstrmAuthFailed = false;
 
     // Sources désactivées manuellement (admin) -> skippées ici (Promise.resolve([]),
     // zéro latence, absentes des résultats). isSourceEnabled lit le réglage à chaud.
@@ -1180,14 +1195,14 @@ async function handleStream(req: express.Request, res: express.Response, type: s
         : Promise.resolve([]))
         .then(r => { if (info.originalLanguage === 'ja') { trackSourceResult('animesama', true, r.length); recordOutcome('animesama', r.length > 0 ? 'success' : 'empty'); } return r; })
         .catch(e => { console.log('[AnimeSama] Error:', e); trackSourceResult('animesama', false); recordOutcome('animesama', 'error', e?.message); return []; }),
-      // nakastream : source OPT-IN par utilisateur (token de pairing dans la config).
-      (isSourceEnabled('nakastream') && config?.nakastreamToken
-        ? getNakastreamStreams(config.nakastreamToken, info.tmdbId, type as 'movie' | 'series', parsed.season, parsed.episode, info.title)
+      // nkstrm : source OPT-IN par utilisateur (token de pairing dans la config).
+      (isSourceEnabled('nkstrm') && config?.nkstrmToken
+        ? getNkstrmStreams(config.nkstrmToken, info.tmdbId, type as 'movie' | 'series', parsed.season, parsed.episode, info.title)
         : Promise.resolve([]))
-        .then(r => { if (config?.nakastreamToken) { trackSourceResult('nakastream', true, r.length); recordOutcome('nakastream', r.length > 0 ? 'success' : 'empty'); } return r; })
+        .then(r => { if (config?.nkstrmToken) { trackSourceResult('nkstrm', true, r.length); recordOutcome('nkstrm', r.length > 0 ? 'success' : 'empty'); } return r; })
         .catch(e => {
-          if (e instanceof NakastreamAuthError) { nakastreamAuthFailed = true; recordOutcome('nakastream', 'error', 'auth'); }
-          else { console.log('[Nakastream] Error:', e); trackSourceResult('nakastream', false); recordOutcome('nakastream', 'error', e?.message); }
+          if (e instanceof NkstrmAuthError) { nkstrmAuthFailed = true; recordOutcome('nkstrm', 'error', 'auth'); }
+          else { console.log('[Nkstrm] Error:', e); trackSourceResult('nkstrm', false); recordOutcome('nkstrm', 'error', e?.message); }
           return [];
         }),
       // Vostfree : anime VF/VOSTFR uniquement (originalLanguage japonais), keyé titre.
@@ -1230,9 +1245,15 @@ async function handleStream(req: express.Request, res: express.Response, type: s
       (isSourceEnabled('dulourd') ? getDulourdStreams(type as 'movie' | 'series', extractorConfig, info.frenchTitle || info.title, info.title, info.year ? Number(info.year) : undefined, parsed.season, parsed.episode) : Promise.resolve([]))
         .then(r => { trackSourceResult('dulourd', true, r.length); recordOutcome('dulourd', r.length > 0 ? 'success' : 'empty'); return r; })
         .catch(e => { console.log('[Dulourd] Error:', e); trackSourceResult('dulourd', false); recordOutcome('dulourd', 'error', e?.message); return []; }),
+      // Zenix : catalogue FR VF (films + séries) qui relaie StreamFlix — dont NOS flux
+      // rendent 403. Keyé titre (recherche maison). PROXY OBLIGATOIRE : le cookie de
+      // session est exigé au téléchargement, donc jamais de livraison directe.
+      (isSourceEnabled('zenix') ? getZenixStreams(type as 'movie' | 'series', info.frenchTitle || info.title, info.title, info.year ? Number(info.year) : undefined, parsed.season, parsed.episode) : Promise.resolve([]))
+        .then(r => { trackSourceResult('zenix', true, r.length); recordOutcome('zenix', r.length > 0 ? 'success' : 'empty'); return r; })
+        .catch(e => { console.log('[Zenix] Error:', e); trackSourceResult('zenix', false); recordOutcome('zenix', 'error', e?.message); return []; }),
     ];
 
-    const SOURCE_NAMES = ['netmirror', 'streamflix', 'movix', 'frenchstream', 'wiflix', 'voirdrama', 'moviebox', 'voiranime', 'nabistream', 'coflix', 'videasy', 'animesama', 'nakastream', 'vostfree', 'wavewatch', 'kordoz', 'docstream', 'ztstream', 'cinestream', 'dulourd'];
+    const SOURCE_NAMES = ['netmirror', 'streamflix', 'movix', 'frenchstream', 'wiflix', 'voirdrama', 'moviebox', 'voiranime', 'nabistream', 'coflix', 'videasy', 'animesama', 'nkstrm', 'vostfree', 'wavewatch', 'kordoz', 'docstream', 'ztstream', 'cinestream', 'dulourd', 'zenix'];
     const collected = await collectSources(
       sourcePromises.map((promise, i) => ({
         name: SOURCE_NAMES[i],
@@ -1272,7 +1293,7 @@ async function handleStream(req: express.Request, res: express.Response, type: s
     const coflixResults = collected[9] as Awaited<ReturnType<typeof getCoflixStreams>>;
     const videasyResults = collected[10] as Awaited<ReturnType<typeof getVideasyStreams>>;
     const animesamaResults = collected[11] as Awaited<ReturnType<typeof getAnimeSamaStreams>>;
-    const nakastreamResults = collected[12] as Awaited<ReturnType<typeof getNakastreamStreams>>;
+    const nkstrmResults = collected[12] as Awaited<ReturnType<typeof getNkstrmStreams>>;
     const vostfreeResults = collected[13] as Awaited<ReturnType<typeof getVostfreeStreams>>;
     const wavewatchResults = collected[14] as Awaited<ReturnType<typeof getWavewatchStreams>>;
     const kordozResults = collected[15] as Awaited<ReturnType<typeof getKordozStreams>>;
@@ -1280,6 +1301,7 @@ async function handleStream(req: express.Request, res: express.Response, type: s
     const ztstreamResults = collected[17] as Awaited<ReturnType<typeof getZoneTelechargementStreams>>;
     const cinestreamResults = collected[18] as Awaited<ReturnType<typeof getCinestreamStreams>>;
     const dulourdResults = collected[19] as Awaited<ReturnType<typeof getDulourdStreams>>;
+    const zenixResults = collected[20] as Awaited<ReturnType<typeof getZenixStreams>>;
 
     // On accumule des "drafts" (streams sans name/title). name/title sont posés
     // en UNE passe centralisée plus bas (src/display.ts), pour un rendu uniforme.
@@ -1598,18 +1620,18 @@ async function handleStream(req: express.Request, res: express.Response, type: s
       });
     }
 
-    // nakastream : master HLS direct tokené (FR audio DEFAULT, token ~6h), Referer requis.
-    for (const nk of nakastreamResults) {
-      const d = await deliver(nk.url, { 'User-Agent': BROWSER_UA, 'Referer': 'https://nakastream.tv/' }, { forceHls: true }, req, config);
+    // nkstrm : master HLS direct tokené (FR audio DEFAULT, token ~6h), Referer requis.
+    for (const nk of nkstrmResults) {
+      const d = await deliver(nk.url, { 'User-Agent': BROWSER_UA, 'Referer': 'https://nkstrm.tv/' }, { forceHls: true }, req, config);
       if (!d) continue;
       drafts.push({
         url: d.url,
         behaviorHints: {
           notWebReady: !!d.proxyHeaders,
-          bingeGroup: 'nakastream',
+          bingeGroup: 'nkstrm',
           ...(d.proxyHeaders ? { proxyHeaders: { request: d.proxyHeaders } } : {}),
         },
-        _meta: { quality: nk.quality, language: nk.language, source: 'nakastream', subCount: nk.subtitles.length },
+        _meta: { quality: nk.quality, language: nk.language, source: 'nkstrm', subCount: nk.subtitles.length },
       });
     }
 
@@ -1757,6 +1779,31 @@ async function handleStream(req: express.Request, res: express.Response, type: s
           server: cs.server,
         },
       });
+    }
+
+    // Zenix : le jeton de leur CDN meurt en ~3 MINUTES (vérifié : 403 à 180 s, même
+    // avec son cookie d'origine). Résoudre au listing donnerait donc des liens morts
+    // avant le clic -> on annonce NOTRE endpoint, qui rejoue la chaîne à la lecture
+    // puis redirige vers le proxy du mode. Même principe que /moviebox/stream, à ceci
+    // près que zenix exige le cookie AUSSI au téléchargement : pas de 302 vers le CDN.
+    {
+      const proto = req.headers['x-forwarded-proto'] || req.protocol || 'http';
+      const host = req.headers['x-forwarded-host'] || req.headers.host;
+      const cfgPrefix = req.params.config ? `/${req.params.config}` : '';
+      for (const zx of zenixResults) {
+        const u = new URL(`${cfgPrefix}/zenix/stream`, `${proto}://${host}`);
+        u.searchParams.set('slug', zx.slug);
+        u.searchParams.set('type', zx.mediaType);
+        if (zx.mediaType === 'series') {
+          u.searchParams.set('se', String(zx.se));
+          u.searchParams.set('ep', String(zx.ep));
+        }
+        drafts.push({
+          url: signUrl(u).toString(),
+          behaviorHints: { notWebReady: false, bingeGroup: `zenix-${zx.quality}` },
+          _meta: { quality: zx.quality, language: zx.language, source: 'zenix', server: zx.server },
+        });
+      }
     }
 
     // dulourd : HLS Voe (CDN derrière des domaines jetables) — même livraison que ZT.
@@ -2024,24 +2071,24 @@ async function handleStream(req: express.Request, res: express.Response, type: s
       .map(([src, n]) => `${src}: ${n}`)
       .join(', ');
 
-    // nakastream déconnecté (token 401) : entrée informative NON-bloquante en fin de liste,
+    // nkstrm déconnecté (token 401) : entrée informative NON-bloquante en fin de liste,
     // qui ouvre le configure pré-rempli pour reconnecter. Les autres flux restent normaux.
-    // On pose une VRAIE `url` (vers /nakastream/reconnect -> 302 configure) EN PLUS de
+    // On pose une VRAIE `url` (vers /nkstrm/reconnect -> 302 configure) EN PLUS de
     // `externalUrl` : les clients url-only (Nuvio) ignorent externalUrl et ne rendaient donc
     // pas l'entrée -> le nudge était invisible. Stremio garde externalUrl (ouvre le navigateur).
     const outStreams: any[] = cleanStreams;
-    if (nakastreamAuthFailed) {
+    if (nkstrmAuthFailed) {
       const proto = (req.headers['x-forwarded-proto'] as string) || req.protocol || 'http';
       const host = (req.headers['x-forwarded-host'] as string) || req.headers.host;
       const base = `${proto}://${host}`;
       const cfgParam = (req.params as { config?: string }).config;
       const cfgUrl = cfgParam ? `${base}/${cfgParam}/configure` : `${base}/configure`;
       const reconnectUrl = cfgParam
-        ? `${base}/nakastream/reconnect?c=${encodeURIComponent(cfgParam)}`
-        : `${base}/nakastream/reconnect`;
+        ? `${base}/nkstrm/reconnect?c=${encodeURIComponent(cfgParam)}`
+        : `${base}/nkstrm/reconnect`;
       outStreams.push({
-        name: 'nakastream ⚠️',
-        title: 'nakastream déconnecté\nReconnecte-le dans la configuration.',
+        name: 'nkstrm ⚠️',
+        title: 'nkstrm déconnecté\nReconnecte-le dans la configuration.',
         url: reconnectUrl,     // visible sur les clients url-only (Nuvio)
         externalUrl: cfgUrl,   // Stremio : ouvre configure dans le navigateur
       });
@@ -2107,16 +2154,16 @@ async function handleSubtitles(req: express.Request, res: express.Response, type
       console.log('[Subtitles] Nabistream:', (e?.message || '').slice(0, 80));
     }
 
-    // nakastream : sous-titres FR/EN (WebVTT) tokénés (~6h), servis en direct (opt-in).
-    // Re-résolus frais ; NakastreamAuthError -> juste ignoré ici (pas de subs, non-bloquant).
-    if (config?.nakastreamToken) {
+    // nkstrm : sous-titres FR/EN (WebVTT) tokénés (~6h), servis en direct (opt-in).
+    // Re-résolus frais ; NkstrmAuthError -> juste ignoré ici (pas de subs, non-bloquant).
+    if (config?.nkstrmToken) {
       try {
-        const nks = await getNakastreamStreams(config.nakastreamToken, info.tmdbId, type as 'movie' | 'series', parsed.season, parsed.episode, info.title);
+        const nks = await getNkstrmStreams(config.nkstrmToken, info.tmdbId, type as 'movie' | 'series', parsed.season, parsed.episode, info.title);
         (nks[0]?.subtitles || []).forEach((s, i) => {
-          subtitles.push({ id: `nakastream-${i}-${s.lang}`, url: s.url, lang: s.lang });
+          subtitles.push({ id: `nkstrm-${i}-${s.lang}`, url: s.url, lang: s.lang });
         });
       } catch (e: any) {
-        console.log('[Subtitles] Nakastream:', (e?.message || '').slice(0, 80));
+        console.log('[Subtitles] Nkstrm:', (e?.message || '').slice(0, 80));
       }
     }
 
@@ -2394,9 +2441,13 @@ app.get('/api/dulourd/endpoints', (req, res) => {
   const reload = req.query.reload === 'true';
   res.json({ ...(reload ? reloadDulourdEndpoints() : getDulourdEndpoints()), reloaded: reload });
 });
-app.get('/api/nakastream/endpoints', (req, res) => {
+app.get('/api/zenix/endpoints', (req, res) => {
   const reload = req.query.reload === 'true';
-  res.json({ ...(reload ? reloadNakastreamEndpoints() : getNakastreamEndpoints()), reloaded: reload });
+  res.json({ ...(reload ? reloadZenixEndpoints() : getZenixEndpoints()), reloaded: reload });
+});
+app.get(['/api/nkstrm/endpoints', '/api/nakastream/endpoints'], (req, res) => {
+  const reload = req.query.reload === 'true';
+  res.json({ ...(reload ? reloadNkstrmEndpoints() : getNkstrmEndpoints()), reloaded: reload });
 });
 
 // ── Écriture des endpoints depuis l'admin (authentifié) ────────────────────
@@ -2448,7 +2499,8 @@ const singleBaseSources: Array<{ path: string; file: string; reload: () => unkno
   { path: 'ztstream', file: 'zonetelechargement-endpoints.json', reload: reloadZoneTelechargementEndpoints },
   { path: 'cinestream', file: 'cinestream-endpoints.json', reload: reloadCinestreamEndpoints },
   { path: 'dulourd', file: 'dulourd-endpoints.json', reload: reloadDulourdEndpoints },
-  { path: 'nakastream', file: 'nakastream-endpoints.json', reload: reloadNakastreamEndpoints },
+  { path: 'zenix', file: 'zenix-endpoints.json', reload: reloadZenixEndpoints },
+  { path: 'nkstrm', file: 'nkstrm-endpoints.json', reload: reloadNkstrmEndpoints },
 ];
 for (const src of singleBaseSources) {
   app.post(`/api/${src.path}/endpoints`, requireAdminSession, jsonBody, (req, res) => {
@@ -2687,32 +2739,46 @@ app.get('/api/modes', (req, res) => {
   res.json({ modes, default: modes[0], owner: isOwner, ownerKeyAvailable: ownerKeyEnabled() });
 });
 
-// Pairing nakastream (public, support configure) : l'utilisateur génère un code sur
-// nakastream.tv, le colle dans le wizard ; on l'échange ici côté serveur (pas de CORS)
+// Pairing nkstrm (public, support configure) : l'utilisateur génère un code sur
+// nkstrm.tv, le colle dans le wizard ; on l'échange ici côté serveur (pas de CORS)
 // contre un token de session device. Le token ne transite qu'en réponse (jamais loggué).
-app.post('/api/nakastream/claim', jsonBody, async (req, res) => {
+// L'ancien chemin reste servi : une page /configure encore ouverte dans un
+// navigateur l'appellerait et prendrait un 404 sans ce filet.
+app.post(['/api/nkstrm/claim', '/api/nakastream/claim'], jsonBody, async (req, res) => {
   const code = typeof req.body?.code === 'string' ? req.body.code.trim().toUpperCase() : '';
   if (!/^[A-Z0-9]{4,12}$/.test(code)) { res.status(400).json({ ok: false, error: 'Code invalide' }); return; }
-  const base = getNakastreamEndpoints().base.replace(/\/+$/, '');
+  const base = getNkstrmEndpoints().base.replace(/\/+$/, '');
+  // Via CURL : Cloudflare bloque les requêtes Node vers leur domaine (cf. curl-fetch.ts).
   for (let attempt = 0; attempt < 2; attempt++) {
-    try {
-      const { data, status } = await axios.post(`${base}/api/v1/auth/pair/claim`, { code }, {
-        headers: { 'Content-Type': 'application/json', 'User-Agent': BROWSER_UA, 'Origin': base, 'Referer': `${base}/` },
-        timeout: 12000, validateStatus: () => true,
-      });
-      const token = data?.token;
-      if (status >= 200 && status < 300 && typeof token === 'string' && token.length >= 10) {
-        res.json({ ok: true, token });
-      } else {
-        res.status(400).json({ ok: false, error: data?.message || 'Code invalide ou expiré.' });
-      }
-      return;
-    } catch (e: any) {
-      const dns = /ENOTFOUND|EAI_AGAIN|ETIMEDOUT/.test(String(e?.code || e?.message || ''));
-      if (dns && attempt === 0) { await new Promise(r => setTimeout(r, 600)); continue; }
-      res.status(502).json({ ok: false, error: 'nakastream injoignable, réessaie.' });
+    const { status, data, body } = await curlJson<any>(`${base}/api/v1/auth/pair/claim`, {
+      method: 'POST',
+      body: JSON.stringify({ code }),
+      headers: {
+        'Content-Type': 'application/json', 'Accept': 'application/json',
+        'User-Agent': BROWSER_UA, 'Origin': base, 'Referer': `${base}/`,
+      },
+      timeoutMs: 12000,
+    });
+    if (status === 0 && attempt === 0) { await new Promise(r => setTimeout(r, 600)); continue; }
+
+    // Un défi anti-bot n'est PAS un code invalide : le dire, sinon le message accuse
+    // l'utilisateur alors que le serveur est bloqué (ça a coûté des codes brûlés pour rien).
+    if (isCloudflareChallenge(body, status)) {
+      res.status(502).json({ ok: false, error: 'nkstrm bloque le serveur (protection anti-bot). Ton code est intact.' });
       return;
     }
+    if (status === 0) {
+      res.status(502).json({ ok: false, error: 'nkstrm injoignable, réessaie.' });
+      return;
+    }
+
+    const token = data?.token;
+    if (status >= 200 && status < 300 && typeof token === 'string' && token.length >= 10) {
+      res.json({ ok: true, token });
+    } else {
+      res.status(400).json({ ok: false, error: data?.message || 'Code invalide ou expiré.' });
+    }
+    return;
   }
 });
 
@@ -2993,6 +3059,14 @@ app.get('/api/health', async (_req, res) => {
     results.dulourd = { status: 'down', error: e.message };
   }
 
+  const zxStart = Date.now();
+  try {
+    const ok = await zenixProbe();
+    results.zenix = { status: ok ? 'up' : 'degraded', latency: Date.now() - zxStart };
+  } catch (e: any) {
+    results.zenix = { status: 'down', error: e.message };
+  }
+
   const allUp = Object.values(results).every(r => r.status === 'up');
   const allDown = Object.values(results).every(r => r.status === 'down');
 
@@ -3123,6 +3197,39 @@ app.get('/moviebox/stream', async (req, res) => {
   } catch (e: any) {
     res.status(502).send('MovieBox: ' + (e?.message || 'error'));
   }
+});
+
+// Zenix : résolution AU CLIC. Leur jeton vit ~3 min et le cookie de session est
+// exigé au téléchargement -> on ne peut pas rediriger le client vers le CDN. On
+// rejoue donc la chaîne ici, puis on redirige vers le proxy DU MODE (MFP ou local),
+// qui refera la requête avec le cookie. En mode direct pur : rien à offrir (502).
+async function handleZenixStream(req: express.Request, res: express.Response, config: UserConfig | null) {
+  const slug = String(req.query.slug || '');
+  const mediaType = req.query.type === 'series' ? 'series' : 'movie';
+  const se = Number(req.query.se || 0);
+  const ep = Number(req.query.ep || 0);
+  if (!slug) { res.status(400).send('missing slug'); return; }
+  try {
+    const r = await resolveZenixStream(slug, mediaType, se, ep);
+    if (!r) { res.status(502).send('Zenix: resolve failed'); return; }
+    const proxied = buildProxyUrl(
+      r.url,
+      { Cookie: r.cookie, Referer: r.referer, 'User-Agent': BROWSER_UA },
+      false, req, config, false, r.isHls,
+    );
+    if (!proxied) { res.status(502).send('Zenix: proxy requis (mode direct)'); return; }
+    res.redirect(302, proxied);
+  } catch (e: any) {
+    res.status(502).send('Zenix: ' + (e?.message || 'error'));
+  }
+}
+app.get('/:config/zenix/stream', async (req, res) => {
+  const config = parseConfig(req.params.config);
+  if (denyIfNoAccess(config, res)) return;
+  await handleZenixStream(req, res, config);
+});
+app.get('/zenix/stream', requireQueryKey, async (req, res) => {
+  await handleZenixStream(req, res, null);
 });
 
 app.listen(PORT, () => {

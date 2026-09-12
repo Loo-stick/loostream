@@ -1,0 +1,82 @@
+# Intégration nkstrm (source opt-in par utilisateur) — Design
+
+**Date** : 2026-08-10
+**Branche** : `feat/nkstrm`
+**Origine** : Stick veut ajouter nkstrm.tv comme source. Compte requis → **opt-in par utilisateur via pairing par code**.
+
+## Objectif
+
+Ajouter **nkstrm** comme source **optionnelle, activée par utilisateur** : celui qui le souhaite connecte son compte nkstrm (email fictif possible) via un **code de pairing** collé dans le wizard configure. Sans code → source désactivée pour lui. nkstrm apporte un **catalogue large (blockbusters INCLUS : Dune 1&2, GoT… + FR + anime)** en **HLS direct tokené** (re-hébergé sur son R2, souvent ~720p, FR audio DEFAULT), avec **sous-titres FR/EN (WebVTT)**. Contenu partiellement issu de cinepulse/purstream (mêmes slugs) mais re-hébergé stable + subs propres.
+
+**Contrainte workflow** : aucun `git push` sans l'aval explicite de Stick (cf. [[test-before-push]]). Travail sur `feat/nkstrm`.
+
+## Ce qui a été validé en LIVE (reverse fait le 2026-08-10)
+
+- **Pairing** : `POST /api/v1/auth/pair/generate` exige la session nkstrm (401 sans) → **le USER génère le code sur nkstrm** (flux « connecter une TV »). `POST /api/v1/auth/pair/claim` body `{"code":"ABCDE"}` (sans auth) → renvoie `{user, token}` (token opaque `oat_…`, ~79 chars). Code **usage unique + expiration courte**.
+- **Auth API** : `Authorization: Bearer <oat_token>` (durable, type token device).
+- **Résolution (CORRIGÉE)** : `by-tmdb` est **CASSÉ** (renvoie « Content not found » même pour du contenu présent, quel que soit le type — NE PAS l'utiliser). La voie fiable = **`GET /api/v1/browse/search?q=<titre>`** → liste `[{id, tmdbId, mediaType, title…}]` → **matcher sur `tmdbId` (exact)** pour récupérer l'`id` interne. Pas de fuzzy (match par tmdb). `streaming/check/<tmdbId>?type=<movie|tv>` existe aussi (dispo oui/non) mais ne donne pas l'id.
+- **Flux** : `GET /api/v1/streaming/source/<contentId>` (+ `?season=&episode=` pour les séries) → `{ url, subtitles[], audioTracks[] }`.
+  - `url` = `/api/v1/r2/<...>/master.m3u8?token=<t>&exp=<ts>` — **master HLS standard** (structure purstream-like : `#EXT-X-MEDIA:TYPE=AUDIO` FR **DEFAULT=YES** + EN, variante vidéo). **Jouable avec le seul `?token` (PAS de Bearer sur le manifeste/segments)** — vérifié 200 sans Authorization.
+  - `subtitles[]` = `[{lang:"fre|eng", label, url:"…/subs_fre.vtt?token=…&exp=…", default, forced}]` — **WebVTT réels** (vérifié 63 Ko de cues FR), joignables avec le seul `?token`.
+  - `audioTracks[]` = `[{lang:"fr",label,default:true},{lang:"en",…}]`.
+- **Token du flux/subs = `exp` court** → doit être résolu **au moment de la requête stream** (frais), comme purstream/livavid.
+- ⚠️ **DNS** : nkstrm.tv a montré un `Could not resolve host` transitoire sur ce serveur (comme anime-sama) → prévoir un retry.
+
+## Décisions cadrées (avec Stick)
+
+- **Opt-in par utilisateur** : pas de token partagé. Chacun décide.
+- **Pairing par code** collé dans le wizard, à l'**étape « Clés »**, avec un **bouton d'aide « i »** expliquant comment obtenir le code sur nkstrm.
+- **Token expiré/invalide (401)** → **entrée informative NON-bloquante** : on ajoute UN flux « ⚠️ nkstrm déconnecté — reconnecte-le dans /configure » (externalUrl vers configure pré-rempli), **les autres sources continuent normalement** (contrairement au pseudo qui, lui, bloque tout).
+
+---
+
+## Partie 1 — Config + pairing
+
+### 1.1 Config
+`UserConfig.nkstrmToken?: string` — le token `oat_…` obtenu par claim. Inclus dans le base64 seulement si présent (rétro-compat). Sanitize : garder `^[A-Za-z0-9._-]{10,120}$`, sinon ignorer.
+
+### 1.2 Endpoint de claim (serveur) — `POST /api/nkstrm/claim`
+- Body `{ code }`. Le serveur appelle `POST https://nkstrm.tv/api/v1/auth/pair/claim {code}` → renvoie `{ ok:true, token }` ou `{ ok:false, error }` (code invalide/expiré).
+- Fait côté serveur = **pas de CORS**. Timeout + retry DNS. Ne loggue jamais le token en clair (masqué par logbuffer de toute façon).
+
+### 1.3 Configure (étape « Clés »)
+- Champ « Code nkstrm (optionnel) » + bouton **« i »** (popover) : « Va sur nkstrm.tv (connecté), lance *Connecter une TV/appareil*, copie le code affiché et colle-le ici. Email fictif accepté. »
+- Bouton **« Connecter »** : `POST /api/nkstrm/claim {code}` → si ok, stocke le token (état interne) + affiche « ✅ Connecté ». À la génération du lien, `config.nkstrmToken = token`.
+- Pré-remplissage : si le lien porte déjà un `nkstrmToken`, afficher « ✅ nkstrm connecté » (+ bouton « Reconnecter » pour re-claim un nouveau code).
+
+## Partie 2 — Scraper `src/scrapers/nkstrm.ts` (NOUVEAU)
+
+`getNkstrmStreams(token, tmdbId, mediaType, season?, episode?, title?)` → `Nkstrm[]` (+ sous-titres). Actif **seulement si token présent**.
+1. `browse/search?q=<title>` → matcher le résultat dont `tmdbId === <tmdbId>` → `contentId` interne, ou `null` (hors catalogue = normal). **Ne PAS utiliser by-tmdb (cassé).** Nécessite le **titre** (déjà fourni par `getTmdbInfo`/`cinemetaInfo`).
+2. `streaming/source/<contentId>` (+ `?season=&episode=`) avec `Authorization: Bearer <token>`.
+   - **401** → lève une erreur typée `NkstrmAuthError` (le handler ajoutera l'entrée « reconnecte »).
+   - sinon → 1 flux : `url` = `https://nkstrm.tv<master>` (absolu), `language:'MULTI'`, `quality` (depuis le contenu / la variante), `format:'m3u8'`, + `subtitles` (fr/eng VTT en absolu).
+- Caché (TTL court, ex. 5 min — token `exp` court) via `cached`, scope `nkstrm`.
+
+## Partie 3 — Câblage (`src/index.ts`)
+
+- Fan-out : ajouter `nkstrm` à `SOURCE_NAMES` + la source, gatée `isSourceEnabled('nkstrm') && !!config?.nkstrmToken`.
+- Le résultat alimente les flux normaux (livraison via `deliver` — master directable avec `?token` ; repli proxy si Referer requis sur segments). Résolution **au stream-time** (token frais).
+- **Sous-titres** : ajouter les pistes VTT nkstrm à la ressource `/subtitles` de l'addon (cf. [[nuvio_subtitles_resource]]) — URLs tokenées absolues, livrées/proxifiées comme les autres subs.
+- **Gestion 401** : si la source nkstrm lève `NkstrmAuthError`, on **n'échoue pas la requête** ; on **ajoute une entrée informative** `{ name:'nkstrm ⚠️', title:'nkstrm déconnecté\nReconnecte-le dans la configuration.', externalUrl:'<base>/<config>/configure' }` en fin de liste. Non-bloquant.
+
+## Partie 4 — Admin
+- `nkstrm` apparaît dans la vue Sources (metrics) comme les autres, activable/coupable.
+
+## Sécurité & vie privée
+- Le token nkstrm est **par utilisateur**, dans SON base64 (comme les autres clés). Jamais partagé, jamais loggué en clair (masqué). Le claim se fait serveur-side.
+- L'entrée « déconnecté » renvoie vers le configure de l'utilisateur (pré-rempli) — aucune donnée tierce.
+
+## Fichiers touchés
+- `src/index.ts` — `UserConfig.nkstrmToken` + sanitize `parseConfig`, endpoint `/api/nkstrm/claim`, source dans le fan-out (+ SOURCE_NAMES), gestion 401 (entrée informative), sous-titres nkstrm dans `/subtitles`.
+- `src/scrapers/nkstrm.ts` — **NOUVEAU** (résolution TMDB→content, source, subs, `NkstrmAuthError`).
+- `src/configure.html` — champ code + bouton « i » + « Connecter » (claim) dans l'étape « Clés » ; pré-remplissage.
+- (config) `nkstrm-endpoints.json` optionnel si on veut hot-swap le domaine (nkstrm.tv) — à décider (les autres scrapers ont ce pattern).
+
+## Critères de succès
+1. Un user colle un code valide dans configure → « ✅ Connecté » → son lien porte le token.
+2. Pour un titre du catalogue nkstrm, un flux nkstrm (MULTI, FR audio par défaut) remonte + ses sous-titres FR/EN VTT.
+3. Titre hors catalogue → silencieux (pas d'erreur).
+4. Token expiré (401) → **entrée « reconnecte »** apparaît, les AUTRES sources restent normales.
+5. Aucun user sans token n'est impacté (source simplement absente).
+6. Le token n'apparaît jamais en clair dans les logs.

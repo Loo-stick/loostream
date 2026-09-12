@@ -1,0 +1,4 @@
+{
+  "_comment": "Base de l'API Nkstrm (agrégateur keyé TMDB, opt-in par token de pairing). Leur domaine TOURNE vite : garder ce champ à jour, la nouvelle adresse est annoncée sur leur Telegram/Discord. ⚠️ Leur Cloudflare refuse l'empreinte TLS de Node : les appels passent par curl (cf. src/curl-fetch.ts), et l'image doit embarquer curl 8.x — le 7.88 de Debian 12 est lui aussi refusé. Éditable à chaud (bind-mount + fs.watch) ou via l'admin ; reload forcé : /api/nkstrm/endpoints?reload=true",
+  "base": "https://naka.cx"
+}
