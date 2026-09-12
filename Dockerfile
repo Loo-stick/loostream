@@ -26,7 +26,7 @@ RUN npm run build
 FROM node:22-trixie-slim
 WORKDIR /app
 # curl : transport HTTP de secours pour les hôtes dont le Cloudflare refuse l'empreinte
-# TLS de Node (nakastream depuis le 2026-09-12) — cf. src/curl-fetch.ts.
+# TLS de Node (depuis le 2026-09-12) — cf. src/curl-fetch.ts.
 # ca-certificates est INDISPENSABLE avec curl : node:22-slim n'embarque pas de magasin
 # système (Node utilise le sien, en interne), et sans lui curl échoue sur
 # « error setting certificate file » avant même la poignée de main TLS.
