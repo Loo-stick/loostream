@@ -401,39 +401,6 @@ async function fetchJ1f(
   }
 }
 
-// KissKH (Movix) : drama coréen/chinois/thaï + anime asiatique. Renvoie un m3u8 DIRECT
-// (CDN ouvert, aucun header requis) -> comme purstream, pas d'extraction. Endpoint :
-// /api/kisskh/tv/<id>?season=&episode= (séries) et /api/kisskh/movie/<id>. Résolution
-// async côté Movix : 404/vide = pas dans le catalogue asiatique (normal) ou pas encore résolu.
-async function fetchKisskh(
-  tmdbId: string,
-  mediaType: 'movie' | 'series',
-  season?: number,
-  episode?: number
-): Promise<MovixStream[]> {
-  const url = mediaType === 'series'
-    ? `${endpoints.api}/api/kisskh/tv/${tmdbId}?season=${season || 1}&episode=${episode || 1}`
-    : `${endpoints.api}/api/kisskh/movie/${tmdbId}`;
-  console.log(`[Movix] KissKH: ${url}`);
-  try {
-    const { data } = await axios.get(url, { headers: buildHeaders(), timeout: 12000 });
-    if (!Array.isArray(data?.sources)) return [];
-    return data.sources
-      .filter((s: any) => s?.url && /\.m3u8/i.test(s.url))
-      .map((s: any) => ({
-        name: 'Movix',
-        title: s.label || 'KissKH',
-        url: s.url,
-        quality: 'HD',
-        language: 'VOSTFR', // audio original asiatique + sous-titres (FR via notre ressource /subtitles)
-        format: 'm3u8',
-        server: 'kisskh',
-      }));
-  } catch (e: any) {
-    return []; // 404 hors catalogue asiatique = normal
-  }
-}
-
 // SeekStreaming (Movix) : embeds communautaires `https://<origin>/#<videoId>` listés par
 // /api/links, résolus via `<origin>/api/v1/video?id=<videoId>` -> réponse HEX chiffrée
 // AES-128-CBC (clé/IV en dur, repris de l'extension Movix) -> JSON { source } = master HLS
@@ -523,19 +490,19 @@ async function fetchMovixStreams(
 ): Promise<MovixStream[]> {
   console.log(`[Movix] Searching for TMDB ${tmdbId}...`);
 
-  // Fetch en parallèle. purstream + kisskh + seekstreaming = m3u8 DIRECTS ; cpasmal + fstream = embeds.
-  const [purstreamResults, cpasmalLinks, fstreamLinks, kisskhResults, seekResults, j1fLinks] = await Promise.all([
+  // Fetch en parallèle. purstream + seekstreaming = m3u8 DIRECTS ; cpasmal + fstream = embeds.
+  // (KissKH n'est plus pris ici : source dédiée src/scrapers/kisskh.ts, avec sous-titres.)
+  const [purstreamResults, cpasmalLinks, fstreamLinks, seekResults, j1fLinks] = await Promise.all([
     fetchPurstream(tmdbId, mediaType, season, episode),
     fetchCpasmal(tmdbId, mediaType, season, episode),
     fetchFStream(tmdbId, mediaType, season, episode),
-    fetchKisskh(tmdbId, mediaType, season, episode),
     fetchSeekStreaming(tmdbId, mediaType, season, episode),
     fetchJ1f(tmdbId, mediaType, season, episode),
   ]);
 
-  console.log(`[Movix] Purstream=${purstreamResults.length}, Cpasmal=${cpasmalLinks.length}, FStream=${fstreamLinks.length}, KissKH=${kisskhResults.length}, Seek=${seekResults.length}, J1F=${j1fLinks.length}`);
+  console.log(`[Movix] Purstream=${purstreamResults.length}, Cpasmal=${cpasmalLinks.length}, FStream=${fstreamLinks.length}, Seek=${seekResults.length}, J1F=${j1fLinks.length}`);
 
-  const streams: MovixStream[] = [...purstreamResults, ...kisskhResults, ...seekResults];
+  const streams: MovixStream[] = [...purstreamResults, ...seekResults];
 
   // Merge embed links, extract those our extractor supports.
   const embedStreams = await extractMovixEmbeds([...cpasmalLinks, ...fstreamLinks, ...j1fLinks], extractorConfig);

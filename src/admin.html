@@ -612,14 +612,17 @@ const SOURCES = [
     { path: 'cinestream', label: 'CineStream', fields: ['base'], note: 'films FR VF+VOSTFR keyés tmdbId (~25 000 fiches, films uniquement). Le domaine est bloqué en DNS par Orange : la source le résout via un DNS public (champ resolver du fichier config, 1.1.1.1 par défaut)' },
     { path: 'dulourd', label: 'dulourd', fields: ['base'], note: 'SÉRIES FR VF+VOSTFR (moteur DataLife Engine ; aucun film au catalogue). Domaine bloqué en DNS par le FAI : rattrapé par src/dns-resolve.ts' },
     { path: 'zenix', label: 'Zenix', fields: ['base'], note: 'films + séries FR VF (relaie le catalogue StreamFlix). PROXY OBLIGATOIRE : leur cookie de session est exigé au téléchargement et le jeton vit ~3 min, donc résolution au clic via /zenix/stream' },
+    { path: 'kisskh', label: 'KissKH', fields: ['base', 'miroirs'], list: ['miroirs'], status: true, note: 'dramas + films asiatiques, flux HLS direct + sous-titres multi-langues (FR compris). miroirs : un domaine par ligne, essayés dans l\'ordre, bascule automatique après 3 échecs d\'affilée. base : facultatif, force un domaine en tête (laisser vide sinon)' },
     { path: 'nkstrm', label: 'Nkstrm', fields: ['base'], note: 'agrégateur keyé TMDB, opt-in par token de pairing. Domaine TOURNANT (nkstrm.tv -> .wiki -> .cc) : la nouvelle adresse est annoncée sur leur Telegram/Discord' },
 ];
+// `list: true` = tous les champs de la source en liste ; `list: ['x']` = seulement ceux-là.
+function isListField(s, f) { return s.list === true || (Array.isArray(s.list) && s.list.includes(f)); }
 async function loadEndpoints() {
     const box = document.getElementById('endpoints');
     try {
         const data = await Promise.all(SOURCES.map(async s => ({ s, v: await (await api('/api/' + s.path + '/endpoints')).json() })));
         box.innerHTML = data.map(({ s, v }) => {
-            const rows = s.fields.map(f => s.list
+            const rows = s.fields.map(f => isListField(s, f)
                 ? `<div class="cfg-row"><label>${f}</label>
                 <textarea id="ep-${s.path}-${f}" rows="4" placeholder="un par ligne" style="flex:1;font:inherit;">${esc((v[f] || []).join('\n'))}</textarea></div>`
                 : `<div class="cfg-row"><label>${f}</label>
@@ -629,8 +632,10 @@ async function loadEndpoints() {
                 <div class="cfg-row" style="margin-left:108px;">
                     <button class="btn cfg-save small" onclick="saveEndpoint('${s.path}')">Enregistrer</button>
                     <span class="cfg-msg" id="msg-${s.path}"></span></div>
-                ${s.note ? `<div style="font-size:0.78em;color:var(--dim);margin-left:108px;">${s.note}</div>` : ''}</div>`;
+                ${s.note ? `<div style="font-size:0.78em;color:var(--dim);margin-left:108px;">${s.note}</div>` : ''}
+                ${s.status ? `<div id="etat-${s.path}" style="font-size:0.85em;margin:8px 0 0 108px;line-height:1.7;">…</div>` : ''}</div>`;
         }).join('');
+        loadKisskhEtat();
     } catch (e) { if (e.message !== 'session') box.innerHTML = `<div class="error">Erreur: ${esc(e.message)}</div>`; }
 }
 async function saveEndpoint(path) {
@@ -639,7 +644,7 @@ async function saveEndpoint(path) {
     const body = {};
     for (const f of src.fields) {
         const val = document.getElementById('ep-' + path + '-' + f).value;
-        body[f] = src.list ? val.split('\n').map(x => x.trim()).filter(Boolean) : val.trim();
+        body[f] = isListField(src, f) ? val.split('\n').map(x => x.trim()).filter(Boolean) : val.trim();
     }
     msg.textContent = '…'; msg.className = 'cfg-msg';
     try {
@@ -647,6 +652,42 @@ async function saveEndpoint(path) {
         const j = await r.json();
         if (!r.ok || j.ok === false) throw new Error(j.error || ('HTTP ' + r.status));
         msg.textContent = '✓ appliqué'; msg.className = 'cfg-msg ok';
+        if (path === 'kisskh') loadKisskhEtat();
+    } catch (e) { if (e.message !== 'session') { msg.textContent = '✗ ' + e.message; msg.className = 'cfg-msg err'; } }
+}
+
+// ============ Paramétrage > KissKH : état + re-découverte ============
+async function loadKisskhEtat() {
+    const box = document.getElementById('etat-kisskh');
+    if (!box) return;
+    try {
+        const e = await (await api('/api/kisskh/status')).json();
+        const sig = {
+            'chargee': '✓ chargée',
+            'au-repos': '· pas encore demandée (normal : elle se charge à la première lecture)',
+            'en-echec': '✗ en échec — voir les logs [KissKH]',
+        }[e.signature] || e.signature;
+        const age = e.signatureAgeMs != null ? ` · il y a ${Math.round(e.signatureAgeMs / 60000)} min` : '';
+        box.innerHTML = `Miroir en cours : <b>${esc(e.courant.replace(/^https?:\/\//, ''))}</b>
+            <span style="color:var(--dim);">(${e.miroirs.length} miroir(s)${e.echecs ? ` · ${e.echecs} échec(s) d'affilée` : ''})</span><br>
+            Signature kkey : ${esc(sig)}${age} <span style="color:var(--dim);">· appVer ${esc(String(e.appVer))}</span><br>
+            <button class="btn small" onclick="rediscoverKisskh()">Re-découvrir la signature</button>
+            <span class="cfg-msg" id="msg-kisskh-rediscover"></span>`;
+    } catch (err) { if (err.message !== 'session') box.textContent = 'État indisponible : ' + err.message; }
+}
+async function rediscoverKisskh() {
+    const msg = document.getElementById('msg-kisskh-rediscover');
+    msg.textContent = '… quelques secondes'; msg.className = 'cfg-msg';
+    try {
+        const r = await api('/api/kisskh/rediscover', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+        const j = await r.json();
+        if (!r.ok || j.ok === false) throw new Error(j.error || ('HTTP ' + r.status));
+        await loadKisskhEtat();
+        const m = document.getElementById('msg-kisskh-rediscover');
+        m.textContent = j.signature
+            ? '✓ signature rechargée' + (j.constantes ? ' (constantes relues sur le site)' : '')
+            : (j.constantes ? '✗ constantes relues, mais aucune fonction de signature trouvée' : '✗ échec — voir les logs [KissKH]');
+        m.className = 'cfg-msg ' + (j.signature ? 'ok' : 'err');
     } catch (e) { if (e.message !== 'session') { msg.textContent = '✗ ' + e.message; msg.className = 'cfg-msg err'; } }
 }
 

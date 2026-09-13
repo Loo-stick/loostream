@@ -19,6 +19,7 @@ import { getKordozStreams, getKordozEndpoints, reloadKordozEndpoints } from './s
 import { getCinestreamStreams, cinestreamProbe, getCinestreamEndpoints, reloadCinestreamEndpoints } from './scrapers/cinestream';
 import { getDulourdStreams, dulourdProbe, getDulourdEndpoints, reloadDulourdEndpoints } from './scrapers/dulourd';
 import { getZenixStreams, resolveZenixStream, zenixProbe, getZenixEndpoints, reloadZenixEndpoints } from './scrapers/zenix';
+import { getKisskhStreams, kisskhProbe, getKisskhEndpoints, reloadKisskhEndpoints, isKisskhSubtitleUrl, isKisskhLanguage, KISSKH_PLAYBACK_REFERER, etatKisskh, rediscoverKisskh } from './scrapers/kisskh';
 import { getDocstreamStreams } from './scrapers/docstream';
 import { getZoneTelechargementStreams, getZoneTelechargementEndpoints, reloadZoneTelechargementEndpoints } from './scrapers/zonetelechargement';
 import { getNkstrmStreams, NkstrmAuthError, getNkstrmEndpoints, reloadNkstrmEndpoints } from './scrapers/nkstrm';
@@ -88,6 +89,7 @@ interface Stats {
     cinestream: { requests: number; success: number; errors: number; lastSuccess: number | null };
     dulourd: { requests: number; success: number; errors: number; lastSuccess: number | null };
     zenix: { requests: number; success: number; errors: number; lastSuccess: number | null };
+    kisskh: { requests: number; success: number; errors: number; lastSuccess: number | null };
   };
   streamsServed: {
     movix: number;
@@ -111,6 +113,7 @@ interface Stats {
     cinestream: number;
     dulourd: number;
     zenix: number;
+    kisskh: number;
   };
 }
 
@@ -139,11 +142,12 @@ const stats: Stats = {
     cinestream: { requests: 0, success: 0, errors: 0, lastSuccess: null },
     dulourd: { requests: 0, success: 0, errors: 0, lastSuccess: null },
     zenix: { requests: 0, success: 0, errors: 0, lastSuccess: null },
+    kisskh: { requests: 0, success: 0, errors: 0, lastSuccess: null },
   },
-  streamsServed: { movix: 0, netmirror: 0, streamflix: 0, frenchstream: 0, wiflix: 0, voirdrama: 0, moviebox: 0, voiranime: 0, nabistream: 0, coflix: 0, videasy: 0, animesama: 0, nkstrm: 0, vostfree: 0, wavewatch: 0, kordoz: 0, docstream: 0, ztstream: 0, cinestream: 0, dulourd: 0, zenix: 0 },
+  streamsServed: { movix: 0, netmirror: 0, streamflix: 0, frenchstream: 0, wiflix: 0, voirdrama: 0, moviebox: 0, voiranime: 0, nabistream: 0, coflix: 0, videasy: 0, animesama: 0, nkstrm: 0, vostfree: 0, wavewatch: 0, kordoz: 0, docstream: 0, ztstream: 0, cinestream: 0, dulourd: 0, zenix: 0, kisskh: 0 },
 };
 
-function trackSourceResult(source: 'movix' | 'netmirror' | 'streamflix' | 'frenchstream' | 'wiflix' | 'voirdrama' | 'moviebox' | 'voiranime' | 'nabistream' | 'coflix' | 'videasy' | 'animesama' | 'nkstrm' | 'vostfree' | 'wavewatch' | 'kordoz' | 'docstream' | 'ztstream' | 'cinestream' | 'dulourd' | 'zenix', success: boolean, streamCount: number = 0) {
+function trackSourceResult(source: 'movix' | 'netmirror' | 'streamflix' | 'frenchstream' | 'wiflix' | 'voirdrama' | 'moviebox' | 'voiranime' | 'nabistream' | 'coflix' | 'videasy' | 'animesama' | 'nkstrm' | 'vostfree' | 'wavewatch' | 'kordoz' | 'docstream' | 'ztstream' | 'cinestream' | 'dulourd' | 'zenix' | 'kisskh', success: boolean, streamCount: number = 0) {
   stats.sources[source].requests++;
   if (success) {
     stats.sources[source].success++;
@@ -789,7 +793,7 @@ function getManifest(req: express.Request, config?: UserConfig | null) {
 
   return {
     id: 'community.loostream.stremio',
-    version: '1.21.0',
+    version: '1.22.0',
     name: 'LooStream',
     logo: `${baseUrl}/logo.png`,
     description: 'Netflix, Prime, Disney+ mirrors + StreamFlix + Movix VF/VOSTFR',
@@ -1251,9 +1255,15 @@ async function handleStream(req: express.Request, res: express.Response, type: s
       (isSourceEnabled('zenix') ? getZenixStreams(type as 'movie' | 'series', info.frenchTitle || info.title, info.title, info.year ? Number(info.year) : undefined, parsed.season, parsed.episode) : Promise.resolve([]))
         .then(r => { trackSourceResult('zenix', true, r.length); recordOutcome('zenix', r.length > 0 ? 'success' : 'empty'); return r; })
         .catch(e => { console.log('[Zenix] Error:', e); trackSourceResult('zenix', false); recordOutcome('zenix', 'error', e?.message); return []; }),
+      // KissKH : dramas/films asiatiques, flux direct + sous-titres multi-langues. Keyé
+      // titre (TMDB anglais puis original) ; chez eux chaque saison est une fiche distincte.
+      // Interrogé seulement pour les titres d'origine asiatique : c'est tout son catalogue.
+      (isSourceEnabled('kisskh') && isKisskhLanguage(info.originalLanguage) ? getKisskhStreams(type as 'movie' | 'series', [info.title, info.originalTitle], parsed.season, parsed.episode) : Promise.resolve([]))
+        .then(r => { trackSourceResult('kisskh', true, r.length); recordOutcome('kisskh', r.length > 0 ? 'success' : 'empty'); return r; })
+        .catch(e => { console.log('[KissKH] Error:', e?.message || e); trackSourceResult('kisskh', false); recordOutcome('kisskh', 'error', e?.message); return []; }),
     ];
 
-    const SOURCE_NAMES = ['netmirror', 'streamflix', 'movix', 'frenchstream', 'wiflix', 'voirdrama', 'moviebox', 'voiranime', 'nabistream', 'coflix', 'videasy', 'animesama', 'nkstrm', 'vostfree', 'wavewatch', 'kordoz', 'docstream', 'ztstream', 'cinestream', 'dulourd', 'zenix'];
+    const SOURCE_NAMES = ['netmirror', 'streamflix', 'movix', 'frenchstream', 'wiflix', 'voirdrama', 'moviebox', 'voiranime', 'nabistream', 'coflix', 'videasy', 'animesama', 'nkstrm', 'vostfree', 'wavewatch', 'kordoz', 'docstream', 'ztstream', 'cinestream', 'dulourd', 'zenix', 'kisskh'];
     const collected = await collectSources(
       sourcePromises.map((promise, i) => ({
         name: SOURCE_NAMES[i],
@@ -1266,9 +1276,15 @@ async function handleStream(req: express.Request, res: express.Response, type: s
       // c'est TOUT l'intérêt pour un anime -> l'early-exit doit les attendre, sinon
       // Videasy (3 flux instantanés) atteint le quota et les coupe. Plafonné par le
       // deadline (20s). Aucun effet hors anime.
-      info.originalLanguage === 'ja'
-        ? [SOURCE_NAMES.indexOf('voiranime'), SOURCE_NAMES.indexOf('animesama'), SOURCE_NAMES.indexOf('vostfree')]
-        : []
+      // Drama asiatique : KissKH est LA source du genre (flux direct + sous-titres FR).
+      // Rapide (recherche + fiche + signature, en cache), mais on ne laisse pas des
+      // sources instantanées remplir le quota avant qu'elle réponde.
+      [
+        ...(info.originalLanguage === 'ja'
+          ? [SOURCE_NAMES.indexOf('voiranime'), SOURCE_NAMES.indexOf('animesama'), SOURCE_NAMES.indexOf('vostfree')]
+          : []),
+        ...(isKisskhLanguage(info.originalLanguage) ? [SOURCE_NAMES.indexOf('kisskh')] : []),
+      ]
     );
 
     // Construction des drafts extraite en closure ré-exécutable. Raison : l'early-exit
@@ -1302,6 +1318,7 @@ async function handleStream(req: express.Request, res: express.Response, type: s
     const cinestreamResults = collected[18] as Awaited<ReturnType<typeof getCinestreamStreams>>;
     const dulourdResults = collected[19] as Awaited<ReturnType<typeof getDulourdStreams>>;
     const zenixResults = collected[20] as Awaited<ReturnType<typeof getZenixStreams>>;
+    const kisskhResults = collected[21] as Awaited<ReturnType<typeof getKisskhStreams>>;
 
     // On accumule des "drafts" (streams sans name/title). name/title sont posés
     // en UNE passe centralisée plus bas (src/display.ts), pour un rendu uniforme.
@@ -1806,6 +1823,18 @@ async function handleStream(req: express.Request, res: express.Response, type: s
       }
     }
 
+    // KissKH : livré comme dramallyu, où il joue — URL CDN brute + Referer en
+    // proxyHeaders, c'est le serveur interne du lecteur qui télécharge. Ni fixaudio ni
+    // proxy : playlist mono-audio à segments déguisés (.PNG = MPEG-TS) et plages
+    // d'octets selon les titres ; notre réécriture de manifeste la cassait.
+    for (const kk of kisskhResults) {
+      drafts.push({
+        url: kk.url,
+        behaviorHints: { notWebReady: true, bingeGroup: `kisskh-${kk.quality}`, proxyHeaders: { request: kk.headers } },
+        _meta: { quality: kk.quality, language: kk.language, source: 'kisskh', server: 'kisskh' },
+      });
+    }
+
     // dulourd : HLS Voe (CDN derrière des domaines jetables) — même livraison que ZT.
     for (const dl of dulourdResults) {
       const needsLocalProxy = /tnmr/i.test(dl.url);
@@ -2154,6 +2183,22 @@ async function handleSubtitles(req: express.Request, res: express.Response, type
       console.log('[Subtitles] Nabistream:', (e?.message || '').slice(0, 80));
     }
 
+    // KissKH : sous-titres multi-langues (SRT) de l'épisode, servis via /kisskh/subtitle
+    // (SRT->VTT). Re-résolus ici : recherche, fiche et pistes sont en cache.
+    if (isKisskhLanguage(info.originalLanguage)) {
+      try {
+        const kks = await getKisskhStreams(type as 'movie' | 'series', [info.title, info.originalTitle], parsed.season, parsed.episode);
+        (kks[0]?.subtitles || []).forEach((s, i) => {
+          const label = s.lang === 'fre' ? 'Français' : s.lang === 'eng' ? 'English' : s.label;
+          const su = new URL(`/kisskh/subtitle/${encodeURIComponent(label)}.vtt`, baseUrl);
+          su.searchParams.set('u', s.url);
+          subtitles.push({ id: `kisskh-${i}-${s.lang}`, url: signUrl(su).toString(), lang: s.lang });
+        });
+      } catch (e: any) {
+        console.log('[Subtitles] KissKH:', (e?.message || '').slice(0, 80));
+      }
+    }
+
     // nkstrm : sous-titres FR/EN (WebVTT) tokénés (~6h), servis en direct (opt-in).
     // Re-résolus frais ; NkstrmAuthError -> juste ignoré ici (pas de subs, non-bloquant).
     if (config?.nkstrmToken) {
@@ -2445,6 +2490,10 @@ app.get('/api/zenix/endpoints', (req, res) => {
   const reload = req.query.reload === 'true';
   res.json({ ...(reload ? reloadZenixEndpoints() : getZenixEndpoints()), reloaded: reload });
 });
+app.get('/api/kisskh/endpoints', (req, res) => {
+  const reload = req.query.reload === 'true';
+  res.json({ ...(reload ? reloadKisskhEndpoints() : getKisskhEndpoints()), reloaded: reload });
+});
 app.get(['/api/nkstrm/endpoints', '/api/nakastream/endpoints'], (req, res) => {
   const reload = req.query.reload === 'true';
   res.json({ ...(reload ? reloadNkstrmEndpoints() : getNkstrmEndpoints()), reloaded: reload });
@@ -2518,6 +2567,30 @@ app.post('/api/kordoz/endpoints', requireAdminSession, jsonBody, (req, res) => {
   if (!domains.length) return res.status(400).json({ ok: false, error: 'au moins un domaine valide requis' });
   writeConfigFile('kordoz-endpoints.json', { domains });
   return res.json({ ok: true, ...reloadKordozEndpoints() });
+});
+
+// KissKH : {base, miroirs}. Les miroirs sont essayés dans l'ordre, bascule automatique
+// après 3 échecs d'affilée ; `base` (facultatif, vide = aucun) force un domaine en tête.
+app.post('/api/kisskh/endpoints', requireAdminSession, jsonBody, (req, res) => {
+  const rawBase = typeof req.body?.base === 'string' ? req.body.base.trim() : '';
+  const base = rawBase ? cleanBaseUrl(rawBase) : '';
+  if (base === null) return res.status(400).json({ ok: false, error: 'base URL invalide' });
+  const raw = Array.isArray(req.body?.miroirs) ? req.body.miroirs : [];
+  const miroirs = raw.map(cleanBaseUrl).filter((d: string | null): d is string => !!d);
+  if (!miroirs.length) return res.status(400).json({ ok: false, error: 'au moins un miroir valide requis' });
+  writeConfigFile('kisskh-endpoints.json', { base, miroirs });
+  return res.json({ ok: true, ...reloadKisskhEndpoints() });
+});
+// État en direct (miroir courant, échecs, signature) et re-découverte à la demande.
+app.get('/api/kisskh/status', requireAdminSession, (_req, res) => {
+  res.json(etatKisskh());
+});
+app.post('/api/kisskh/rediscover', requireAdminSession, async (_req, res) => {
+  try {
+    res.json({ ok: true, ...(await rediscoverKisskh()) });
+  } catch (e: any) {
+    res.status(500).json({ ok: false, error: e?.message || 'échec' });
+  }
 });
 
 // Whitelist des domaines : lecture (+ statut auto), ajout manuel (authentifié).
@@ -3067,6 +3140,14 @@ app.get('/api/health', async (_req, res) => {
     results.zenix = { status: 'down', error: e.message };
   }
 
+  const kkStart = Date.now();
+  try {
+    const ok = await kisskhProbe();
+    results.kisskh = { status: ok ? 'up' : 'degraded', latency: Date.now() - kkStart };
+  } catch (e: any) {
+    results.kisskh = { status: 'down', error: e.message };
+  }
+
   const allUp = Object.values(results).every(r => r.status === 'up');
   const allDown = Object.values(results).every(r => r.status === 'down');
 
@@ -3154,6 +3235,28 @@ app.get('/nabistream/subtitle/:label', async (req, res) => {
     res.setHeader('Content-Type', 'text/vtt; charset=utf-8');
     res.setHeader('Cache-Control', 'public, max-age=3600');
     res.send(vtt);
+  } catch {
+    res.status(502).end();
+  }
+});
+
+// KissKH : pistes SRT sur leur CDN, converties en VTT (text/vtt, reconnu partout).
+// Anti-SSRF : uniquement les hôtes de KissKH.
+app.get('/kisskh/subtitle/:label', async (req, res) => {
+  const u = String(req.query.u || '');
+  if (!isKisskhSubtitleUrl(u)) { res.status(404).end(); return; }
+  try {
+    const resp = await axios.get<ArrayBuffer>(u, {
+      responseType: 'arraybuffer', timeout: 15000,
+      headers: { Referer: KISSKH_PLAYBACK_REFERER, 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' },
+      maxContentLength: 5 * 1024 * 1024, maxBodyLength: 5 * 1024 * 1024,
+    });
+    const buf = Buffer.from(resp.data);
+    let text = buf.toString('utf-8');
+    if (text.includes('\uFFFD')) { try { text = new TextDecoder('windows-1252').decode(buf); } catch { /* garde utf-8 */ } }
+    res.setHeader('Content-Type', 'text/vtt; charset=utf-8');
+    res.setHeader('Cache-Control', 'public, max-age=3600');
+    res.send(subtitleToVtt(text));
   } catch {
     res.status(502).end();
   }

@@ -122,6 +122,7 @@ const PROVIDER_LABELS: Record<string, string> = {
   kordoz: 'Kordoz',
   docstream: 'DocStream',
   ztstream: 'Zone-Téléchargement',
+  kisskh: 'KissKH',
 };
 
 export function providerLabel(source: string): string {
