@@ -126,6 +126,7 @@ const PROVIDER_LABELS: Record<string, string> = {
   worldivx: 'WorldiVX',
   tokyvideo: 'Tokyvideo',
   yablom: 'Yablom',
+  ianime: 'IAnime',
 };
 
 export function providerLabel(source: string): string {

@@ -23,6 +23,7 @@ import { getKisskhStreams, kisskhProbe, getKisskhEndpoints, reloadKisskhEndpoint
 import { getWorldivxStreams, resolveWorldivxStream, worldivxProbe, getWorldivxEndpoints, reloadWorldivxEndpoints } from './scrapers/worldivx';
 import { getTokyvideoStreams, tokyvideoProbe, getTokyvideoEndpoints, reloadTokyvideoEndpoints, TOKYVIDEO_REFERER } from './scrapers/tokyvideo';
 import { getYablomStreams, yablomProbe, getYablomEndpoints, reloadYablomEndpoints } from './scrapers/yablom';
+import { getIanimeStreams, ianimeProbe, getIanimeEndpoints, reloadIanimeEndpoints } from './scrapers/ianime';
 import { getDocstreamStreams } from './scrapers/docstream';
 import { getZoneTelechargementStreams, getZoneTelechargementEndpoints, reloadZoneTelechargementEndpoints } from './scrapers/zonetelechargement';
 import { getNkstrmStreams, NkstrmAuthError, getNkstrmEndpoints, reloadNkstrmEndpoints } from './scrapers/nkstrm';
@@ -96,6 +97,7 @@ interface Stats {
     worldivx: { requests: number; success: number; errors: number; lastSuccess: number | null };
     tokyvideo: { requests: number; success: number; errors: number; lastSuccess: number | null };
     yablom: { requests: number; success: number; errors: number; lastSuccess: number | null };
+    ianime: { requests: number; success: number; errors: number; lastSuccess: number | null };
   };
   streamsServed: {
     movix: number;
@@ -123,6 +125,7 @@ interface Stats {
     worldivx: number;
     tokyvideo: number;
     yablom: number;
+    ianime: number;
   };
 }
 
@@ -155,11 +158,12 @@ const stats: Stats = {
     worldivx: { requests: 0, success: 0, errors: 0, lastSuccess: null },
     tokyvideo: { requests: 0, success: 0, errors: 0, lastSuccess: null },
     yablom: { requests: 0, success: 0, errors: 0, lastSuccess: null },
+    ianime: { requests: 0, success: 0, errors: 0, lastSuccess: null },
   },
-  streamsServed: { movix: 0, netmirror: 0, streamflix: 0, frenchstream: 0, wiflix: 0, voirdrama: 0, moviebox: 0, voiranime: 0, nabistream: 0, coflix: 0, videasy: 0, animesama: 0, nkstrm: 0, vostfree: 0, wavewatch: 0, kordoz: 0, docstream: 0, ztstream: 0, cinestream: 0, dulourd: 0, zenix: 0, kisskh: 0, worldivx: 0, tokyvideo: 0, yablom: 0 },
+  streamsServed: { movix: 0, netmirror: 0, streamflix: 0, frenchstream: 0, wiflix: 0, voirdrama: 0, moviebox: 0, voiranime: 0, nabistream: 0, coflix: 0, videasy: 0, animesama: 0, nkstrm: 0, vostfree: 0, wavewatch: 0, kordoz: 0, docstream: 0, ztstream: 0, cinestream: 0, dulourd: 0, zenix: 0, kisskh: 0, worldivx: 0, tokyvideo: 0, yablom: 0, ianime: 0 },
 };
 
-function trackSourceResult(source: 'movix' | 'netmirror' | 'streamflix' | 'frenchstream' | 'wiflix' | 'voirdrama' | 'moviebox' | 'voiranime' | 'nabistream' | 'coflix' | 'videasy' | 'animesama' | 'nkstrm' | 'vostfree' | 'wavewatch' | 'kordoz' | 'docstream' | 'ztstream' | 'cinestream' | 'dulourd' | 'zenix' | 'kisskh' | 'worldivx' | 'tokyvideo' | 'yablom', success: boolean, streamCount: number = 0) {
+function trackSourceResult(source: 'movix' | 'netmirror' | 'streamflix' | 'frenchstream' | 'wiflix' | 'voirdrama' | 'moviebox' | 'voiranime' | 'nabistream' | 'coflix' | 'videasy' | 'animesama' | 'nkstrm' | 'vostfree' | 'wavewatch' | 'kordoz' | 'docstream' | 'ztstream' | 'cinestream' | 'dulourd' | 'zenix' | 'kisskh' | 'worldivx' | 'tokyvideo' | 'yablom' | 'ianime', success: boolean, streamCount: number = 0) {
   stats.sources[source].requests++;
   if (success) {
     stats.sources[source].success++;
@@ -1300,9 +1304,16 @@ async function handleStream(req: express.Request, res: express.Response, type: s
       (isSourceEnabled('yablom') ? getYablomStreams(type as 'movie' | 'series', extractorConfig, info.frenchTitle || info.title, info.title, info.year ? Number(info.year) : undefined) : Promise.resolve([]))
         .then(r => { trackSourceResult('yablom', true, r.length); recordOutcome('yablom', r.length > 0 ? 'success' : 'empty'); return r; })
         .catch(e => { console.log('[Yablom] Error:', e?.message || e); trackSourceResult('yablom', false); recordOutcome('yablom', 'error', e?.message); return []; }),
+      // IAnime : anime FR VF+VOSTFR (originalLanguage japonais). Recherche POST, hôtes
+      // vidmoly/voe/streamtape/mail.ru déjà extraits. Titres alternatifs (romaji) comme VoirAnime.
+      (isSourceEnabled('ianime') && info.originalLanguage === 'ja'
+        ? animeAltsPromise.then(alts => getIanimeStreams(parsed.baseId, type as 'movie' | 'series', extractorConfig, parsed.season, parsed.episode, info.title, info.originalTitle, alts))
+        : Promise.resolve([]))
+        .then(r => { if (info.originalLanguage === 'ja') { trackSourceResult('ianime', true, r.length); recordOutcome('ianime', r.length > 0 ? 'success' : 'empty'); } return r; })
+        .catch(e => { console.log('[IAnime] Error:', e?.message || e); trackSourceResult('ianime', false); recordOutcome('ianime', 'error', e?.message); return []; }),
     ];
 
-    const SOURCE_NAMES = ['netmirror', 'streamflix', 'movix', 'frenchstream', 'wiflix', 'voirdrama', 'moviebox', 'voiranime', 'nabistream', 'coflix', 'videasy', 'animesama', 'nkstrm', 'vostfree', 'wavewatch', 'kordoz', 'docstream', 'ztstream', 'cinestream', 'dulourd', 'zenix', 'kisskh', 'worldivx', 'tokyvideo', 'yablom'];
+    const SOURCE_NAMES = ['netmirror', 'streamflix', 'movix', 'frenchstream', 'wiflix', 'voirdrama', 'moviebox', 'voiranime', 'nabistream', 'coflix', 'videasy', 'animesama', 'nkstrm', 'vostfree', 'wavewatch', 'kordoz', 'docstream', 'ztstream', 'cinestream', 'dulourd', 'zenix', 'kisskh', 'worldivx', 'tokyvideo', 'yablom', 'ianime'];
     const collected = await collectSources(
       sourcePromises.map((promise, i) => ({
         name: SOURCE_NAMES[i],
@@ -1320,7 +1331,7 @@ async function handleStream(req: express.Request, res: express.Response, type: s
       // sources instantanées remplir le quota avant qu'elle réponde.
       [
         ...(info.originalLanguage === 'ja'
-          ? [SOURCE_NAMES.indexOf('voiranime'), SOURCE_NAMES.indexOf('animesama'), SOURCE_NAMES.indexOf('vostfree')]
+          ? [SOURCE_NAMES.indexOf('voiranime'), SOURCE_NAMES.indexOf('animesama'), SOURCE_NAMES.indexOf('vostfree'), SOURCE_NAMES.indexOf('ianime')]
           : []),
         ...(isKisskhLanguage(info.originalLanguage) ? [SOURCE_NAMES.indexOf('kisskh')] : []),
       ]
@@ -1361,6 +1372,7 @@ async function handleStream(req: express.Request, res: express.Response, type: s
     const worldivxResults = collected[22] as Awaited<ReturnType<typeof getWorldivxStreams>>;
     const tokyvideoResults = collected[23] as Awaited<ReturnType<typeof getTokyvideoStreams>>;
     const yablomResults = collected[24] as Awaited<ReturnType<typeof getYablomStreams>>;
+    const ianimeResults = collected[25] as Awaited<ReturnType<typeof getIanimeStreams>>;
 
     // On accumule des "drafts" (streams sans name/title). name/title sont posés
     // en UNE passe centralisée plus bas (src/display.ts), pour un rendu uniforme.
@@ -1631,6 +1643,24 @@ async function handleStream(req: express.Request, res: express.Response, type: s
           source: 'voiranime',
           server: va.server,
         },
+      });
+    }
+
+    // IAnime : anime FR VF/VOSTFR (hôtes vidmoly/voe/streamtape/mail.ru), livraison comme VoirAnime.
+    for (const ia of ianimeResults) {
+      const d = await deliver(ia.url, {
+        ...(ia.headers || {}),
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+      }, {}, req, config);
+      if (!d) continue;
+      drafts.push({
+        url: d.url,
+        behaviorHints: {
+          notWebReady: !!d.proxyHeaders,
+          bingeGroup: `ianime-${ia.server}`,
+          ...(d.proxyHeaders ? { proxyHeaders: { request: d.proxyHeaders } } : {}),
+        },
+        _meta: { quality: ia.quality, language: ia.language, source: 'ianime', server: ia.server },
       });
     }
 
@@ -2596,6 +2626,10 @@ app.get('/api/yablom/endpoints', (req, res) => {
   const reload = req.query.reload === 'true';
   res.json({ ...(reload ? reloadYablomEndpoints() : getYablomEndpoints()), reloaded: reload });
 });
+app.get('/api/ianime/endpoints', (req, res) => {
+  const reload = req.query.reload === 'true';
+  res.json({ ...(reload ? reloadIanimeEndpoints() : getIanimeEndpoints()), reloaded: reload });
+});
 app.get('/api/kisskh/endpoints', (req, res) => {
   const reload = req.query.reload === 'true';
   res.json({ ...(reload ? reloadKisskhEndpoints() : getKisskhEndpoints()), reloaded: reload });
@@ -2658,6 +2692,7 @@ const singleBaseSources: Array<{ path: string; file: string; reload: () => unkno
   { path: 'worldivx', file: 'worldivx-endpoints.json', reload: reloadWorldivxEndpoints },
   { path: 'tokyvideo', file: 'tokyvideo-endpoints.json', reload: reloadTokyvideoEndpoints },
   { path: 'yablom', file: 'yablom-endpoints.json', reload: reloadYablomEndpoints },
+  { path: 'ianime', file: 'ianime-endpoints.json', reload: reloadIanimeEndpoints },
   { path: 'nkstrm', file: 'nkstrm-endpoints.json', reload: reloadNkstrmEndpoints },
 ];
 for (const src of singleBaseSources) {
@@ -3279,6 +3314,14 @@ app.get('/api/health', async (_req, res) => {
     results.yablom = { status: ok ? 'up' : 'degraded', latency: Date.now() - ybStart };
   } catch (e: any) {
     results.yablom = { status: 'down', error: e.message };
+  }
+
+  const iaStart = Date.now();
+  try {
+    const ok = await ianimeProbe();
+    results.ianime = { status: ok ? 'up' : 'degraded', latency: Date.now() - iaStart };
+  } catch (e: any) {
+    results.ianime = { status: 'down', error: e.message };
   }
 
   const allUp = Object.values(results).every(r => r.status === 'up');
