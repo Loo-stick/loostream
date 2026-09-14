@@ -4,7 +4,9 @@ import { isDirectable, canDirect, PROXY_FORCED_HOSTS } from './deliver';
 
 test('isDirectable : hôte normal OK, hôte FAI-bloqué non, URL invalide non', () => {
   assert.equal(isDirectable('https://cuyyro04xrqrh.premilkyway.com/x.m3u8'), true);
-  assert.equal(isDirectable('https://dej02es2pfpm.tnmr.org/x/master.m3u8'), true);
+  // tnmr (CDN livavid/LuluVdo) est forcé vers le proxy depuis fc1b8bb : il exige le jeu
+  // complet d'en-têtes sur CHAQUE segment, qu'un lecteur en direct ne pose pas.
+  assert.equal(isDirectable('https://dej02es2pfpm.tnmr.org/x/master.m3u8'), false);
   assert.equal(isDirectable('https://strm2.uqload.is/hls2/x.m3u8'), false); // uqload
   assert.equal(isDirectable('https://voe.sx/e/abc'), false);                // voe.sx
   assert.equal(isDirectable('pas-une-url'), false);

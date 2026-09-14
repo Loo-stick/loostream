@@ -70,8 +70,16 @@ test('mergeExtractorDomains: clés inconnues ignorées', () => {
 
 test('detectExtractorIn: reconnaît un domaine voe connu', () => {
   assert.equal(
-    detectExtractorIn('https://vidara.to/e/abc', DEFAULT_EXTRACTOR_DOMAINS),
+    detectExtractorIn('https://voe.sx/e/abc', DEFAULT_EXTRACTOR_DOMAINS),
     'voe',
+  );
+});
+
+test('detectExtractorIn: vidara a son propre extracteur (ce n\'est PAS voe)', () => {
+  // Il était classé voe par erreur ; déplacé vers `vidara` dans ba16297.
+  assert.equal(
+    detectExtractorIn('https://vidara.to/e/abc', DEFAULT_EXTRACTOR_DOMAINS),
+    'vidara',
   );
 });
 
