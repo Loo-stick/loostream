@@ -56,6 +56,8 @@ export interface ZenixStream {
   quality: string;
   language: string;   // VF (leur catalogue propre n'a pas d'autre dossier de langue)
   server: string;
+  /** Interne : la sonde MP4 d'un épisode a échoué -> qualité de repli, résultat non caché. */
+  probeFailed?: boolean;
 }
 
 // --- Session : les cookies portent le droit d'obtenir ET de lire ---------------
@@ -211,7 +213,9 @@ export async function getZenixStreams(
   return cached(
     key, STREAMS_TTL_MS,
     () => fetchZenixStreams(mediaType, title, originalTitle, year, season || 0, episode || 0),
-    { scope: 'zenix', shouldCache: r => r.length > 0, negativeTtlMs: EMPTY_TTL_MS },
+    // Sonde ratée : ne PAS cacher, sinon le « HD » de repli resterait affiché 15 min alors
+    // que la requête suivante mesurerait la vraie résolution. Liste vide : 5 min, comme avant.
+    { scope: 'zenix', shouldCache: r => r.length > 0 && !r.some(s => s.probeFailed), negativeTtlMs: r => (r.length === 0 ? EMPTY_TTL_MS : undefined) },
   );
 }
 
@@ -260,8 +264,12 @@ async function fetchZenixStreams(
   // dernière position du fan-out (l'early-exit boucle vers 1,5 s). Ils gardent donc le
   // libellé du site. Corollaire assumé : plus de détection de flux mort côté films.
   let quality = hit?.quality || 'HD';
+  let probeFailed = false;
   if (!resolved.isHls) {
-    quality = (await probeMp4Quality(resolved.url, probeHeaders)) || quality;
+    const probed = await probeMp4Quality(resolved.url, probeHeaders);
+    // Échec PONCTUEL constaté (2026-09-14) : la même sonde mesure 1080p l'instant d'après.
+    // On garde le repli pour cette réponse, mais on ne la cache pas (voir getZenixStreams).
+    if (probed) quality = probed; else probeFailed = true;
   }
 
   console.log(`[Zenix] 1 flux ${quality} pour "${titles[0]}"${mediaType === 'series' ? ` S${se}E${ep}` : ''}`);
@@ -270,6 +278,7 @@ async function fetchZenixStreams(
     quality,
     language: 'VF',   // leur catalogue propre n'expose que des chemins `.../VF/...`
     server: 'zenix',
+    ...(probeFailed ? { probeFailed: true } : {}),
   }];
 }
 

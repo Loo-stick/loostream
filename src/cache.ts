@@ -101,8 +101,10 @@ export interface CachedOptions<T> {
   scope?: string;
   shouldCache?: (value: T) => boolean;
   // When shouldCache returns false, cache under this (usually shorter) TTL anyway.
-  // Useful to avoid re-hitting dead upstreams for every empty result.
-  negativeTtlMs?: number;
+  // Useful to avoid re-hitting dead upstreams for every empty result. A function lets
+  // the caller decide per value — return undefined/0 to not cache it at all (e.g. a
+  // result degraded by a transient failure, which the next request should redo).
+  negativeTtlMs?: number | ((value: T) => number | undefined);
 }
 
 export async function cached<T>(
@@ -118,8 +120,9 @@ export async function cached<T>(
   const shouldCache = opts?.shouldCache ?? (() => true);
   if (shouldCache(value)) {
     set(key, value, effectiveTtl(ttlMs, key, opts?.scope, false), opts?.scope);
-  } else if (opts?.negativeTtlMs) {
-    set(key, value, effectiveTtl(opts.negativeTtlMs, key, opts?.scope, true), opts?.scope);
+  } else {
+    const negTtl = typeof opts?.negativeTtlMs === 'function' ? opts.negativeTtlMs(value) : opts?.negativeTtlMs;
+    if (negTtl) set(key, value, effectiveTtl(negTtl, key, opts?.scope, true), opts?.scope);
   }
   return value;
 }
