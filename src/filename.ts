@@ -123,6 +123,7 @@ const PROVIDER_LABELS: Record<string, string> = {
   docstream: 'DocStream',
   ztstream: 'Zone-Téléchargement',
   kisskh: 'KissKH',
+  worldivx: 'WorldiVX',
 };
 
 export function providerLabel(source: string): string {

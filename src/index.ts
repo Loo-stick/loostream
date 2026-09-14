@@ -20,6 +20,7 @@ import { getCinestreamStreams, cinestreamProbe, getCinestreamEndpoints, reloadCi
 import { getDulourdStreams, dulourdProbe, getDulourdEndpoints, reloadDulourdEndpoints } from './scrapers/dulourd';
 import { getZenixStreams, resolveZenixStream, zenixProbe, getZenixEndpoints, reloadZenixEndpoints } from './scrapers/zenix';
 import { getKisskhStreams, kisskhProbe, getKisskhEndpoints, reloadKisskhEndpoints, isKisskhSubtitleUrl, isKisskhLanguage, KISSKH_PLAYBACK_REFERER, etatKisskh, rediscoverKisskh } from './scrapers/kisskh';
+import { getWorldivxStreams, resolveWorldivxStream, worldivxProbe, getWorldivxEndpoints, reloadWorldivxEndpoints } from './scrapers/worldivx';
 import { getDocstreamStreams } from './scrapers/docstream';
 import { getZoneTelechargementStreams, getZoneTelechargementEndpoints, reloadZoneTelechargementEndpoints } from './scrapers/zonetelechargement';
 import { getNkstrmStreams, NkstrmAuthError, getNkstrmEndpoints, reloadNkstrmEndpoints } from './scrapers/nkstrm';
@@ -90,6 +91,7 @@ interface Stats {
     dulourd: { requests: number; success: number; errors: number; lastSuccess: number | null };
     zenix: { requests: number; success: number; errors: number; lastSuccess: number | null };
     kisskh: { requests: number; success: number; errors: number; lastSuccess: number | null };
+    worldivx: { requests: number; success: number; errors: number; lastSuccess: number | null };
   };
   streamsServed: {
     movix: number;
@@ -114,6 +116,7 @@ interface Stats {
     dulourd: number;
     zenix: number;
     kisskh: number;
+    worldivx: number;
   };
 }
 
@@ -143,11 +146,12 @@ const stats: Stats = {
     dulourd: { requests: 0, success: 0, errors: 0, lastSuccess: null },
     zenix: { requests: 0, success: 0, errors: 0, lastSuccess: null },
     kisskh: { requests: 0, success: 0, errors: 0, lastSuccess: null },
+    worldivx: { requests: 0, success: 0, errors: 0, lastSuccess: null },
   },
-  streamsServed: { movix: 0, netmirror: 0, streamflix: 0, frenchstream: 0, wiflix: 0, voirdrama: 0, moviebox: 0, voiranime: 0, nabistream: 0, coflix: 0, videasy: 0, animesama: 0, nkstrm: 0, vostfree: 0, wavewatch: 0, kordoz: 0, docstream: 0, ztstream: 0, cinestream: 0, dulourd: 0, zenix: 0, kisskh: 0 },
+  streamsServed: { movix: 0, netmirror: 0, streamflix: 0, frenchstream: 0, wiflix: 0, voirdrama: 0, moviebox: 0, voiranime: 0, nabistream: 0, coflix: 0, videasy: 0, animesama: 0, nkstrm: 0, vostfree: 0, wavewatch: 0, kordoz: 0, docstream: 0, ztstream: 0, cinestream: 0, dulourd: 0, zenix: 0, kisskh: 0, worldivx: 0 },
 };
 
-function trackSourceResult(source: 'movix' | 'netmirror' | 'streamflix' | 'frenchstream' | 'wiflix' | 'voirdrama' | 'moviebox' | 'voiranime' | 'nabistream' | 'coflix' | 'videasy' | 'animesama' | 'nkstrm' | 'vostfree' | 'wavewatch' | 'kordoz' | 'docstream' | 'ztstream' | 'cinestream' | 'dulourd' | 'zenix' | 'kisskh', success: boolean, streamCount: number = 0) {
+function trackSourceResult(source: 'movix' | 'netmirror' | 'streamflix' | 'frenchstream' | 'wiflix' | 'voirdrama' | 'moviebox' | 'voiranime' | 'nabistream' | 'coflix' | 'videasy' | 'animesama' | 'nkstrm' | 'vostfree' | 'wavewatch' | 'kordoz' | 'docstream' | 'ztstream' | 'cinestream' | 'dulourd' | 'zenix' | 'kisskh' | 'worldivx', success: boolean, streamCount: number = 0) {
   stats.sources[source].requests++;
   if (success) {
     stats.sources[source].success++;
@@ -744,6 +748,15 @@ async function deliver(
 
 // Déduit le mode de livraison d'un flux finalisé (pour le badge d'affichage) :
 // direct (CDN->client, 0 relais), local (notre /proxy ou /netmirror) ou mediaflow.
+// Un proxy est-il réellement disponible pour ce config ? `proxy: 'local'` n'arrive ici que
+// s'il est autorisé (parseConfig rabat sinon sur le 1er mode permis) ; en `mediaflow`, il
+// faut une URL MediaFlow, faute de quoi buildProxyUrl renverrait l'URL BRUTE.
+function proxyAvailable(config: UserConfig | null): boolean {
+  if (config?.proxy === 'direct') return false;
+  if (config?.proxy === 'local') return true;
+  return !!(config?.mfUrl || DEFAULT_MEDIAFLOW_URL) || (!config && DEFAULT_USE_LOCAL_PROXY);
+}
+
 function computeDelivery(url: string, hasProxyHeaders: boolean, config: UserConfig | null): 'direct' | 'local' | 'mediaflow' {
   if (hasProxyHeaders) return 'direct';
   // MediaFlow d'ABORD : ses URLs contiennent /proxy/hls/ dans le chemin, il ne
@@ -758,6 +771,8 @@ function computeDelivery(url: string, hasProxyHeaders: boolean, config: UserConf
   // (MFP ou local) — le cookie de session étant exigé au téléchargement, ce flux
   // n'est jamais servi en direct. Le badge suit donc le mode configuré.
   if (url.includes('/zenix/')) return (config?.mfUrl || DEFAULT_MEDIAFLOW_URL) ? 'mediaflow' : 'local';
+  // /worldivx/ : même principe (résolution au clic puis proxy du mode).
+  if (url.includes('/worldivx/')) return (config?.mfUrl || DEFAULT_MEDIAFLOW_URL) ? 'mediaflow' : 'local';
   if (url.includes('/moviebox/')) return 'direct'; // 302 -> CDN, aucun relais serveur
   return 'direct'; // URL CDN brute sans en-têtes = pas de relais
 }
@@ -793,7 +808,7 @@ function getManifest(req: express.Request, config?: UserConfig | null) {
 
   return {
     id: 'community.loostream.stremio',
-    version: '1.22.0',
+    version: '1.23.0',
     name: 'LooStream',
     logo: `${baseUrl}/logo.png`,
     description: 'Netflix, Prime, Disney+ mirrors + StreamFlix + Movix VF/VOSTFR',
@@ -1261,9 +1276,16 @@ async function handleStream(req: express.Request, res: express.Response, type: s
       (isSourceEnabled('kisskh') && isKisskhLanguage(info.originalLanguage) ? getKisskhStreams(type as 'movie' | 'series', [info.title, info.originalTitle], parsed.season, parsed.episode) : Promise.resolve([]))
         .then(r => { trackSourceResult('kisskh', true, r.length); recordOutcome('kisskh', r.length > 0 ? 'success' : 'empty'); return r; })
         .catch(e => { console.log('[KissKH] Error:', e?.message || e); trackSourceResult('kisskh', false); recordOutcome('kisskh', 'error', e?.message); return []; }),
+      // worldivx : films + épisodes FR récents via le lecteur Byse. Keyé TITRE FRANÇAIS (les
+      // noms de release sont en français), puis original et TMDB. Proxy obligatoire (jeton
+      // lié au réseau) -> rien à proposer en direct pur. La langue d'origine sert à étiqueter
+      // les releases MULTi : Byse n'en garde que la 1re piste (la VO).
+      (isSourceEnabled('worldivx') && proxyAvailable(config) ? getWorldivxStreams(type as 'movie' | 'series', [info.frenchTitle, info.originalTitle, info.title], info.year ? Number(info.year) : undefined, parsed.season, parsed.episode, info.originalLanguage) : Promise.resolve([]))
+        .then(r => { trackSourceResult('worldivx', true, r.length); recordOutcome('worldivx', r.length > 0 ? 'success' : 'empty'); return r; })
+        .catch(e => { console.log('[Worldivx] Error:', e?.message || e); trackSourceResult('worldivx', false); recordOutcome('worldivx', 'error', e?.message); return []; }),
     ];
 
-    const SOURCE_NAMES = ['netmirror', 'streamflix', 'movix', 'frenchstream', 'wiflix', 'voirdrama', 'moviebox', 'voiranime', 'nabistream', 'coflix', 'videasy', 'animesama', 'nkstrm', 'vostfree', 'wavewatch', 'kordoz', 'docstream', 'ztstream', 'cinestream', 'dulourd', 'zenix', 'kisskh'];
+    const SOURCE_NAMES = ['netmirror', 'streamflix', 'movix', 'frenchstream', 'wiflix', 'voirdrama', 'moviebox', 'voiranime', 'nabistream', 'coflix', 'videasy', 'animesama', 'nkstrm', 'vostfree', 'wavewatch', 'kordoz', 'docstream', 'ztstream', 'cinestream', 'dulourd', 'zenix', 'kisskh', 'worldivx'];
     const collected = await collectSources(
       sourcePromises.map((promise, i) => ({
         name: SOURCE_NAMES[i],
@@ -1319,6 +1341,7 @@ async function handleStream(req: express.Request, res: express.Response, type: s
     const dulourdResults = collected[19] as Awaited<ReturnType<typeof getDulourdStreams>>;
     const zenixResults = collected[20] as Awaited<ReturnType<typeof getZenixStreams>>;
     const kisskhResults = collected[21] as Awaited<ReturnType<typeof getKisskhStreams>>;
+    const worldivxResults = collected[22] as Awaited<ReturnType<typeof getWorldivxStreams>>;
 
     // On accumule des "drafts" (streams sans name/title). name/title sont posés
     // en UNE passe centralisée plus bas (src/display.ts), pour un rendu uniforme.
@@ -1833,6 +1856,24 @@ async function handleStream(req: express.Request, res: express.Response, type: s
         behaviorHints: { notWebReady: true, bingeGroup: `kisskh-${kk.quality}`, proxyHeaders: { request: kk.headers } },
         _meta: { quality: kk.quality, language: kk.language, source: 'kisskh', server: 'kisskh' },
       });
+    }
+
+    // worldivx : la réponse Byse chiffrée expire en 15 min et le jeton du flux est lié au
+    // réseau du serveur -> on annonce NOTRE endpoint, qui résout au clic puis redirige vers
+    // le proxy du mode. Jamais de direct (vérifié : 404 depuis une autre connexion).
+    if (proxyAvailable(config)) {
+      const proto = req.headers['x-forwarded-proto'] || req.protocol || 'http';
+      const host = req.headers['x-forwarded-host'] || req.headers.host;
+      const cfgPrefix = req.params.config ? `/${req.params.config}` : '';
+      for (const wx of worldivxResults) {
+        const u = new URL(`${cfgPrefix}/worldivx/stream`, `${proto}://${host}`);
+        u.searchParams.set('code', wx.code);
+        drafts.push({
+          url: signUrl(u).toString(),
+          behaviorHints: { notWebReady: false, bingeGroup: `worldivx-${wx.quality}-${wx.language}`, filename: wx.release },
+          _meta: { quality: wx.quality, language: wx.language, source: 'worldivx', server: wx.server },
+        });
+      }
     }
 
     // dulourd : HLS Voe (CDN derrière des domaines jetables) — même livraison que ZT.
@@ -2490,6 +2531,10 @@ app.get('/api/zenix/endpoints', (req, res) => {
   const reload = req.query.reload === 'true';
   res.json({ ...(reload ? reloadZenixEndpoints() : getZenixEndpoints()), reloaded: reload });
 });
+app.get('/api/worldivx/endpoints', (req, res) => {
+  const reload = req.query.reload === 'true';
+  res.json({ ...(reload ? reloadWorldivxEndpoints() : getWorldivxEndpoints()), reloaded: reload });
+});
 app.get('/api/kisskh/endpoints', (req, res) => {
   const reload = req.query.reload === 'true';
   res.json({ ...(reload ? reloadKisskhEndpoints() : getKisskhEndpoints()), reloaded: reload });
@@ -2549,6 +2594,7 @@ const singleBaseSources: Array<{ path: string; file: string; reload: () => unkno
   { path: 'cinestream', file: 'cinestream-endpoints.json', reload: reloadCinestreamEndpoints },
   { path: 'dulourd', file: 'dulourd-endpoints.json', reload: reloadDulourdEndpoints },
   { path: 'zenix', file: 'zenix-endpoints.json', reload: reloadZenixEndpoints },
+  { path: 'worldivx', file: 'worldivx-endpoints.json', reload: reloadWorldivxEndpoints },
   { path: 'nkstrm', file: 'nkstrm-endpoints.json', reload: reloadNkstrmEndpoints },
 ];
 for (const src of singleBaseSources) {
@@ -3148,6 +3194,14 @@ app.get('/api/health', async (_req, res) => {
     results.kisskh = { status: 'down', error: e.message };
   }
 
+  const wxStart = Date.now();
+  try {
+    const ok = await worldivxProbe();
+    results.worldivx = { status: ok ? 'up' : 'degraded', latency: Date.now() - wxStart };
+  } catch (e: any) {
+    results.worldivx = { status: 'down', error: e.message };
+  }
+
   const allUp = Object.values(results).every(r => r.status === 'up');
   const allDown = Object.values(results).every(r => r.status === 'down');
 
@@ -3333,6 +3387,42 @@ app.get('/:config/zenix/stream', async (req, res) => {
 });
 app.get('/zenix/stream', requireQueryKey, async (req, res) => {
   await handleZenixStream(req, res, null);
+});
+
+// worldivx : déchiffre le lecteur Byse au clic (réponse valable 15 min), puis redirige vers
+// le proxy du mode. Un hôte CDN au certificat TLS expiré n'est PAS servi : ni notre proxy
+// ni MediaFlow ne désactivent la vérification des certificats.
+async function handleWorldivxStream(req: express.Request, res: express.Response, config: UserConfig | null) {
+  const code = String(req.query.code || '');
+  if (!/^[A-Za-z0-9]+$/.test(code)) { res.status(400).send('missing code'); return; }
+  try {
+    const r = await resolveWorldivxStream(code);
+    if (!r) { res.status(502).send('Worldivx: résolution Byse impossible'); return; }
+    if (r.insecureTls) {
+      console.log(`[Worldivx] ${code} : certificat TLS expiré sur ${new URL(r.url).hostname} — non servi`);
+      res.status(502).send('Worldivx: certificat du serveur vidéo expiré');
+      return;
+    }
+    const proxied = buildProxyUrl(r.url, { 'User-Agent': BROWSER_UA }, false, req, config, false, true);
+    // buildProxyUrl retombe sur l'URL BRUTE quand aucun MediaFlow n'est configuré : ici
+    // ce serait un lien mort (jeton lié au réseau du serveur) -> on refuse clairement.
+    if (!proxied || proxied === r.url) {
+      console.log(`[Worldivx] ${code} : aucun proxy disponible (mode ${config?.proxy || 'défaut'}) — non servi`);
+      res.status(502).send('Worldivx: proxy requis (MediaFlow ou proxy local)');
+      return;
+    }
+    res.redirect(302, proxied);
+  } catch (e: any) {
+    res.status(502).send('Worldivx: ' + (e?.message || 'error'));
+  }
+}
+app.get('/:config/worldivx/stream', async (req, res) => {
+  const config = parseConfig(req.params.config);
+  if (denyIfNoAccess(config, res)) return;
+  await handleWorldivxStream(req, res, config);
+});
+app.get('/worldivx/stream', requireQueryKey, async (req, res) => {
+  await handleWorldivxStream(req, res, null);
 });
 
 app.listen(PORT, () => {
