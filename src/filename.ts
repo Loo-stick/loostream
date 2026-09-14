@@ -124,6 +124,7 @@ const PROVIDER_LABELS: Record<string, string> = {
   ztstream: 'Zone-Téléchargement',
   kisskh: 'KissKH',
   worldivx: 'WorldiVX',
+  tokyvideo: 'Tokyvideo',
 };
 
 export function providerLabel(source: string): string {

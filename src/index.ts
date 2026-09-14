@@ -21,6 +21,7 @@ import { getDulourdStreams, dulourdProbe, getDulourdEndpoints, reloadDulourdEndp
 import { getZenixStreams, resolveZenixStream, zenixProbe, getZenixEndpoints, reloadZenixEndpoints } from './scrapers/zenix';
 import { getKisskhStreams, kisskhProbe, getKisskhEndpoints, reloadKisskhEndpoints, isKisskhSubtitleUrl, isKisskhLanguage, KISSKH_PLAYBACK_REFERER, etatKisskh, rediscoverKisskh } from './scrapers/kisskh';
 import { getWorldivxStreams, resolveWorldivxStream, worldivxProbe, getWorldivxEndpoints, reloadWorldivxEndpoints } from './scrapers/worldivx';
+import { getTokyvideoStreams, tokyvideoProbe, getTokyvideoEndpoints, reloadTokyvideoEndpoints, TOKYVIDEO_REFERER } from './scrapers/tokyvideo';
 import { getDocstreamStreams } from './scrapers/docstream';
 import { getZoneTelechargementStreams, getZoneTelechargementEndpoints, reloadZoneTelechargementEndpoints } from './scrapers/zonetelechargement';
 import { getNkstrmStreams, NkstrmAuthError, getNkstrmEndpoints, reloadNkstrmEndpoints } from './scrapers/nkstrm';
@@ -92,6 +93,7 @@ interface Stats {
     zenix: { requests: number; success: number; errors: number; lastSuccess: number | null };
     kisskh: { requests: number; success: number; errors: number; lastSuccess: number | null };
     worldivx: { requests: number; success: number; errors: number; lastSuccess: number | null };
+    tokyvideo: { requests: number; success: number; errors: number; lastSuccess: number | null };
   };
   streamsServed: {
     movix: number;
@@ -117,6 +119,7 @@ interface Stats {
     zenix: number;
     kisskh: number;
     worldivx: number;
+    tokyvideo: number;
   };
 }
 
@@ -147,11 +150,12 @@ const stats: Stats = {
     zenix: { requests: 0, success: 0, errors: 0, lastSuccess: null },
     kisskh: { requests: 0, success: 0, errors: 0, lastSuccess: null },
     worldivx: { requests: 0, success: 0, errors: 0, lastSuccess: null },
+    tokyvideo: { requests: 0, success: 0, errors: 0, lastSuccess: null },
   },
-  streamsServed: { movix: 0, netmirror: 0, streamflix: 0, frenchstream: 0, wiflix: 0, voirdrama: 0, moviebox: 0, voiranime: 0, nabistream: 0, coflix: 0, videasy: 0, animesama: 0, nkstrm: 0, vostfree: 0, wavewatch: 0, kordoz: 0, docstream: 0, ztstream: 0, cinestream: 0, dulourd: 0, zenix: 0, kisskh: 0, worldivx: 0 },
+  streamsServed: { movix: 0, netmirror: 0, streamflix: 0, frenchstream: 0, wiflix: 0, voirdrama: 0, moviebox: 0, voiranime: 0, nabistream: 0, coflix: 0, videasy: 0, animesama: 0, nkstrm: 0, vostfree: 0, wavewatch: 0, kordoz: 0, docstream: 0, ztstream: 0, cinestream: 0, dulourd: 0, zenix: 0, kisskh: 0, worldivx: 0, tokyvideo: 0 },
 };
 
-function trackSourceResult(source: 'movix' | 'netmirror' | 'streamflix' | 'frenchstream' | 'wiflix' | 'voirdrama' | 'moviebox' | 'voiranime' | 'nabistream' | 'coflix' | 'videasy' | 'animesama' | 'nkstrm' | 'vostfree' | 'wavewatch' | 'kordoz' | 'docstream' | 'ztstream' | 'cinestream' | 'dulourd' | 'zenix' | 'kisskh' | 'worldivx', success: boolean, streamCount: number = 0) {
+function trackSourceResult(source: 'movix' | 'netmirror' | 'streamflix' | 'frenchstream' | 'wiflix' | 'voirdrama' | 'moviebox' | 'voiranime' | 'nabistream' | 'coflix' | 'videasy' | 'animesama' | 'nkstrm' | 'vostfree' | 'wavewatch' | 'kordoz' | 'docstream' | 'ztstream' | 'cinestream' | 'dulourd' | 'zenix' | 'kisskh' | 'worldivx' | 'tokyvideo', success: boolean, streamCount: number = 0) {
   stats.sources[source].requests++;
   if (success) {
     stats.sources[source].success++;
@@ -1283,9 +1287,14 @@ async function handleStream(req: express.Request, res: express.Response, type: s
       (isSourceEnabled('worldivx') && proxyAvailable(config) ? getWorldivxStreams(type as 'movie' | 'series', [info.frenchTitle, info.originalTitle, info.title], info.year ? Number(info.year) : undefined, parsed.season, parsed.episode, info.originalLanguage) : Promise.resolve([]))
         .then(r => { trackSourceResult('worldivx', true, r.length); recordOutcome('worldivx', r.length > 0 ? 'success' : 'empty'); return r; })
         .catch(e => { console.log('[Worldivx] Error:', e?.message || e); trackSourceResult('worldivx', false); recordOutcome('worldivx', 'error', e?.message); return []; }),
+      // Tokyvideo : vieux films/séries VF (MP4 direct). Keyé titre FR (index public,
+      // sans identifiant TMDB) ; jeton du MP4 valable ~24 h -> résolu ici.
+      (isSourceEnabled('tokyvideo') ? getTokyvideoStreams(type as 'movie' | 'series', [info.frenchTitle, info.title, info.originalTitle], info.year ? Number(info.year) : undefined, parsed.season, parsed.episode) : Promise.resolve([]))
+        .then(r => { trackSourceResult('tokyvideo', true, r.length); recordOutcome('tokyvideo', r.length > 0 ? 'success' : 'empty'); return r; })
+        .catch(e => { console.log('[Tokyvideo] Error:', e?.message || e); trackSourceResult('tokyvideo', false); recordOutcome('tokyvideo', 'error', e?.message); return []; }),
     ];
 
-    const SOURCE_NAMES = ['netmirror', 'streamflix', 'movix', 'frenchstream', 'wiflix', 'voirdrama', 'moviebox', 'voiranime', 'nabistream', 'coflix', 'videasy', 'animesama', 'nkstrm', 'vostfree', 'wavewatch', 'kordoz', 'docstream', 'ztstream', 'cinestream', 'dulourd', 'zenix', 'kisskh', 'worldivx'];
+    const SOURCE_NAMES = ['netmirror', 'streamflix', 'movix', 'frenchstream', 'wiflix', 'voirdrama', 'moviebox', 'voiranime', 'nabistream', 'coflix', 'videasy', 'animesama', 'nkstrm', 'vostfree', 'wavewatch', 'kordoz', 'docstream', 'ztstream', 'cinestream', 'dulourd', 'zenix', 'kisskh', 'worldivx', 'tokyvideo'];
     const collected = await collectSources(
       sourcePromises.map((promise, i) => ({
         name: SOURCE_NAMES[i],
@@ -1342,6 +1351,7 @@ async function handleStream(req: express.Request, res: express.Response, type: s
     const zenixResults = collected[20] as Awaited<ReturnType<typeof getZenixStreams>>;
     const kisskhResults = collected[21] as Awaited<ReturnType<typeof getKisskhStreams>>;
     const worldivxResults = collected[22] as Awaited<ReturnType<typeof getWorldivxStreams>>;
+    const tokyvideoResults = collected[23] as Awaited<ReturnType<typeof getTokyvideoStreams>>;
 
     // On accumule des "drafts" (streams sans name/title). name/title sont posés
     // en UNE passe centralisée plus bas (src/display.ts), pour un rendu uniforme.
@@ -1874,6 +1884,22 @@ async function handleStream(req: express.Request, res: express.Response, type: s
           _meta: { quality: wx.quality, language: wx.language, source: 'worldivx', server: wx.server },
         });
       }
+    }
+
+    // Tokyvideo : MP4 direct, header-gaté (Referer exigé). Livraison standard via deliver()
+    // -> direct (proxyHeaders Referer) ou proxy selon le mode. Jeton non lié au réseau.
+    for (const tv of tokyvideoResults) {
+      const d = await deliver(tv.url, { Referer: TOKYVIDEO_REFERER, 'User-Agent': BROWSER_UA }, { forceHls: false }, req, config);
+      if (!d) continue;
+      drafts.push({
+        url: d.url,
+        behaviorHints: {
+          notWebReady: !!d.proxyHeaders,
+          bingeGroup: `tokyvideo-${tv.quality}`,
+          ...(d.proxyHeaders ? { proxyHeaders: { request: d.proxyHeaders } } : {}),
+        },
+        _meta: { quality: tv.quality, language: tv.language, source: 'tokyvideo', server: tv.server },
+      });
     }
 
     // dulourd : HLS Voe (CDN derrière des domaines jetables) — même livraison que ZT.
@@ -2535,6 +2561,10 @@ app.get('/api/worldivx/endpoints', (req, res) => {
   const reload = req.query.reload === 'true';
   res.json({ ...(reload ? reloadWorldivxEndpoints() : getWorldivxEndpoints()), reloaded: reload });
 });
+app.get('/api/tokyvideo/endpoints', (req, res) => {
+  const reload = req.query.reload === 'true';
+  res.json({ ...(reload ? reloadTokyvideoEndpoints() : getTokyvideoEndpoints()), reloaded: reload });
+});
 app.get('/api/kisskh/endpoints', (req, res) => {
   const reload = req.query.reload === 'true';
   res.json({ ...(reload ? reloadKisskhEndpoints() : getKisskhEndpoints()), reloaded: reload });
@@ -2595,6 +2625,7 @@ const singleBaseSources: Array<{ path: string; file: string; reload: () => unkno
   { path: 'dulourd', file: 'dulourd-endpoints.json', reload: reloadDulourdEndpoints },
   { path: 'zenix', file: 'zenix-endpoints.json', reload: reloadZenixEndpoints },
   { path: 'worldivx', file: 'worldivx-endpoints.json', reload: reloadWorldivxEndpoints },
+  { path: 'tokyvideo', file: 'tokyvideo-endpoints.json', reload: reloadTokyvideoEndpoints },
   { path: 'nkstrm', file: 'nkstrm-endpoints.json', reload: reloadNkstrmEndpoints },
 ];
 for (const src of singleBaseSources) {
@@ -3200,6 +3231,14 @@ app.get('/api/health', async (_req, res) => {
     results.worldivx = { status: ok ? 'up' : 'degraded', latency: Date.now() - wxStart };
   } catch (e: any) {
     results.worldivx = { status: 'down', error: e.message };
+  }
+
+  const tvStart = Date.now();
+  try {
+    const ok = await tokyvideoProbe();
+    results.tokyvideo = { status: ok ? 'up' : 'degraded', latency: Date.now() - tvStart };
+  } catch (e: any) {
+    results.tokyvideo = { status: 'down', error: e.message };
   }
 
   const allUp = Object.values(results).every(r => r.status === 'up');
