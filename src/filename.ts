@@ -125,6 +125,7 @@ const PROVIDER_LABELS: Record<string, string> = {
   kisskh: 'KissKH',
   worldivx: 'WorldiVX',
   tokyvideo: 'Tokyvideo',
+  yablom: 'Yablom',
 };
 
 export function providerLabel(source: string): string {
