@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert';
-import { mp4HeightFromBuffer } from './mp4probe';
+import { mp4HeightFromBuffer, mp4DimensionsFromBuffer } from './mp4probe';
+import { resLabel } from './multiaudio';
 
 // Construit un box MP4 : [size:uint32BE][type:4][payload].
 function box(type: string, payload: Buffer): Buffer {
@@ -39,4 +40,24 @@ test('saute les boîtes de tête (ftyp) avant le moov', () => {
 test('renvoie null si aucun tkhd (pas de moov dans le buffer)', () => {
   const ftyp = box('ftyp', Buffer.from('isommp42'));
   assert.equal(mp4HeightFromBuffer(ftyp), null);
+});
+
+test('lit aussi la LARGEUR : un MP4 cinémascope 1920x800 est un 1080p', () => {
+  const moov = box('moov', box('trak', tkhd(1920, 800)));
+  assert.deepEqual(mp4DimensionsFromBuffer(moov), { width: 1920, height: 800 });
+  const d = mp4DimensionsFromBuffer(moov)!;
+  assert.equal(resLabel(d.height, d.width), '1080p'); // était « 720p » sur la hauteur seule
+});
+
+test('entre deux pistes vidéo, garde la meilleure hauteur EFFECTIVE (largeur comprise)', () => {
+  const small = box('trak', tkhd(1280, 720));   // hauteur réelle plus grande…
+  const scope = box('trak', tkhd(1920, 800));   // …mais le cinémascope est la meilleure piste
+  const moov = box('moov', Buffer.concat([small, scope]));
+  assert.deepEqual(mp4DimensionsFromBuffer(moov), { width: 1920, height: 800 });
+  assert.equal(mp4HeightFromBuffer(moov), 800);
+});
+
+test('dimensions null si aucune piste vidéo', () => {
+  const moov = box('moov', box('trak', tkhd(0, 0)));
+  assert.equal(mp4DimensionsFromBuffer(moov), null);
 });

@@ -1,6 +1,6 @@
 import axios from 'axios';
 import { cached } from './cache';
-import { resLabel } from './multiaudio';
+import { resLabel, effectiveHeight } from './multiaudio';
 
 // Sonde la résolution d'un MP4 PROGRESSIF en lisant son conteneur (atomes
 // moov → trak → tkhd), par requêtes HTTP Range BORNÉES — jamais le fichier entier.
@@ -8,7 +8,9 @@ import { resLabel } from './multiaudio';
 // dont l'API ne donne qu'un 'HD' grossier. Renvoie un libellé ('1080p'…) ou null.
 //
 // tkhd porte width/height sur ses 8 DERNIERS octets (fixed-point 16.16), quelle que
-// soit la version du box. Les pistes audio/soustitres ont height=0 → on prend le max.
+// soit la version du box. Les pistes audio/soustitres ont height=0 → on garde la
+// meilleure piste vidéo, jugée sur sa hauteur EFFECTIVE (largeur comprise) : un 1920x800
+// cinémascope est un 1080p, comme pour la sonde HLS (multiaudio.resLabel).
 
 const PROBE_TTL_MS = 15 * 60 * 1000;
 const HEAD_BYTES = 256 * 1024;      // ftyp+moov d'un MP4 « faststart » (moov au début)
@@ -28,9 +30,9 @@ function readBoxHeader(buf: Buffer, o: number): Box | null {
   return { size, headerLen };
 }
 
-// Parcourt une zone de boxes, descend dans les conteneurs, remonte la hauteur max
-// vue dans un tkhd. Borné en profondeur (anti-boucle sur fichier malformé).
-function walk(buf: Buffer, start: number, end: number, out: { h: number }, depth = 0): void {
+// Parcourt une zone de boxes, descend dans les conteneurs, remonte les dimensions de la
+// meilleure piste vue dans un tkhd. Borné en profondeur (anti-boucle sur fichier malformé).
+function walk(buf: Buffer, start: number, end: number, out: { w: number; h: number }, depth = 0): void {
   let o = start;
   while (o + 8 <= end && depth < 8) {
     const b = readBoxHeader(buf, o);
@@ -42,9 +44,10 @@ function walk(buf: Buffer, start: number, end: number, out: { h: number }, depth
     const pStart = o + b.headerLen;
     const pEnd = Math.min(o + size, end);
     if (type === 'tkhd') {
-      if (pEnd - 4 >= pStart) {
+      if (pEnd - 8 >= pStart) {
+        const w = buf.readUInt32BE(pEnd - 8) >>> 16; // width 16.16 -> partie entière
         const h = buf.readUInt32BE(pEnd - 4) >>> 16; // height 16.16 -> partie entière
-        if (h > out.h) out.h = h;
+        if (h > 0 && effectiveHeight(h, w) > effectiveHeight(out.h, out.w)) { out.w = w; out.h = h; }
       }
     } else if (CONTAINERS.has(type)) {
       walk(buf, pStart, pEnd, out, depth + 1);
@@ -53,11 +56,16 @@ function walk(buf: Buffer, start: number, end: number, out: { h: number }, depth
   }
 }
 
-/** Hauteur vidéo (px) lue dans un buffer contenant le moov, ou null. Pur -> testable. */
-export function mp4HeightFromBuffer(buf: Buffer): number | null {
-  const out = { h: 0 };
+/** Dimensions (px) de la meilleure piste vidéo lues dans un buffer contenant le moov, ou null. Pur -> testable. */
+export function mp4DimensionsFromBuffer(buf: Buffer): { width: number; height: number } | null {
+  const out = { w: 0, h: 0 };
   walk(buf, 0, buf.length, out);
-  return out.h > 0 ? out.h : null;
+  return out.h > 0 ? { width: out.w, height: out.h } : null;
+}
+
+/** Hauteur vidéo (px) de la meilleure piste, ou null. Conservé pour les appelants existants. */
+export function mp4HeightFromBuffer(buf: Buffer): number | null {
+  return mp4DimensionsFromBuffer(buf)?.height ?? null;
 }
 
 // Offset du box qui SUIT les boîtes de tête (là où commence le moov s'il est en fin
@@ -98,16 +106,16 @@ export async function probeMp4Quality(url: string, headers?: Record<string, stri
     async () => {
       const head = await fetchRange(url, headers, 0, HEAD_BYTES);
       if (!head) return null;
-      let height = mp4HeightFromBuffer(head);
-      if (!height) {
+      let dims = mp4DimensionsFromBuffer(head);
+      if (!dims) {
         // moov probablement en fin de fichier (MP4 non-faststart) : sonder après ftyp+mdat.
         const off = offsetAfterHeadBoxes(head);
         if (off > head.length) {
           const tail = await fetchRange(url, headers, off, MOOV_CAP);
-          if (tail) height = mp4HeightFromBuffer(tail);
+          if (tail) dims = mp4DimensionsFromBuffer(tail);
         }
       }
-      return height ? resLabel(height) : null;
+      return dims ? resLabel(dims.height, dims.width) : null;
     },
     { scope: 'mp4probe', shouldCache: r => r !== null }, // ne cache pas les échecs
   );
