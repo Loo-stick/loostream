@@ -739,8 +739,8 @@ async function tryDlEmbed(embedUrl: string): Promise<ExtractedStream | null> {
     let quality = 'HD';
     if (/\.m3u8/i.test(url)) {
       try {
-        const { height } = await probeMaster(url, streamHeaders);
-        const lbl = height ? resLabel(height) : null;
+        const { height, width } = await probeMaster(url, streamHeaders);
+        const lbl = height ? resLabel(height, width) : null;
         if (lbl) quality = lbl;
       } catch { /* garde 'HD' */ }
     }
