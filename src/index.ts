@@ -820,7 +820,7 @@ function getManifest(req: express.Request, config?: UserConfig | null) {
 
   return {
     id: 'community.loostream.stremio',
-    version: '1.24.0',
+    version: '1.24.1',
     name: 'LooStream',
     logo: `${baseUrl}/logo.png`,
     description: 'Netflix, Prime, Disney+ mirrors + StreamFlix + Movix VF/VOSTFR',
@@ -1279,7 +1279,7 @@ async function handleStream(req: express.Request, res: express.Response, type: s
       // Zenix : catalogue FR VF (films + séries) qui relaie StreamFlix — dont NOS flux
       // rendent 403. Keyé titre (recherche maison). PROXY OBLIGATOIRE : le cookie de
       // session est exigé au téléchargement, donc jamais de livraison directe.
-      (isSourceEnabled('zenix') ? getZenixStreams(type as 'movie' | 'series', info.frenchTitle || info.title, info.title, info.year ? Number(info.year) : undefined, parsed.season, parsed.episode) : Promise.resolve([]))
+      (isSourceEnabled('zenix') && proxyAvailable(config) ? getZenixStreams(type as 'movie' | 'series', info.frenchTitle || info.title, info.title, info.year ? Number(info.year) : undefined, parsed.season, parsed.episode) : Promise.resolve([]))
         .then(r => { trackSourceResult('zenix', true, r.length); recordOutcome('zenix', r.length > 0 ? 'success' : 'empty'); return r; })
         .catch(e => { console.log('[Zenix] Error:', e); trackSourceResult('zenix', false); recordOutcome('zenix', 'error', e?.message); return []; }),
       // KissKH : dramas/films asiatiques, flux direct + sous-titres multi-langues. Keyé
@@ -1875,7 +1875,9 @@ async function handleStream(req: express.Request, res: express.Response, type: s
     // avant le clic -> on annonce NOTRE endpoint, qui rejoue la chaîne à la lecture
     // puis redirige vers le proxy du mode. Même principe que /moviebox/stream, à ceci
     // près que zenix exige le cookie AUSSI au téléchargement : pas de 302 vers le CDN.
-    {
+    // PROXY OBLIGATOIRE (comme worldivx) : sans proxy disponible, le flux ne serait pas
+    // livrable -> on ne le propose pas (sinon il s'afficherait en mode direct et échouerait).
+    if (proxyAvailable(config)) {
       const proto = req.headers['x-forwarded-proto'] || req.protocol || 'http';
       const host = req.headers['x-forwarded-host'] || req.headers.host;
       const cfgPrefix = req.params.config ? `/${req.params.config}` : '';
