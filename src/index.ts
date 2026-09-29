@@ -25,6 +25,7 @@ import { getTokyvideoStreams, tokyvideoProbe, getTokyvideoEndpoints, reloadTokyv
 import { getYablomStreams, yablomProbe, getYablomEndpoints, reloadYablomEndpoints } from './scrapers/yablom';
 import { getIanimeStreams, ianimeProbe, getIanimeEndpoints, reloadIanimeEndpoints } from './scrapers/ianime';
 import { getLeizyStreams, leizyProbe, getLeizyEndpoints, reloadLeizyEndpoints } from './scrapers/leizy';
+import { getJour1filmStreams, jour1filmProbe, getJour1filmEndpoints, reloadJour1filmEndpoints } from './scrapers/jour1film';
 import { getDocstreamStreams } from './scrapers/docstream';
 import { getZoneTelechargementStreams, getZoneTelechargementEndpoints, reloadZoneTelechargementEndpoints } from './scrapers/zonetelechargement';
 import { getNkstrmStreams, NkstrmAuthError, getNkstrmEndpoints, reloadNkstrmEndpoints } from './scrapers/nkstrm';
@@ -100,6 +101,7 @@ interface Stats {
     yablom: { requests: number; success: number; errors: number; lastSuccess: number | null };
     ianime: { requests: number; success: number; errors: number; lastSuccess: number | null };
     leizy: { requests: number; success: number; errors: number; lastSuccess: number | null };
+    jour1film: { requests: number; success: number; errors: number; lastSuccess: number | null };
   };
   streamsServed: {
     movix: number;
@@ -129,6 +131,7 @@ interface Stats {
     yablom: number;
     ianime: number;
     leizy: number;
+    jour1film: number;
   };
 }
 
@@ -163,11 +166,12 @@ const stats: Stats = {
     yablom: { requests: 0, success: 0, errors: 0, lastSuccess: null },
     ianime: { requests: 0, success: 0, errors: 0, lastSuccess: null },
     leizy: { requests: 0, success: 0, errors: 0, lastSuccess: null },
+    jour1film: { requests: 0, success: 0, errors: 0, lastSuccess: null },
   },
-  streamsServed: { movix: 0, netmirror: 0, streamflix: 0, frenchstream: 0, wiflix: 0, voirdrama: 0, moviebox: 0, voiranime: 0, nabistream: 0, coflix: 0, videasy: 0, animesama: 0, nkstrm: 0, vostfree: 0, wavewatch: 0, kordoz: 0, docstream: 0, ztstream: 0, cinestream: 0, dulourd: 0, zenix: 0, kisskh: 0, worldivx: 0, tokyvideo: 0, yablom: 0, ianime: 0, leizy: 0 },
+  streamsServed: { movix: 0, netmirror: 0, streamflix: 0, frenchstream: 0, wiflix: 0, voirdrama: 0, moviebox: 0, voiranime: 0, nabistream: 0, coflix: 0, videasy: 0, animesama: 0, nkstrm: 0, vostfree: 0, wavewatch: 0, kordoz: 0, docstream: 0, ztstream: 0, cinestream: 0, dulourd: 0, zenix: 0, kisskh: 0, worldivx: 0, tokyvideo: 0, yablom: 0, ianime: 0, leizy: 0, jour1film: 0 },
 };
 
-function trackSourceResult(source: 'movix' | 'netmirror' | 'streamflix' | 'frenchstream' | 'wiflix' | 'voirdrama' | 'moviebox' | 'voiranime' | 'nabistream' | 'coflix' | 'videasy' | 'animesama' | 'nkstrm' | 'vostfree' | 'wavewatch' | 'kordoz' | 'docstream' | 'ztstream' | 'cinestream' | 'dulourd' | 'zenix' | 'kisskh' | 'worldivx' | 'tokyvideo' | 'yablom' | 'ianime' | 'leizy', success: boolean, streamCount: number = 0) {
+function trackSourceResult(source: 'movix' | 'netmirror' | 'streamflix' | 'frenchstream' | 'wiflix' | 'voirdrama' | 'moviebox' | 'voiranime' | 'nabistream' | 'coflix' | 'videasy' | 'animesama' | 'nkstrm' | 'vostfree' | 'wavewatch' | 'kordoz' | 'docstream' | 'ztstream' | 'cinestream' | 'dulourd' | 'zenix' | 'kisskh' | 'worldivx' | 'tokyvideo' | 'yablom' | 'ianime' | 'leizy' | 'jour1film', success: boolean, streamCount: number = 0) {
   stats.sources[source].requests++;
   if (success) {
     stats.sources[source].success++;
@@ -1336,9 +1340,15 @@ async function handleStream(req: express.Request, res: express.Response, type: s
       (isSourceEnabled('leizy') ? getLeizyStreams(type as 'movie' | 'series', extractorConfig, info.frenchTitle || info.title, info.title, info.year ? Number(info.year) : undefined, parsed.season, parsed.episode, info.tmdbId, info.posters) : Promise.resolve([]))
         .then(r => { trackSourceResult('leizy', true, r.length); recordOutcome('leizy', r.length > 0 ? 'success' : 'empty'); return r; })
         .catch(e => { console.log('[Leizy] Error:', e?.message || e); trackSourceResult('leizy', false); recordOutcome('leizy', 'error', e?.message); return []; }),
+      // 1Jour1Film (annuaire « wow-films ») : films + séries FR VF/VOSTFR, WordPress
+      // DooPlay standard, domaine daté rotatif. Recherche via WP REST (le /?s= est CF-gaté) ;
+      // transport curl (mur CF empreinte-TLS). Keyé titre FR + tmdbId de la fiche.
+      (isSourceEnabled('jour1film') ? getJour1filmStreams(type as 'movie' | 'series', extractorConfig, info.frenchTitle || info.title, info.title, info.year ? Number(info.year) : undefined, parsed.season, parsed.episode, info.tmdbId) : Promise.resolve([]))
+        .then(r => { trackSourceResult('jour1film', true, r.length); recordOutcome('jour1film', r.length > 0 ? 'success' : 'empty'); return r; })
+        .catch(e => { console.log('[1Jour1Film] Error:', e?.message || e); trackSourceResult('jour1film', false); recordOutcome('jour1film', 'error', e?.message); return []; }),
     ];
 
-    const SOURCE_NAMES = ['netmirror', 'streamflix', 'movix', 'frenchstream', 'wiflix', 'voirdrama', 'moviebox', 'voiranime', 'nabistream', 'coflix', 'videasy', 'animesama', 'nkstrm', 'vostfree', 'wavewatch', 'kordoz', 'docstream', 'ztstream', 'cinestream', 'dulourd', 'zenix', 'kisskh', 'worldivx', 'tokyvideo', 'yablom', 'ianime', 'leizy'];
+    const SOURCE_NAMES = ['netmirror', 'streamflix', 'movix', 'frenchstream', 'wiflix', 'voirdrama', 'moviebox', 'voiranime', 'nabistream', 'coflix', 'videasy', 'animesama', 'nkstrm', 'vostfree', 'wavewatch', 'kordoz', 'docstream', 'ztstream', 'cinestream', 'dulourd', 'zenix', 'kisskh', 'worldivx', 'tokyvideo', 'yablom', 'ianime', 'leizy', 'jour1film'];
     const collected = await collectSources(
       sourcePromises.map((promise, i) => ({
         name: SOURCE_NAMES[i],
@@ -1399,6 +1409,7 @@ async function handleStream(req: express.Request, res: express.Response, type: s
     const yablomResults = collected[24] as Awaited<ReturnType<typeof getYablomStreams>>;
     const ianimeResults = collected[25] as Awaited<ReturnType<typeof getIanimeStreams>>;
     const leizyResults = collected[26] as Awaited<ReturnType<typeof getLeizyStreams>>;
+    const jour1filmResults = collected[27] as Awaited<ReturnType<typeof getJour1filmStreams>>;
 
     // On accumule des "drafts" (streams sans name/title). name/title sont posés
     // en UNE passe centralisée plus bas (src/display.ts), pour un rendu uniforme.
@@ -1707,6 +1718,25 @@ async function handleStream(req: express.Request, res: express.Response, type: s
           ...(d.proxyHeaders ? { proxyHeaders: { request: d.proxyHeaders } } : {}),
         },
         _meta: { quality: lz.quality, language: lz.language, source: 'leizy', server: lz.server },
+      });
+    }
+
+    // 1Jour1Film : films + séries FR VF/VOSTFR (DooPlay ; hôtes vidara/luluvdo/vidmoly…).
+    // deliver() décide (HLS luluvdo/tnmr -> proxy du mode ; vidara -> direct si joignable).
+    for (const jf of jour1filmResults) {
+      const d = await deliver(jf.url, {
+        ...(jf.headers || {}),
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+      }, { forceHls: /\.m3u8/i.test(jf.url) }, req, config);
+      if (!d) continue;
+      drafts.push({
+        url: d.url,
+        behaviorHints: {
+          notWebReady: !!d.proxyHeaders,
+          bingeGroup: `jour1film-${jf.server}`,
+          ...(d.proxyHeaders ? { proxyHeaders: { request: d.proxyHeaders } } : {}),
+        },
+        _meta: { quality: jf.quality, language: jf.language, source: 'jour1film', server: jf.server },
       });
     }
 
@@ -2682,6 +2712,10 @@ app.get('/api/leizy/endpoints', (req, res) => {
   const reload = req.query.reload === 'true';
   res.json({ ...(reload ? reloadLeizyEndpoints() : getLeizyEndpoints()), reloaded: reload });
 });
+app.get('/api/jour1film/endpoints', (req, res) => {
+  const reload = req.query.reload === 'true';
+  res.json({ ...(reload ? reloadJour1filmEndpoints() : getJour1filmEndpoints()), reloaded: reload });
+});
 app.get('/api/kisskh/endpoints', (req, res) => {
   const reload = req.query.reload === 'true';
   res.json({ ...(reload ? reloadKisskhEndpoints() : getKisskhEndpoints()), reloaded: reload });
@@ -2746,6 +2780,7 @@ const singleBaseSources: Array<{ path: string; file: string; reload: () => unkno
   { path: 'yablom', file: 'yablom-endpoints.json', reload: reloadYablomEndpoints },
   { path: 'ianime', file: 'ianime-endpoints.json', reload: reloadIanimeEndpoints },
   { path: 'leizy', file: 'leizy-endpoints.json', reload: reloadLeizyEndpoints },
+  { path: 'jour1film', file: 'jour1film-endpoints.json', reload: reloadJour1filmEndpoints },
   { path: 'nkstrm', file: 'nkstrm-endpoints.json', reload: reloadNkstrmEndpoints },
 ];
 for (const src of singleBaseSources) {
@@ -3383,6 +3418,14 @@ app.get('/api/health', async (_req, res) => {
     results.leizy = { status: ok ? 'up' : 'degraded', latency: Date.now() - lzStart };
   } catch (e: any) {
     results.leizy = { status: 'down', error: e.message };
+  }
+
+  const jfStart = Date.now();
+  try {
+    const ok = await jour1filmProbe();
+    results.jour1film = { status: ok ? 'up' : 'degraded', latency: Date.now() - jfStart };
+  } catch (e: any) {
+    results.jour1film = { status: 'down', error: e.message };
   }
 
   // Une source coupée dans l'admin ne compte plus : ni dans l'état global, ni pour
