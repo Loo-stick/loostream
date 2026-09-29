@@ -389,7 +389,10 @@ async function resolveEpisodeId(
     if (!target) return null;
 
     // Fast path: post.php already returned the requested season's episodes.
-    const selected = seasons.find(s => String(s?.sele || '').includes('select'));
+    // Only when exactly ONE season is flagged: netfree sometimes flags them all
+    // (Iryu: S1+S2 "selected" while episodes are S2's) -> S1E1 would map to S2E1.
+    const flagged = seasons.filter(s => String(s?.sele || '').includes('select'));
+    const selected = flagged.length === 1 ? flagged[0] : null;
     if (selected && String(selected.s) === String(season)) {
       const id = findEp(post?.episodes);
       if (id) return id;

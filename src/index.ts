@@ -924,7 +924,10 @@ function tmdbKeyHash(key: string): string {
 
 const TMDB_TTL_MS = 12 * 60 * 60 * 1000;
 
-type MediaInfo = { title: string; originalTitle: string; frenchTitle: string; year: string; tmdbId: string; imdbId: string; originalLanguage: string };
+// isAnimation : genre TMDB Animation (16). Distingue l'anime d'un drama japonais en
+// prises de vues réelles (Iryu…) — `ja` seul envoyait ces dramas aux sources anime.
+// Optionnel : absent des entrées tmdb:info déjà en cache -> traité comme « inconnu ».
+type MediaInfo = { title: string; originalTitle: string; frenchTitle: string; year: string; tmdbId: string; imdbId: string; originalLanguage: string; isAnimation?: boolean };
 
 // Repli Cinemeta (métadonnées IMDB de Stremio) quand TMDB ne connaît pas l'IMDB — FRÉQUENT
 // pour l'anime à entrée IMDB séparée (ex. « Bleach: Thousand-Year Blood War » tt14986406,
@@ -943,7 +946,7 @@ async function cinemetaInfo(type: string, id: string): Promise<MediaInfo | null>
     console.log(`[Stream] TMDB manquant -> repli Cinemeta: "${m.name}" (${year})${isAnime ? ' [anime]' : ''}`);
     return {
       title: m.name, originalTitle: m.name, frenchTitle: '', year,
-      tmdbId: '', imdbId: id, originalLanguage: isAnime ? 'ja' : '',
+      tmdbId: '', imdbId: id, originalLanguage: isAnime ? 'ja' : '', isAnimation: isAnime,
     };
   } catch { return null; }
 }
@@ -984,7 +987,7 @@ async function resolveAnimeTmdbMapping(imdbId: string, title: string, season: nu
   }, { scope: 'tmdb', shouldCache: r => r !== null });
 }
 
-async function getTmdbInfo(type: string, id: string, config?: UserConfig | null): Promise<{ title: string; originalTitle: string; frenchTitle: string; year: string; tmdbId: string; imdbId: string; originalLanguage: string } | null> {
+async function getTmdbInfo(type: string, id: string, config?: UserConfig | null): Promise<MediaInfo | null> {
   const tmdbKey = config?.tmdbKey || DEFAULT_TMDB_KEY;
 
   if (!tmdbKey) {
@@ -1035,12 +1038,13 @@ async function getTmdbInfo(type: string, id: string, config?: UserConfig | null)
         }
 
         const originalLanguage = String(resp.data.original_language || '').toLowerCase();
+        const isAnimation = Array.isArray(resp.data.genres) && resp.data.genres.some((g: any) => g?.id === 16);
 
         // Titre FR (récupéré en parallèle plus haut) : les sites FR indexent
         // par le titre français, pas l'anglais/original.
         const frenchTitle = frResp?.data?.title || frResp?.data?.name || '';
 
-        return { title, originalTitle, frenchTitle, year, tmdbId, imdbId, originalLanguage };
+        return { title, originalTitle, frenchTitle, year, tmdbId, imdbId, originalLanguage, isAnimation };
       } catch (e) {
         console.error('[TMDB] Error:', e);
         return null;
@@ -1118,6 +1122,9 @@ async function handleStream(req: express.Request, res: express.Response, type: s
       return res.json({ streams: [] });
     }
     recTitle = info.title;
+    // Anime = japonais ET animation. `!== false` : une entrée tmdb:info d'avant le champ
+    // (undefined) garde l'ancien comportement jusqu'à expiration du cache.
+    const isJaAnime = info.originalLanguage === 'ja' && info.isAnimation !== false;
 
     console.log(`[Stream] 👤 ${who} · Title: ${info.title} (${info.year})`);
 
@@ -1146,7 +1153,7 @@ async function handleStream(req: express.Request, res: express.Response, type: s
     // Titre ROMAJI (AniList, keyless) pour l'anime : les sites FR indexent souvent en
     // romaji. Lancé EN PARALLÈLE du fan-out (seuls VoirAnime/AnimeSama l'attendent),
     // gaté ja -> zéro coût pour le reste. [] si non-anime ou lookup KO.
-    const animeAltsPromise: Promise<string[]> = info.originalLanguage === 'ja'
+    const animeAltsPromise: Promise<string[]> = isJaAnime
       ? getAnimeAltTitles(info.title, info.originalTitle).catch(() => [])
       : Promise.resolve([]);
 
@@ -1171,7 +1178,7 @@ async function handleStream(req: express.Request, res: express.Response, type: s
         .then(r => { trackSourceResult('streamflix', true, r.length); recordOutcome('streamflix', r.length > 0 ? 'success' : 'empty'); return r; })
         .catch(e => { console.log('[StreamFlix] Error:', e); trackSourceResult('streamflix', false); recordOutcome('streamflix', 'error', e?.message); return []; }),
       (isSourceEnabled('movix') ? (async () => {
-        const isAnime = info.originalLanguage === 'ja' && type === 'series' && !!parsed.season && !!parsed.episode;
+        const isAnime = isJaAnime && type === 'series' && !!parsed.season && !!parsed.episode;
         // Anime sans tmdb direct (repli Cinemeta) : mappe vers (tmdb parent, saison, ép) par
         // date de diffusion pour atteindre le Movix (purstream/cpasmal…) rangé sous la série parente.
         let mvId = info.tmdbId, mvS = parsed.season, mvE = parsed.episode;
@@ -1203,10 +1210,10 @@ async function handleStream(req: express.Request, res: express.Response, type: s
         .then(r => { trackSourceResult('moviebox', true, r.length); recordOutcome('moviebox', r.length > 0 ? 'success' : 'empty'); return r; })
         .catch(e => { console.log('[MovieBox] Error:', e); trackSourceResult('moviebox', false); recordOutcome('moviebox', 'error', e?.message); return []; }),
       // VoirAnime : anime uniquement (originalLanguage japonais).
-      (isSourceEnabled('voiranime') && info.originalLanguage === 'ja'
+      (isSourceEnabled('voiranime') && isJaAnime
         ? animeAltsPromise.then(alts => getVoirAnimeStreams(parsed.baseId, type as 'movie' | 'series', extractorConfig, parsed.season, parsed.episode, info.title, info.originalTitle, alts))
         : Promise.resolve([]))
-        .then(r => { if (info.originalLanguage === 'ja') { trackSourceResult('voiranime', true, r.length); recordOutcome('voiranime', r.length > 0 ? 'success' : 'empty'); } return r; })
+        .then(r => { if (isJaAnime) { trackSourceResult('voiranime', true, r.length); recordOutcome('voiranime', r.length > 0 ? 'success' : 'empty'); } return r; })
         .catch(e => { console.log('[VoirAnime] Error:', e); trackSourceResult('voiranime', false); recordOutcome('voiranime', 'error', e?.message); return []; }),
       // Nabistream : dramas coréens/asiatiques VOSTFR (API keyée TMDB).
       (isSourceEnabled('nabistream') ? getNabistreamStreams(info.tmdbId, type as 'movie' | 'series', parsed.season, parsed.episode) : Promise.resolve([]))
@@ -1221,10 +1228,10 @@ async function handleStream(req: express.Request, res: express.Response, type: s
         .then(r => { trackSourceResult('videasy', true, r.length); recordOutcome('videasy', r.length > 0 ? 'success' : 'empty'); return r; })
         .catch(e => { console.log('[Videasy] Error:', e); trackSourceResult('videasy', false); recordOutcome('videasy', 'error', e?.message); return []; }),
       // AnimeSama : anime uniquement (originalLanguage japonais).
-      (isSourceEnabled('animesama') && info.originalLanguage === 'ja'
+      (isSourceEnabled('animesama') && isJaAnime
         ? animeAltsPromise.then(alts => getAnimeSamaStreams(type as 'movie' | 'series', [info.title, info.originalTitle, info.frenchTitle, ...alts].filter(Boolean) as string[], parsed.season, parsed.episode, extractorConfig))
         : Promise.resolve([]))
-        .then(r => { if (info.originalLanguage === 'ja') { trackSourceResult('animesama', true, r.length); recordOutcome('animesama', r.length > 0 ? 'success' : 'empty'); } return r; })
+        .then(r => { if (isJaAnime) { trackSourceResult('animesama', true, r.length); recordOutcome('animesama', r.length > 0 ? 'success' : 'empty'); } return r; })
         .catch(e => { console.log('[AnimeSama] Error:', e); trackSourceResult('animesama', false); recordOutcome('animesama', 'error', e?.message); return []; }),
       // nkstrm : source OPT-IN par utilisateur (token de pairing dans la config).
       (isSourceEnabled('nkstrm') && config?.nkstrmToken
@@ -1237,10 +1244,10 @@ async function handleStream(req: express.Request, res: express.Response, type: s
           return [];
         }),
       // Vostfree : anime VF/VOSTFR uniquement (originalLanguage japonais), keyé titre.
-      (isSourceEnabled('vostfree') && info.originalLanguage === 'ja'
+      (isSourceEnabled('vostfree') && isJaAnime
         ? animeAltsPromise.then(alts => getVostfreeStreams(parsed.baseId, type as 'movie' | 'series', extractorConfig, parsed.season, parsed.episode, [info.title, info.originalTitle, info.frenchTitle, ...alts].filter(Boolean) as string[]))
         : Promise.resolve([]))
-        .then(r => { if (info.originalLanguage === 'ja') { trackSourceResult('vostfree', true, r.length); recordOutcome('vostfree', r.length > 0 ? 'success' : 'empty'); } return r; })
+        .then(r => { if (isJaAnime) { trackSourceResult('vostfree', true, r.length); recordOutcome('vostfree', r.length > 0 ? 'success' : 'empty'); } return r; })
         .catch(e => { console.log('[Vostfree] Error:', e); trackSourceResult('vostfree', false); recordOutcome('vostfree', 'error', e?.message); return []; }),
       // WaveWatch / ToFlix : agrégateur d'embeds keyé par tmdbId (finepulfe m3u8 direct +
       // hôtes vidzy/uqload/vidara/fsvid…). Skippé sans tmdbId (return [] interne).
@@ -1306,10 +1313,10 @@ async function handleStream(req: express.Request, res: express.Response, type: s
         .catch(e => { console.log('[Yablom] Error:', e?.message || e); trackSourceResult('yablom', false); recordOutcome('yablom', 'error', e?.message); return []; }),
       // IAnime : anime FR VF+VOSTFR (originalLanguage japonais). Recherche POST, hôtes
       // vidmoly/voe/streamtape/mail.ru déjà extraits. Titres alternatifs (romaji) comme VoirAnime.
-      (isSourceEnabled('ianime') && info.originalLanguage === 'ja'
+      (isSourceEnabled('ianime') && isJaAnime
         ? animeAltsPromise.then(alts => getIanimeStreams(parsed.baseId, type as 'movie' | 'series', extractorConfig, parsed.season, parsed.episode, info.title, info.originalTitle, alts))
         : Promise.resolve([]))
-        .then(r => { if (info.originalLanguage === 'ja') { trackSourceResult('ianime', true, r.length); recordOutcome('ianime', r.length > 0 ? 'success' : 'empty'); } return r; })
+        .then(r => { if (isJaAnime) { trackSourceResult('ianime', true, r.length); recordOutcome('ianime', r.length > 0 ? 'success' : 'empty'); } return r; })
         .catch(e => { console.log('[IAnime] Error:', e?.message || e); trackSourceResult('ianime', false); recordOutcome('ianime', 'error', e?.message); return []; }),
     ];
 
@@ -1330,7 +1337,7 @@ async function handleStream(req: express.Request, res: express.Response, type: s
       // Rapide (recherche + fiche + signature, en cache), mais on ne laisse pas des
       // sources instantanées remplir le quota avant qu'elle réponde.
       [
-        ...(info.originalLanguage === 'ja'
+        ...(isJaAnime
           ? [SOURCE_NAMES.indexOf('voiranime'), SOURCE_NAMES.indexOf('animesama'), SOURCE_NAMES.indexOf('vostfree'), SOURCE_NAMES.indexOf('ianime')]
           : []),
         ...(isKisskhLanguage(info.originalLanguage) ? [SOURCE_NAMES.indexOf('kisskh')] : []),

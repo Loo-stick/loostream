@@ -613,7 +613,7 @@ async function searchMovixAnime(titles: string[]): Promise<AsSeason[] | null> {
       const anime = list.find(a => {
         const cands = [a.name, ...(a.alternative_names || [])].filter(Boolean);
         return cands.some((c: string) => titlesMatch(titles, c));
-      }) || list[0];
+      }); // pas de repli sur list[0] : le fuzzy Movix ramène n'importe quoi (« Iryu » -> « Monsters »)
       if (anime?.seasons?.length) {
         console.log(`[MovixAnime] "${q}" -> "${anime.name}" (${anime.seasons.length} saisons)`);
         return anime.seasons as AsSeason[];
