@@ -26,6 +26,7 @@ import { getYablomStreams, yablomProbe, getYablomEndpoints, reloadYablomEndpoint
 import { getIanimeStreams, ianimeProbe, getIanimeEndpoints, reloadIanimeEndpoints } from './scrapers/ianime';
 import { getLeizyStreams, leizyProbe, getLeizyEndpoints, reloadLeizyEndpoints } from './scrapers/leizy';
 import { getJour1filmStreams, jour1filmProbe, getJour1filmEndpoints, reloadJour1filmEndpoints } from './scrapers/jour1film';
+import { getCinepulseStreams, cinepulseProbe, getCinepulseEndpoints, reloadCinepulseEndpoints } from './scrapers/cinepulse';
 import { getDocstreamStreams } from './scrapers/docstream';
 import { getZoneTelechargementStreams, getZoneTelechargementEndpoints, reloadZoneTelechargementEndpoints } from './scrapers/zonetelechargement';
 import { getNkstrmStreams, NkstrmAuthError, getNkstrmEndpoints, reloadNkstrmEndpoints } from './scrapers/nkstrm';
@@ -102,6 +103,7 @@ interface Stats {
     ianime: { requests: number; success: number; errors: number; lastSuccess: number | null };
     leizy: { requests: number; success: number; errors: number; lastSuccess: number | null };
     jour1film: { requests: number; success: number; errors: number; lastSuccess: number | null };
+    cinepulse: { requests: number; success: number; errors: number; lastSuccess: number | null };
   };
   streamsServed: {
     movix: number;
@@ -132,6 +134,7 @@ interface Stats {
     ianime: number;
     leizy: number;
     jour1film: number;
+    cinepulse: number;
   };
 }
 
@@ -167,11 +170,12 @@ const stats: Stats = {
     ianime: { requests: 0, success: 0, errors: 0, lastSuccess: null },
     leizy: { requests: 0, success: 0, errors: 0, lastSuccess: null },
     jour1film: { requests: 0, success: 0, errors: 0, lastSuccess: null },
+    cinepulse: { requests: 0, success: 0, errors: 0, lastSuccess: null },
   },
-  streamsServed: { movix: 0, netmirror: 0, streamflix: 0, frenchstream: 0, wiflix: 0, voirdrama: 0, moviebox: 0, voiranime: 0, nabistream: 0, coflix: 0, videasy: 0, animesama: 0, nkstrm: 0, vostfree: 0, wavewatch: 0, kordoz: 0, docstream: 0, ztstream: 0, cinestream: 0, dulourd: 0, zenix: 0, kisskh: 0, worldivx: 0, tokyvideo: 0, yablom: 0, ianime: 0, leizy: 0, jour1film: 0 },
+  streamsServed: { movix: 0, netmirror: 0, streamflix: 0, frenchstream: 0, wiflix: 0, voirdrama: 0, moviebox: 0, voiranime: 0, nabistream: 0, coflix: 0, videasy: 0, animesama: 0, nkstrm: 0, vostfree: 0, wavewatch: 0, kordoz: 0, docstream: 0, ztstream: 0, cinestream: 0, dulourd: 0, zenix: 0, kisskh: 0, worldivx: 0, tokyvideo: 0, yablom: 0, ianime: 0, leizy: 0, jour1film: 0, cinepulse: 0 },
 };
 
-function trackSourceResult(source: 'movix' | 'netmirror' | 'streamflix' | 'frenchstream' | 'wiflix' | 'voirdrama' | 'moviebox' | 'voiranime' | 'nabistream' | 'coflix' | 'videasy' | 'animesama' | 'nkstrm' | 'vostfree' | 'wavewatch' | 'kordoz' | 'docstream' | 'ztstream' | 'cinestream' | 'dulourd' | 'zenix' | 'kisskh' | 'worldivx' | 'tokyvideo' | 'yablom' | 'ianime' | 'leizy' | 'jour1film', success: boolean, streamCount: number = 0) {
+function trackSourceResult(source: 'movix' | 'netmirror' | 'streamflix' | 'frenchstream' | 'wiflix' | 'voirdrama' | 'moviebox' | 'voiranime' | 'nabistream' | 'coflix' | 'videasy' | 'animesama' | 'nkstrm' | 'vostfree' | 'wavewatch' | 'kordoz' | 'docstream' | 'ztstream' | 'cinestream' | 'dulourd' | 'zenix' | 'kisskh' | 'worldivx' | 'tokyvideo' | 'yablom' | 'ianime' | 'leizy' | 'jour1film' | 'cinepulse', success: boolean, streamCount: number = 0) {
   stats.sources[source].requests++;
   if (success) {
     stats.sources[source].success++;
@@ -1346,9 +1350,15 @@ async function handleStream(req: express.Request, res: express.Response, type: s
       (isSourceEnabled('jour1film') ? getJour1filmStreams(type as 'movie' | 'series', extractorConfig, info.frenchTitle || info.title, info.title, info.year ? Number(info.year) : undefined, parsed.season, parsed.episode, info.tmdbId) : Promise.resolve([]))
         .then(r => { trackSourceResult('jour1film', true, r.length); recordOutcome('jour1film', r.length > 0 ? 'success' : 'empty'); return r; })
         .catch(e => { console.log('[1Jour1Film] Error:', e?.message || e); trackSourceResult('jour1film', false); recordOutcome('jour1film', 'error', e?.message); return []; }),
+      // Cinepulse (cinepulse.live) : FILMS FR VF/VOSTFR uniquement. App Laravel Livewire
+      // (recherche POST /livewire/update, serveurs dans la fiche). Hôtes vidzy/uqload/livavid.
+      // Keyé titre FR + poster TMDB (pas d'id TMDB dans la fiche).
+      (isSourceEnabled('cinepulse') ? getCinepulseStreams(type as 'movie' | 'series', extractorConfig, info.frenchTitle || info.title, info.title, info.posters) : Promise.resolve([]))
+        .then(r => { trackSourceResult('cinepulse', true, r.length); recordOutcome('cinepulse', r.length > 0 ? 'success' : 'empty'); return r; })
+        .catch(e => { console.log('[Cinepulse] Error:', e?.message || e); trackSourceResult('cinepulse', false); recordOutcome('cinepulse', 'error', e?.message); return []; }),
     ];
 
-    const SOURCE_NAMES = ['netmirror', 'streamflix', 'movix', 'frenchstream', 'wiflix', 'voirdrama', 'moviebox', 'voiranime', 'nabistream', 'coflix', 'videasy', 'animesama', 'nkstrm', 'vostfree', 'wavewatch', 'kordoz', 'docstream', 'ztstream', 'cinestream', 'dulourd', 'zenix', 'kisskh', 'worldivx', 'tokyvideo', 'yablom', 'ianime', 'leizy', 'jour1film'];
+    const SOURCE_NAMES = ['netmirror', 'streamflix', 'movix', 'frenchstream', 'wiflix', 'voirdrama', 'moviebox', 'voiranime', 'nabistream', 'coflix', 'videasy', 'animesama', 'nkstrm', 'vostfree', 'wavewatch', 'kordoz', 'docstream', 'ztstream', 'cinestream', 'dulourd', 'zenix', 'kisskh', 'worldivx', 'tokyvideo', 'yablom', 'ianime', 'leizy', 'jour1film', 'cinepulse'];
     const collected = await collectSources(
       sourcePromises.map((promise, i) => ({
         name: SOURCE_NAMES[i],
@@ -1410,6 +1420,7 @@ async function handleStream(req: express.Request, res: express.Response, type: s
     const ianimeResults = collected[25] as Awaited<ReturnType<typeof getIanimeStreams>>;
     const leizyResults = collected[26] as Awaited<ReturnType<typeof getLeizyStreams>>;
     const jour1filmResults = collected[27] as Awaited<ReturnType<typeof getJour1filmStreams>>;
+    const cinepulseResults = collected[28] as Awaited<ReturnType<typeof getCinepulseStreams>>;
 
     // On accumule des "drafts" (streams sans name/title). name/title sont posés
     // en UNE passe centralisée plus bas (src/display.ts), pour un rendu uniforme.
@@ -1737,6 +1748,39 @@ async function handleStream(req: express.Request, res: express.Response, type: s
           ...(d.proxyHeaders ? { proxyHeaders: { request: d.proxyHeaders } } : {}),
         },
         _meta: { quality: jf.quality, language: jf.language, source: 'jour1film', server: jf.server },
+      });
+    }
+
+    // Cinepulse : FILMS FR VF/VOSTFR (hôtes vidzy/uqload/livavid). vidzy joue en direct,
+    // uqload passe par le proxy du MODE (MediaFlow) -> deliver() décide. MAIS livavid résout
+    // vers tnmr, dont le token est LIÉ À L'IP du serveur d'extraction : MediaFlow (IP distante)
+    // le rejette. Donc : proxy LOCAL forcé pour tnmr quand permis (owner/local) ;
+    // sinon deliver() en secours. UA de repli AVANT le spread (l'UA de l'extracteur gagne).
+    for (const cp of cinepulseResults) {
+      const headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        ...(cp.headers || {}),
+      };
+      const ipBound = /tnmr\.org/i.test(cp.url) || /[?&]asn=/i.test(cp.url);
+      let url: string;
+      let proxyHeaders: Record<string, string> | undefined;
+      if (ipBound && localProxyAllowed) {
+        const purl = buildProxyUrl(cp.url, headers, false, req, config, true, /\.m3u8/i.test(cp.url));
+        if (!purl) continue;
+        url = purl;
+      } else {
+        const d = await deliver(cp.url, headers, { forceHls: /\.m3u8/i.test(cp.url) }, req, config);
+        if (!d) continue;
+        url = d.url; proxyHeaders = d.proxyHeaders;
+      }
+      drafts.push({
+        url,
+        behaviorHints: {
+          notWebReady: !!proxyHeaders,
+          bingeGroup: `cinepulse-${cp.server}`,
+          ...(proxyHeaders ? { proxyHeaders: { request: proxyHeaders } } : {}),
+        },
+        _meta: { quality: cp.quality, language: cp.language, source: 'cinepulse', server: cp.server },
       });
     }
 
@@ -2716,6 +2760,10 @@ app.get('/api/jour1film/endpoints', (req, res) => {
   const reload = req.query.reload === 'true';
   res.json({ ...(reload ? reloadJour1filmEndpoints() : getJour1filmEndpoints()), reloaded: reload });
 });
+app.get('/api/cinepulse/endpoints', (req, res) => {
+  const reload = req.query.reload === 'true';
+  res.json({ ...(reload ? reloadCinepulseEndpoints() : getCinepulseEndpoints()), reloaded: reload });
+});
 app.get('/api/kisskh/endpoints', (req, res) => {
   const reload = req.query.reload === 'true';
   res.json({ ...(reload ? reloadKisskhEndpoints() : getKisskhEndpoints()), reloaded: reload });
@@ -2781,6 +2829,7 @@ const singleBaseSources: Array<{ path: string; file: string; reload: () => unkno
   { path: 'ianime', file: 'ianime-endpoints.json', reload: reloadIanimeEndpoints },
   { path: 'leizy', file: 'leizy-endpoints.json', reload: reloadLeizyEndpoints },
   { path: 'jour1film', file: 'jour1film-endpoints.json', reload: reloadJour1filmEndpoints },
+  { path: 'cinepulse', file: 'cinepulse-endpoints.json', reload: reloadCinepulseEndpoints },
   { path: 'nkstrm', file: 'nkstrm-endpoints.json', reload: reloadNkstrmEndpoints },
 ];
 for (const src of singleBaseSources) {
@@ -3426,6 +3475,14 @@ app.get('/api/health', async (_req, res) => {
     results.jour1film = { status: ok ? 'up' : 'degraded', latency: Date.now() - jfStart };
   } catch (e: any) {
     results.jour1film = { status: 'down', error: e.message };
+  }
+
+  const cpStart = Date.now();
+  try {
+    const ok = await cinepulseProbe();
+    results.cinepulse = { status: ok ? 'up' : 'degraded', latency: Date.now() - cpStart };
+  } catch (e: any) {
+    results.cinepulse = { status: 'down', error: e.message };
   }
 
   // Une source coupée dans l'admin ne compte plus : ni dans l'état global, ni pour
