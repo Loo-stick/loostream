@@ -28,6 +28,7 @@ import { getLeizyStreams, leizyProbe, getLeizyEndpoints, reloadLeizyEndpoints } 
 import { getJour1filmStreams, jour1filmProbe, getJour1filmEndpoints, reloadJour1filmEndpoints } from './scrapers/jour1film';
 import { getCinepulseStreams, cinepulseProbe, getCinepulseEndpoints, reloadCinepulseEndpoints } from './scrapers/cinepulse';
 import { getMavanimeStreams, mavanimeProbe, getMavanimeEndpoints, reloadMavanimeEndpoints } from './scrapers/mavanime';
+import { getAnimesiteStreams, animesiteProbe, getAnimesiteEndpoints, reloadAnimesiteEndpoints } from './scrapers/animesite';
 import { getDocstreamStreams } from './scrapers/docstream';
 import { getZoneTelechargementStreams, getZoneTelechargementEndpoints, reloadZoneTelechargementEndpoints } from './scrapers/zonetelechargement';
 import { getNkstrmStreams, NkstrmAuthError, getNkstrmEndpoints, reloadNkstrmEndpoints } from './scrapers/nkstrm';
@@ -106,6 +107,7 @@ interface Stats {
     jour1film: { requests: number; success: number; errors: number; lastSuccess: number | null };
     cinepulse: { requests: number; success: number; errors: number; lastSuccess: number | null };
     mavanime: { requests: number; success: number; errors: number; lastSuccess: number | null };
+    animesite: { requests: number; success: number; errors: number; lastSuccess: number | null };
   };
   streamsServed: {
     movix: number;
@@ -138,6 +140,7 @@ interface Stats {
     jour1film: number;
     cinepulse: number;
     mavanime: number;
+    animesite: number;
   };
 }
 
@@ -175,11 +178,12 @@ const stats: Stats = {
     jour1film: { requests: 0, success: 0, errors: 0, lastSuccess: null },
     cinepulse: { requests: 0, success: 0, errors: 0, lastSuccess: null },
     mavanime: { requests: 0, success: 0, errors: 0, lastSuccess: null },
+    animesite: { requests: 0, success: 0, errors: 0, lastSuccess: null },
   },
-  streamsServed: { movix: 0, netmirror: 0, streamflix: 0, frenchstream: 0, wiflix: 0, voirdrama: 0, moviebox: 0, voiranime: 0, nabistream: 0, coflix: 0, videasy: 0, animesama: 0, nkstrm: 0, vostfree: 0, wavewatch: 0, kordoz: 0, docstream: 0, ztstream: 0, cinestream: 0, dulourd: 0, zenix: 0, kisskh: 0, worldivx: 0, tokyvideo: 0, yablom: 0, ianime: 0, leizy: 0, jour1film: 0, cinepulse: 0, mavanime: 0 },
+  streamsServed: { movix: 0, netmirror: 0, streamflix: 0, frenchstream: 0, wiflix: 0, voirdrama: 0, moviebox: 0, voiranime: 0, nabistream: 0, coflix: 0, videasy: 0, animesama: 0, nkstrm: 0, vostfree: 0, wavewatch: 0, kordoz: 0, docstream: 0, ztstream: 0, cinestream: 0, dulourd: 0, zenix: 0, kisskh: 0, worldivx: 0, tokyvideo: 0, yablom: 0, ianime: 0, leizy: 0, jour1film: 0, cinepulse: 0, mavanime: 0, animesite: 0 },
 };
 
-function trackSourceResult(source: 'movix' | 'netmirror' | 'streamflix' | 'frenchstream' | 'wiflix' | 'voirdrama' | 'moviebox' | 'voiranime' | 'nabistream' | 'coflix' | 'videasy' | 'animesama' | 'nkstrm' | 'vostfree' | 'wavewatch' | 'kordoz' | 'docstream' | 'ztstream' | 'cinestream' | 'dulourd' | 'zenix' | 'kisskh' | 'worldivx' | 'tokyvideo' | 'yablom' | 'ianime' | 'leizy' | 'jour1film' | 'cinepulse' | 'mavanime', success: boolean, streamCount: number = 0) {
+function trackSourceResult(source: 'movix' | 'netmirror' | 'streamflix' | 'frenchstream' | 'wiflix' | 'voirdrama' | 'moviebox' | 'voiranime' | 'nabistream' | 'coflix' | 'videasy' | 'animesama' | 'nkstrm' | 'vostfree' | 'wavewatch' | 'kordoz' | 'docstream' | 'ztstream' | 'cinestream' | 'dulourd' | 'zenix' | 'kisskh' | 'worldivx' | 'tokyvideo' | 'yablom' | 'ianime' | 'leizy' | 'jour1film' | 'cinepulse' | 'mavanime' | 'animesite', success: boolean, streamCount: number = 0) {
   stats.sources[source].requests++;
   if (success) {
     stats.sources[source].success++;
@@ -1368,9 +1372,17 @@ async function handleStream(req: express.Request, res: express.Response, type: s
         : Promise.resolve([]))
         .then(r => { if (isJaAnime) { trackSourceResult('mavanime', true, r.length); recordOutcome('mavanime', r.length > 0 ? 'success' : 'empty'); } return r; })
         .catch(e => { console.log('[Mavanime] Error:', e?.message || e); trackSourceResult('mavanime', false); recordOutcome('mavanime', 'error', e?.message); return []; }),
+      // AnimeSite : anime uniquement (originalLanguage japonais). Next.js FR VF/VOSTFR,
+      // catalogue via sitemap (slug->idAndSlug), flux via /api/stream/token (Origin) -> /v/
+      // -> hôtes sibnet/vidmoly/voe… (ou HLS direct). Alts romaji (AniList).
+      (isSourceEnabled('animesite') && isJaAnime
+        ? animeAltsPromise.then(alts => getAnimesiteStreams(parsed.baseId, type as 'movie' | 'series', extractorConfig, parsed.season, parsed.episode, info.title, info.originalTitle, alts))
+        : Promise.resolve([]))
+        .then(r => { if (isJaAnime) { trackSourceResult('animesite', true, r.length); recordOutcome('animesite', r.length > 0 ? 'success' : 'empty'); } return r; })
+        .catch(e => { console.log('[AnimeSite] Error:', e?.message || e); trackSourceResult('animesite', false); recordOutcome('animesite', 'error', e?.message); return []; }),
     ];
 
-    const SOURCE_NAMES = ['netmirror', 'streamflix', 'movix', 'frenchstream', 'wiflix', 'voirdrama', 'moviebox', 'voiranime', 'nabistream', 'coflix', 'videasy', 'animesama', 'nkstrm', 'vostfree', 'wavewatch', 'kordoz', 'docstream', 'ztstream', 'cinestream', 'dulourd', 'zenix', 'kisskh', 'worldivx', 'tokyvideo', 'yablom', 'ianime', 'leizy', 'jour1film', 'cinepulse', 'mavanime'];
+    const SOURCE_NAMES = ['netmirror', 'streamflix', 'movix', 'frenchstream', 'wiflix', 'voirdrama', 'moviebox', 'voiranime', 'nabistream', 'coflix', 'videasy', 'animesama', 'nkstrm', 'vostfree', 'wavewatch', 'kordoz', 'docstream', 'ztstream', 'cinestream', 'dulourd', 'zenix', 'kisskh', 'worldivx', 'tokyvideo', 'yablom', 'ianime', 'leizy', 'jour1film', 'cinepulse', 'mavanime', 'animesite'];
     const collected = await collectSources(
       sourcePromises.map((promise, i) => ({
         name: SOURCE_NAMES[i],
@@ -1388,7 +1400,7 @@ async function handleStream(req: express.Request, res: express.Response, type: s
       // sources instantanées remplir le quota avant qu'elle réponde.
       [
         ...(isJaAnime
-          ? [SOURCE_NAMES.indexOf('voiranime'), SOURCE_NAMES.indexOf('animesama'), SOURCE_NAMES.indexOf('vostfree'), SOURCE_NAMES.indexOf('ianime'), SOURCE_NAMES.indexOf('mavanime')]
+          ? [SOURCE_NAMES.indexOf('voiranime'), SOURCE_NAMES.indexOf('animesama'), SOURCE_NAMES.indexOf('vostfree'), SOURCE_NAMES.indexOf('ianime'), SOURCE_NAMES.indexOf('mavanime'), SOURCE_NAMES.indexOf('animesite')]
           : []),
         ...(isKisskhLanguage(info.originalLanguage) ? [SOURCE_NAMES.indexOf('kisskh')] : []),
       ]
@@ -1434,6 +1446,7 @@ async function handleStream(req: express.Request, res: express.Response, type: s
     const jour1filmResults = collected[27] as Awaited<ReturnType<typeof getJour1filmStreams>>;
     const cinepulseResults = collected[28] as Awaited<ReturnType<typeof getCinepulseStreams>>;
     const mavanimeResults = collected[29] as Awaited<ReturnType<typeof getMavanimeStreams>>;
+    const animesiteResults = collected[30] as Awaited<ReturnType<typeof getAnimesiteStreams>>;
 
     // On accumule des "drafts" (streams sans name/title). name/title sont posés
     // en UNE passe centralisée plus bas (src/display.ts), pour un rendu uniforme.
@@ -1814,6 +1827,25 @@ async function handleStream(req: express.Request, res: express.Response, type: s
           ...(d.proxyHeaders ? { proxyHeaders: { request: d.proxyHeaders } } : {}),
         },
         _meta: { quality: mv.quality, language: mv.language, source: 'mavanime', server: mv.server },
+      });
+    }
+
+    // AnimeSite : anime VF/VOSTFR. Hôtes sibnet (mp4 direct) / vidmoly (vmpx asn-locké) /
+    // voe… -> deliver() décide (direct / proxy du mode), comme VoirAnime/Mavanime.
+    for (const as of animesiteResults) {
+      const d = await deliver(as.url, {
+        ...(as.headers || {}),
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+      }, { forceHls: /\.m3u8/i.test(as.url) }, req, config);
+      if (!d) continue;
+      drafts.push({
+        url: d.url,
+        behaviorHints: {
+          notWebReady: !!d.proxyHeaders,
+          bingeGroup: `animesite-${as.server}`,
+          ...(d.proxyHeaders ? { proxyHeaders: { request: d.proxyHeaders } } : {}),
+        },
+        _meta: { quality: as.quality, language: as.language, source: 'animesite', server: as.server },
       });
     }
 
@@ -2801,6 +2833,10 @@ app.get('/api/mavanime/endpoints', (req, res) => {
   const reload = req.query.reload === 'true';
   res.json({ ...(reload ? reloadMavanimeEndpoints() : getMavanimeEndpoints()), reloaded: reload });
 });
+app.get('/api/animesite/endpoints', (req, res) => {
+  const reload = req.query.reload === 'true';
+  res.json({ ...(reload ? reloadAnimesiteEndpoints() : getAnimesiteEndpoints()), reloaded: reload });
+});
 app.get('/api/kisskh/endpoints', (req, res) => {
   const reload = req.query.reload === 'true';
   res.json({ ...(reload ? reloadKisskhEndpoints() : getKisskhEndpoints()), reloaded: reload });
@@ -2868,6 +2904,7 @@ const singleBaseSources: Array<{ path: string; file: string; reload: () => unkno
   { path: 'jour1film', file: 'jour1film-endpoints.json', reload: reloadJour1filmEndpoints },
   { path: 'cinepulse', file: 'cinepulse-endpoints.json', reload: reloadCinepulseEndpoints },
   { path: 'mavanime', file: 'mavanime-endpoints.json', reload: reloadMavanimeEndpoints },
+  { path: 'animesite', file: 'animesite-endpoints.json', reload: reloadAnimesiteEndpoints },
   { path: 'nkstrm', file: 'nkstrm-endpoints.json', reload: reloadNkstrmEndpoints },
 ];
 for (const src of singleBaseSources) {
@@ -3529,6 +3566,14 @@ app.get('/api/health', async (_req, res) => {
     results.mavanime = { status: ok ? 'up' : 'degraded', latency: Date.now() - mvStart };
   } catch (e: any) {
     results.mavanime = { status: 'down', error: e.message };
+  }
+
+  const asStart = Date.now();
+  try {
+    const ok = await animesiteProbe();
+    results.animesite = { status: ok ? 'up' : 'degraded', latency: Date.now() - asStart };
+  } catch (e: any) {
+    results.animesite = { status: 'down', error: e.message };
   }
 
   // Une source coupée dans l'admin ne compte plus : ni dans l'état global, ni pour
