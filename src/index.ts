@@ -840,7 +840,7 @@ function getManifest(req: express.Request, config?: UserConfig | null) {
 
   return {
     id: 'community.loostream.stremio',
-    version: '1.24.2',
+    version: '1.25.0',
     name: 'LooStream',
     logo: `${baseUrl}/logo.png`,
     description: 'Netflix, Prime, Disney+ mirrors + StreamFlix + Movix VF/VOSTFR',
