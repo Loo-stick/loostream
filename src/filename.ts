@@ -130,6 +130,7 @@ const PROVIDER_LABELS: Record<string, string> = {
   leizy: 'Leizy',
   jour1film: '1Jour1Film',
   cinepulse: 'Cinepulse',
+  mavanime: 'Mavanime',
 };
 
 export function providerLabel(source: string): string {
