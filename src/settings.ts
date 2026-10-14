@@ -17,6 +17,9 @@ interface RuntimeSettings {
   cacheMultStreams?: number;   // sources normales (positif, sauf NetMirror)
   cacheMultNetmirror?: number; // scope netmirror (positif)
   cacheMultEmpty?: number;     // « rien trouvé » (négatif), toutes sources
+  // Jeton d'un compte Matrix ayant rejoint les salons d'annonces Movix (non publics).
+  // Lu aussi par telegram-bot.js (même fichier, bind-mount) pour la détection de domaine.
+  matrixAccessToken?: string;
 }
 
 export const CACHE_MULT_MIN = 0.25;
@@ -50,6 +53,7 @@ function load(): RuntimeSettings {
         cacheMultStreams: typeof raw.cacheMultStreams === 'number' && raw.cacheMultStreams > 0 ? raw.cacheMultStreams : undefined,
         cacheMultNetmirror: typeof raw.cacheMultNetmirror === 'number' && raw.cacheMultNetmirror > 0 ? raw.cacheMultNetmirror : undefined,
         cacheMultEmpty: typeof raw.cacheMultEmpty === 'number' && raw.cacheMultEmpty > 0 ? raw.cacheMultEmpty : undefined,
+        matrixAccessToken: typeof raw.matrixAccessToken === 'string' && raw.matrixAccessToken ? raw.matrixAccessToken : undefined,
       };
     } else {
       cache = {};
@@ -69,6 +73,13 @@ export function getOwnerKeyValue(): string | undefined {
   const s = load();
   if (s.ownerKey !== undefined) return s.ownerKey;
   const env = process.env.OWNER_KEY;
+  return env && env.length > 0 ? env : undefined;
+}
+
+export function getMatrixAccessToken(): string | undefined {
+  const s = load();
+  if (s.matrixAccessToken !== undefined) return s.matrixAccessToken;
+  const env = process.env.MATRIX_ACCESS_TOKEN;
   return env && env.length > 0 ? env : undefined;
 }
 
@@ -120,6 +131,7 @@ export function updateSettings(patch: {
   mode?: string | null; ownerKey?: string | null; autoWhitelist?: boolean | null;
   netfreeSocksPool?: boolean | null; disabledSources?: string[] | null; captureAllLogs?: boolean | null;
   cacheMultStreams?: number | null; cacheMultNetmirror?: number | null; cacheMultEmpty?: number | null;
+  matrixAccessToken?: string | null;
 }): void {
   const current: RuntimeSettings = { ...load() };
   const apply = <K extends keyof RuntimeSettings>(k: K, v: RuntimeSettings[K] | null | undefined) => {
@@ -129,6 +141,7 @@ export function updateSettings(patch: {
   };
   apply('mode', patch.mode);
   apply('ownerKey', patch.ownerKey === null ? null : (patch.ownerKey || undefined));
+  apply('matrixAccessToken', patch.matrixAccessToken === null ? null : (patch.matrixAccessToken || undefined));
   apply('autoWhitelist', patch.autoWhitelist);
   apply('netfreeSocksPool', patch.netfreeSocksPool);
   apply('captureAllLogs', patch.captureAllLogs);
@@ -145,6 +158,7 @@ export function updateSettings(patch: {
 export function settingsView(): {
   mode: string; modeSource: 'file' | 'env' | 'default';
   ownerKey: { configured: boolean; length: number; source: 'file' | 'env' | 'none' };
+  matrixAccessToken: { configured: boolean; source: 'file' | 'env' | 'none' };
   autoWhitelist: boolean; autoWhitelistSource: 'file' | 'env';
   netfreeSocksPool: boolean; netfreeSocksPoolSource: 'file' | 'env';
   captureAllLogs: boolean; captureAllLogsSource: 'file' | 'env';
@@ -162,6 +176,10 @@ export function settingsView(): {
       configured: !!owner,
       length: owner ? owner.length : 0,
       source: ownerFile ? 'file' : (ownerEnv ? 'env' : 'none'),
+    },
+    matrixAccessToken: {
+      configured: !!getMatrixAccessToken(),
+      source: s.matrixAccessToken !== undefined ? 'file' : (process.env.MATRIX_ACCESS_TOKEN ? 'env' : 'none'),
     },
     autoWhitelist: autoWhitelistEnabled(),
     autoWhitelistSource: s.autoWhitelist !== undefined ? 'file' : 'env',

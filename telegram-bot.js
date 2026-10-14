@@ -794,26 +794,101 @@ function httpGetText(url, redirects = 5) {
   });
 }
 
+// Les canaux Telegram de Movix ont été bannis (t.me/movix_site ne renvoie plus qu'une page de contact).
+// Les annonces de domaine passent désormais par Matrix — même approche que wastream
+// (imports/matrix_sync/sync.py). Les salons ne sont pas world_readable : il faut le jeton d'un compte
+// qui les a rejoints. Salon dédié d'abord, salon commun du groupe ix ensuite.
+// Le jeton se règle dans l'admin (Paramétrage > Partage) → config/runtime-settings.json, relu à
+// chaque passage (pas de redémarrage) ; MATRIX_ACCESS_TOKEN du .env ne sert que de repli.
+const MATRIX_HOMESERVER = process.env.MATRIX_HOMESERVER || 'https://matrix.org';
+const RUNTIME_SETTINGS_PATH = process.env.RUNTIME_SETTINGS_CONFIG || './config/runtime-settings.json';
+const MOVIX_MATRIX_ROOMS = ['#movix-annonces:matrix.org', '#[ix]-annonces:matrix.org'];
+// « movix.png » (image postée dans un salon) ressemble à un domaine : extensions de fichiers exclues.
+const FILE_EXTENSIONS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'mp4', 'mkv', 'avi', 'webm',
+  'zip', 'rar', '7z', 'pdf', 'html', 'htm', 'js', 'css', 'txt', 'json', 'xml', 'mp3', 'ico']);
+
+function readMatrixAccessToken() {
+  try {
+    const token = JSON.parse(fs.readFileSync(RUNTIME_SETTINGS_PATH, 'utf-8')).matrixAccessToken;
+    if (typeof token === 'string' && token) return token;
+  } catch {}
+  return process.env.MATRIX_ACCESS_TOKEN || '';
+}
+
+function matrixGet(path, token, params) {
+  return new Promise((resolve, reject) => {
+    let url = `${MATRIX_HOMESERVER}/_matrix/client/v3/${path}`;
+    if (params) url += '?' + new URLSearchParams(params).toString();
+    const req = https.get(url, {
+      family: 4,
+      headers: { Authorization: `Bearer ${token}`, 'User-Agent': 'loostream-bot' }
+    }, (res) => {
+      let body = '';
+      res.on('data', c => body += c);
+      res.on('end', () => {
+        if (res.statusCode >= 400) {
+          const hint = [403, 404].includes(res.statusCode) ? ' (le compte a-t-il rejoint le salon ?)' : '';
+          reject(new Error(`Matrix HTTP ${res.statusCode} sur ${path.split('/')[0]}${hint}`));
+          return;
+        }
+        try { resolve(JSON.parse(body)); } catch (e) { reject(e); }
+      });
+    });
+    req.on('error', reject);
+    req.setTimeout(30000, () => { req.destroy(); reject(new Error('Matrix timeout')); });
+  });
+}
+
+// -> [{ ts, domain }] de toutes les mentions movix.<tld> des salons d'annonces, du plus récent au plus ancien.
+// Extracteur générique : on ne dépend pas de la formulation des annonces.
+async function findMovixDomainsOnMatrix() {
+  const token = readMatrixAccessToken();
+  if (!token) throw new Error('Jeton Matrix non configuré (admin > Paramétrage > Partage) — impossible de lire les annonces Movix');
+  const found = [];
+  for (const alias of MOVIX_MATRIX_ROOMS) {
+    try {
+      const { room_id: roomId } = await matrixGet(`directory/room/${encodeURIComponent(alias)}`, token);
+      const data = await matrixGet(`rooms/${encodeURIComponent(roomId)}/messages`, token, {
+        dir: 'b', limit: '100', filter: JSON.stringify({ types: ['m.room.message'] }),
+      });
+      let mentions = 0;
+      for (const event of data.chunk || []) {
+        const body = (event.content && event.content.body) || '';
+        for (const match of body.matchAll(/(?:https?:\/\/)?(?:www\.)?(movix\.[a-z]{2,12})\b/gi)) {
+          const domain = match[1].toLowerCase();
+          if (FILE_EXTENSIONS.has(domain.split('.').pop())) continue;
+          found.push({ ts: event.origin_server_ts || 0, domain });
+          mentions++;
+        }
+      }
+      console.log(`[Movix] ${alias}: ${(data.chunk || []).length} message(s), ${mentions} mention(s)`);
+    } catch (e) {
+      console.error(`[Movix] ${alias} ignoré: ${e.message}`);
+    }
+  }
+  found.sort((a, b) => b.ts - a.ts);
+  return found;
+}
+
 async function detectMovixEndpoints() {
-  // 1. Scrape public Telegram channel preview
-  const tgHtml = await httpGetText('https://t.me/s/movix_site');
-  const msgRegex = /data-post="movix_site\/(\d+)"[\s\S]*?tgme_widget_message_text[^>]*>([\s\S]*?)<\/div>/g;
-  const messages = [];
-  let m;
-  while ((m = msgRegex.exec(tgHtml)) !== null) {
-    const id = parseInt(m[1], 10);
-    const text = m[2].replace(/<[^>]+>/g, ' ').replace(/&#39;/g, "'").replace(/&amp;/g, '&');
-    messages.push({ id, text });
-  }
-  messages.sort((a, b) => b.id - a.id);
+  // 1. Domaines annoncés sur Matrix ; on garde le plus récent qui aboutit à un bundle avec api.movix.*
+  const mentions = await findMovixDomainsOnMatrix();
+  const candidates = [...new Set(mentions.map(m => m.domain))];
+  if (!candidates.length) throw new Error('Aucun domaine movix.* annoncé dans les salons Matrix');
 
-  let frontendDomain = null;
-  for (const msg of messages) {
-    const match = msg.text.match(/https?:\/\/(movix\.[a-z]{2,})/i);
-    if (match) { frontendDomain = match[1].toLowerCase(); break; }
+  let lastError = null;
+  for (const domain of candidates.slice(0, 5)) {
+    try {
+      return await resolveMovixFrontend(domain);
+    } catch (e) {
+      console.error(`[Movix] Candidat ${domain} rejeté: ${e.message}`);
+      lastError = e;
+    }
   }
-  if (!frontendDomain) throw new Error('No movix domain found in channel');
+  throw lastError;
+}
 
+async function resolveMovixFrontend(frontendDomain) {
   // 2. Follow HTML-level redirects (meta refresh + window.location.replace)
   let currentUrl = `https://${frontendDomain}/`;
   for (let i = 0; i < 5; i++) {
@@ -874,7 +949,7 @@ async function checkMovixEndpoints(opts = {}) {
     const changed = current.api !== detected.api || current.referer !== detected.referer;
 
     const next = {
-      _comment: 'Endpoints Movix auto-mis à jour par telegram-bot.js depuis t.me/movix_site. Hot-reloadé par le scraper.',
+      _comment: 'Endpoints Movix auto-mis à jour par telegram-bot.js depuis les annonces Matrix (#movix-annonces / #[ix]-annonces). Hot-reloadé par le scraper.',
       api: detected.api,
       referer: detected.referer,
       origin: detected.origin,
@@ -891,7 +966,7 @@ async function checkMovixEndpoints(opts = {}) {
         text: `🔄 <b>Movix endpoints mis à jour</b>\n\n` +
           `API: <code>${prevApi}</code> → <code>${detected.api}</code>\n` +
           `Referer: <code>${detected.referer}</code>\n\n` +
-          `Source: t.me/movix_site — appliqué via hot-reload.`,
+          `Source: Matrix #movix-annonces — appliqué via hot-reload.`,
         parse_mode: 'HTML'
       });
       console.log(`[Movix] Updated: ${prevApi} → ${detected.api}`);

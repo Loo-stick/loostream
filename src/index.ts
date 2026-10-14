@@ -2970,9 +2970,10 @@ app.get('/api/settings', (_req, res) => {
   // l'accès) ; l'admin l'affiche en lecture seule, jamais sa valeur.
   res.json({ ...settingsView(), accessKeyConfigured: accessEnabled(), netfreePool: poolStatus() });
 });
-app.post('/api/settings', requireAdminSession, jsonBody, (req, res) => {
+app.post('/api/settings', requireAdminSession, jsonBody, async (req, res) => {
   const b = req.body || {};
-  const patch: { mode?: string | null; ownerKey?: string | null; autoWhitelist?: boolean | null; netfreeSocksPool?: boolean | null; captureAllLogs?: boolean | null; cacheMultStreams?: number | null; cacheMultNetmirror?: number | null; cacheMultEmpty?: number | null } = {};
+  const patch: { mode?: string | null; ownerKey?: string | null; autoWhitelist?: boolean | null; netfreeSocksPool?: boolean | null; captureAllLogs?: boolean | null; cacheMultStreams?: number | null; cacheMultNetmirror?: number | null; cacheMultEmpty?: number | null; matrixAccessToken?: string | null } = {};
+  let matrixUser: string | undefined;
 
   if ('mode' in b) {
     if (b.mode === null) patch.mode = null;
@@ -3009,6 +3010,26 @@ app.post('/api/settings', requireAdminSession, jsonBody, (req, res) => {
     else if (typeof b.captureAllLogs === 'boolean') patch.captureAllLogs = b.captureAllLogs;
     else return res.status(400).json({ ok: false, error: 'captureAllLogs doit être un booléen' });
   }
+  if ('matrixAccessToken' in b) {
+    if (b.matrixAccessToken === null || b.matrixAccessToken === '') patch.matrixAccessToken = null;
+    else if (typeof b.matrixAccessToken === 'string' && /^\S{10,512}$/.test(b.matrixAccessToken.trim())) {
+      // Vérifié auprès du homeserver avant d'enregistrer : un jeton faux ne se verrait sinon
+      // qu'au prochain passage du bot (jusqu'à 6 h plus tard).
+      const token = b.matrixAccessToken.trim();
+      try {
+        const r = await axios.get('https://matrix.org/_matrix/client/v3/account/whoami', {
+          headers: { Authorization: `Bearer ${token}` }, timeout: 10000, validateStatus: () => true,
+        });
+        if (r.status !== 200 || !r.data?.user_id) {
+          return res.status(400).json({ ok: false, error: `jeton Matrix refusé par matrix.org (HTTP ${r.status})` });
+        }
+        matrixUser = r.data.user_id;
+      } catch (e: any) {
+        return res.status(502).json({ ok: false, error: `matrix.org injoignable (${e.code || e.message})` });
+      }
+      patch.matrixAccessToken = token;
+    } else return res.status(400).json({ ok: false, error: 'jeton Matrix invalide' });
+  }
   for (const k of ['cacheMultStreams', 'cacheMultNetmirror', 'cacheMultEmpty'] as const) {
     if (k in b) {
       if (b[k] === null) patch[k] = null;
@@ -3020,7 +3041,7 @@ app.post('/api/settings', requireAdminSession, jsonBody, (req, res) => {
   updateSettings(patch);
   // Applique le toggle du pool À CHAUD (démarre/arrête le scan en fond).
   if ('netfreeSocksPool' in b) setPoolEnabled(netfreeSocksPoolEnabled());
-  return res.json({ ok: true, ...settingsView(), netfreePool: poolStatus() });
+  return res.json({ ok: true, ...settingsView(), netfreePool: poolStatus(), ...(matrixUser ? { matrixUser } : {}) });
 });
 
 // ── Cache : stats + purge manuelle ─────────────────────────────────────────────

@@ -756,6 +756,10 @@ async function loadPartage() {
         const owner = ok
             ? `<span class="badge on">configurée (${st.ownerKey.length} car.)</span><span class="badge src">source : ${st.ownerKey.source === 'file' ? 'admin' : '.env'}</span>`
             : `<span class="badge off">non configurée</span>`;
+        const mx = st.matrixAccessToken || { configured: false, source: 'none' };
+        const matrix = mx.configured
+            ? `<span class="badge on">configuré</span><span class="badge src">source : ${mx.source === 'file' ? 'admin' : '.env'}</span>`
+            : `<span class="badge off">non configuré</span>`;
         const access = st.accessKeyConfigured ? '<span class="badge on">activée</span>' : '<span class="badge off">désactivée</span>';
         const np = st.netfreePool || { enabled: false, live: 0, current: null, target: 4 };
         const poolBadge = st.netfreeSocksPool ? '<span class="badge on">activé</span>' : '<span class="badge off">désactivé</span>';
@@ -805,6 +809,15 @@ async function loadPartage() {
                     <button class="btn cfg-save small" onclick="saveOwnerKey()">Enregistrer</button>
                     ${ok ? '<button class="btn danger small" onclick="removeOwnerKey()">Retirer</button>' : ''}
                     <span class="cfg-msg" id="msg-owner"></span></div>
+            </div>
+            <div style="margin-bottom:22px;border-top:1px solid rgba(255,255,255,0.08);padding-top:18px;">
+                <div style="font-weight:600;margin-bottom:6px;">Jeton Matrix (domaines Movix) ${matrix}</div>
+                <div style="font-size:0.8em;color:var(--dim);margin-bottom:10px;">Movix annonce ses nouveaux domaines sur Matrix (<code>#movix-annonces:matrix.org</code>, <code>#[ix]-annonces:matrix.org</code>). Ces salons ne sont pas publics : il faut le jeton d'un compte matrix.org qui les a <b>rejoints</b> (Element → Paramètres → Aide et à propos → Jeton d'accès). Le bot Telegram s'en sert pour suivre les changements de domaine. Le jeton est vérifié auprès de matrix.org avant d'être enregistré ; sa valeur n'est jamais affichée.</div>
+                <div class="cfg-row">
+                    <input id="matrix-token" type="password" autocomplete="off" placeholder="syt_…">
+                    <button class="btn cfg-save small" onclick="saveMatrixToken()">Enregistrer</button>
+                    ${mx.source === 'file' ? '<button class="btn danger small" onclick="removeMatrixToken()">Retirer</button>' : ''}
+                    <span class="cfg-msg" id="msg-matrix"></span></div>
             </div>
             <div style="border-top:1px solid rgba(255,255,255,0.08);padding-top:18px;margin-bottom:22px;">
                 <div style="font-weight:600;margin-bottom:6px;">Clé d'accès (ACCESS_KEY) ${access}</div>
@@ -913,6 +926,20 @@ function saveOwnerKey() {
     if (v.length < 8) { const m = document.getElementById('msg-owner'); m.textContent = '✗ 8 caractères minimum'; m.className = 'cfg-msg err'; return; }
     postSettings({ ownerKey: v }, 'msg-owner');
 }
+async function saveMatrixToken() {
+    const v = document.getElementById('matrix-token').value.trim();
+    const msg = document.getElementById('msg-matrix');
+    if (!v) { msg.textContent = '✗ colle un jeton'; msg.className = 'cfg-msg err'; return; }
+    msg.textContent = 'vérification…'; msg.className = 'cfg-msg';
+    try {
+        const r = await api('/api/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ matrixAccessToken: v }) });
+        const j = await r.json(); if (!r.ok || j.ok === false) throw new Error(j.error || 'HTTP ' + r.status);
+        await loadPartage();
+        const m = document.getElementById('msg-matrix');
+        m.textContent = `✓ compte ${j.matrixUser || ''}`; m.className = 'cfg-msg ok';
+    } catch (e) { if (e.message !== 'session') { msg.textContent = '✗ ' + e.message; msg.className = 'cfg-msg err'; } }
+}
+function removeMatrixToken() { if (confirm('Retirer le jeton Matrix (retour au .env) ?')) postSettings({ matrixAccessToken: null }, 'msg-matrix'); }
 function removeOwnerKey() { if (confirm('Retirer la clé propriétaire (retour au .env) ?')) postSettings({ ownerKey: null }, 'msg-owner'); }
 
 // ============ Boot ============

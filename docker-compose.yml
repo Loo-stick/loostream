@@ -75,6 +75,8 @@ services:
       - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID}
       - DOMAINS_CONFIG=/app/config/allowed-domains.json
       - LOOSTREAM_CONTAINER=loostream
+      # Jeton Matrix (annonces de domaine Movix) : se règle dans l'admin ; cette variable n'est qu'un repli
+      - MATRIX_ACCESS_TOKEN=${MATRIX_ACCESS_TOKEN}
     volumes:
       - ./config:/app/config
       - /var/run/docker.sock:/var/run/docker.sock
