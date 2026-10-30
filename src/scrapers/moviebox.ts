@@ -61,6 +61,12 @@ export function movieboxPoolStatus(): { enabled: boolean; live: number; current:
 }
 function movieboxAgent(): any | undefined { return movieboxPool.agent(); }
 
+// SIMULATION / DÉBUG (MOVIEBOX_FORCE_POOL=true) : fait comme si la route DIRECTE était
+// bloquée (cas datacenter). Toute requête qui PARTIRAIT en direct (aucun SOCKS dispo) échoue.
+// Permet de tester le pool depuis une IP résidentielle : pool OFF -> MovieBox « mort » (comme
+// chez un hébergeur bloqué), pool ON -> MovieBox réparé via SOCKS. OFF en prod.
+const FORCE_POOL = process.env.MOVIEBOX_FORCE_POOL === 'true';
+
 // The stream list carries the STABLE resolve params, not the volatile CDN URL.
 // The signed MP4 URL (sign= / t=) is time-limited, so we resolve it fresh at
 // play time via /moviebox/stream (resolveMovieboxUrl) and 302-redirect — the URL
@@ -123,6 +129,9 @@ async function signedRequest(
   const q = method === 'GET' ? sortedQuery(params) : '';
   const bodyStr = opts.body ? JSON.stringify(opts.body) : '';
   const agent = opts.agent !== undefined ? opts.agent : movieboxAgent();
+  // Simulation datacenter : une requête qui partirait en DIRECT (aucun SOCKS) est réputée
+  // bloquée. (`!agent` couvre null = direct forcé ET undefined = pas de pool/env.)
+  if (FORCE_POOL && !agent) return null;
   for (const host of (opts.hosts || HOSTS)) {
     try {
       const headers = signedHeaders(method, path, q, bodyStr);
@@ -153,31 +162,39 @@ async function signedRequest(
 // --- Bearer (anonymous mobile session) ---
 let bearerCache: { token: string; at: number } | null = null;
 
+// `agent` : undefined -> routage par défaut (pool courant si ON, sinon direct) ; null ->
+// FORCÉ direct ; objet -> ce SOCKS précis (sonde). Le token n'est pas lié à la route -> on
+// partage UN cache pour les deux voies « normales » (undefined|null) ; une sonde ne touche
+// jamais le cache.
 async function ensureBearer(force = false, agent?: any): Promise<string | null> {
-  // Une sonde (agent forcé) ne doit NI lire NI écrire le cache partagé du runtime.
-  if (agent === undefined && !force && bearerCache && Date.now() - bearerCache.at < BEARER_TTL_MS) {
+  const useCache = agent === undefined || agent === null;
+  if (useCache && !force && bearerCache && Date.now() - bearerCache.at < BEARER_TTL_MS) {
     return bearerCache.token;
   }
   const r = await signedRequest('GET', '/wefeed-mobile-bff/tab-operating', { tab: 'home' },
-    agent !== undefined ? { agent, timeoutMs: 7000 } : {});
+    agent !== undefined ? { agent } : {});
   const xUser = r?.headers?.['x-user'] || r?.headers?.['X-User'];
   if (!xUser) {
-    if (agent === undefined) console.log('[MovieBox] Pas de header x-user (Bearer introuvable)');
+    if (useCache) console.log('[MovieBox] Pas de header x-user (Bearer introuvable)');
     return null;
   }
   try {
     const token = JSON.parse(xUser).token;
-    if (token) { if (agent === undefined) bearerCache = { token, at: Date.now() }; return token; }
+    if (token) { if (useCache) bearerCache = { token, at: Date.now() }; return token; }
   } catch { /* fallthrough */ }
-  if (agent === undefined) console.log('[MovieBox] x-user illisible');
+  if (useCache) console.log('[MovieBox] x-user illisible');
   return null;
 }
 
 // Health-check du pool SOCKS MovieBox : vrai si, À TRAVERS ce SOCKS, on obtient un Bearer
 // PUIS une recherche signée NON VIDE. aoneroom accepte l'auth des IP datacenter mais vide
 // le catalogue -> seule une recherche réellement peuplée prouve que l'IP est débloquée.
+// Autonome (sans cache, timeout court) pour un scan rapide.
 async function probeSearchThrough(agent: any): Promise<boolean> {
-  const bearer = await ensureBearer(true, agent);
+  const br = await signedRequest('GET', '/wefeed-mobile-bff/tab-operating', { tab: 'home' }, { agent, timeoutMs: 7000 });
+  const xUser = br?.headers?.['x-user'] || br?.headers?.['X-User'];
+  let bearer: string | null = null;
+  try { bearer = xUser ? JSON.parse(xUser).token : null; } catch { bearer = null; }
   if (!bearer) return false;
   const r = await signedRequest('POST', '/wefeed-mobile-bff/subject-api/search/v2', {},
     { bearer, agent, timeoutMs: 7000, body: { keyword: 'Avatar', page: 1, perPage: 5, subjectType: 0 } });
@@ -378,9 +395,9 @@ async function fetchMovieboxStreams(
  */
 // Une page de l'endpoint resource. ⚠️ On envoie TOUJOURS se=0/ep=0 : passer les vrais se/ep
 // « window » la réponse et casse l'ordre de pagination (on ratait des saisons intermédiaires).
-async function fetchResourcePage(bearer: string, subjectId: string, page: number): Promise<{ list: any[]; total: number; perPage: number } | null> {
+async function fetchResourcePage(bearer: string, subjectId: string, page: number, agent?: any): Promise<{ list: any[]; total: number; perPage: number } | null> {
   const r = await signedRequest('GET', '/wefeed-mobile-bff/subject-api/resource',
-    { subjectId, se: 0, ep: 0, page }, { bearer });
+    { subjectId, se: 0, ep: 0, page }, { bearer, agent });
   if (r?.data?.code !== 0) return null;
   const data = r.data.data;
   return {
@@ -390,9 +407,9 @@ async function fetchResourcePage(bearer: string, subjectId: string, page: number
   };
 }
 
-async function getResourceList(bearer: string, subjectId: string, se: number, ep: number): Promise<any[]> {
+async function getResourceList(bearer: string, subjectId: string, se: number, ep: number, agent?: any): Promise<any[]> {
   const isSeries = se > 0 || ep > 0;
-  const p1 = await fetchResourcePage(bearer, subjectId, 1);
+  const p1 = await fetchResourcePage(bearer, subjectId, 1, agent);
   if (!p1) return [];
   if (!isSeries) return p1.list; // film : une seule page d'encodes
   // L'endpoint est PAGINÉ (perPage=10) : une série longue (Breaking Bad = 61) tient sur ~7 pages.
@@ -402,7 +419,7 @@ async function getResourceList(bearer: string, subjectId: string, se: number, ep
   const totalPages = Math.min(30, Math.ceil(p1.total / p1.perPage) || 1);
   if (totalPages > 1) {
     const rest = await Promise.all(
-      Array.from({ length: totalPages - 1 }, (_, i) => fetchResourcePage(bearer, subjectId, i + 2))
+      Array.from({ length: totalPages - 1 }, (_, i) => fetchResourcePage(bearer, subjectId, i + 2, agent))
     );
     for (const p of rest) if (p) all.push(...p.list);
   }
@@ -447,11 +464,11 @@ function pickCandidate(cands: PlayCandidate[], wanted: number): PlayCandidate | 
 }
 
 /** tv-bff : play-info/v2 de l'app TV — data.resources[] = {url, resolution, codec, linkType, se, ep}. */
-async function tvBffCandidates(bearer: string, subjectId: string, se: number, ep: number): Promise<PlayCandidate[]> {
+async function tvBffCandidates(bearer: string, subjectId: string, se: number, ep: number, agent?: any): Promise<PlayCandidate[]> {
   const r = await signedRequest('GET', '/wefeed-tv-bff/subject/play-info/v2',
     // se/ep vides pour un film (comme Onyx) ; l'endpoint respecte se/ep pour les séries.
     { subjectId, se: se || '', ep: ep || '', vipLevel: 0, host: 'tv.aoneroom.com' },
-    { bearer, hosts: TV_HOSTS });
+    { bearer, hosts: TV_HOSTS, agent });
   if (r?.data?.code !== 0) return [];
   const list: any[] = Array.isArray(r.data.data?.resources) ? r.data.data.resources : [];
   return list
@@ -465,8 +482,8 @@ async function tvBffCandidates(bearer: string, subjectId: string, se: number, ep
 }
 
 /** subject-api/get : resourceDetectors[].resolutionList[] porte aussi de vrais liens signés. */
-async function resourceDetectorCandidates(bearer: string, subjectId: string, se: number, ep: number): Promise<PlayCandidate[]> {
-  const r = await signedRequest('GET', '/wefeed-mobile-bff/subject-api/get', { subjectId }, { bearer });
+async function resourceDetectorCandidates(bearer: string, subjectId: string, se: number, ep: number, agent?: any): Promise<PlayCandidate[]> {
+  const r = await signedRequest('GET', '/wefeed-mobile-bff/subject-api/get', { subjectId }, { bearer, agent });
   if (r?.data?.code !== 0) return [];
   const dets: any[] = Array.isArray(r.data.data?.resourceDetectors) ? r.data.data.resourceDetectors : [];
   const out: PlayCandidate[] = [];
@@ -482,11 +499,11 @@ async function resourceDetectorCandidates(bearer: string, subjectId: string, se:
 
 /** Find a resource item by resourceId (fresh call). */
 async function findResourceItem(
-  subjectId: string, se: number, ep: number, resourceId: string
+  subjectId: string, se: number, ep: number, resourceId: string, agent?: any
 ): Promise<any | null> {
-  const bearer = await ensureBearer();
+  const bearer = await ensureBearer(false, agent);
   if (!bearer) return null;
-  const list = await getResourceList(bearer, subjectId, se, ep);
+  const list = await getResourceList(bearer, subjectId, se, ep, agent);
   // Série : la liste contient TOUS les épisodes -> restreindre à celui demandé AVANT de
   // matcher le resourceId, sinon le fallback `|| pool[0]` peut re-servir le mauvais épisode.
   const scoped = (se || ep) ? list.filter(x => Number(x?.se) === se && Number(x?.ep) === ep) : list;
@@ -501,16 +518,17 @@ async function findResourceItem(
 // recharger la liste `resource` paginée juste pour retrouver la résolution du
 // resourceId — gros gain de latence sur les séries. Elle reste optionnelle :
 // sans elle on retombe sur la liste (anciennes URLs déjà dans Stremio).
-export async function resolveMovieboxUrl(
-  subjectId: string, se: number, ep: number, resourceId: string, quality?: number
+// Résout l'URL de lecture via UNE route donnée (agent : null = direct, objet = SOCKS).
+async function resolveOnce(
+  subjectId: string, se: number, ep: number, resourceId: string, quality: number | undefined, agent: any
 ): Promise<string | null> {
-  const bearer = await ensureBearer();
+  const bearer = await ensureBearer(false, agent);
   if (!bearer) return null;
 
   let wanted = Number(quality) || 0;
   let item: any = null;
   if (!wanted) {
-    item = await findResourceItem(subjectId, se, ep, resourceId);
+    item = await findResourceItem(subjectId, se, ep, resourceId, agent);
     wanted = resNum(item?.resolution);
   }
 
@@ -519,7 +537,7 @@ export async function resolveMovieboxUrl(
     ['resourceDetectors', resourceDetectorCandidates],
   ] as const) {
     try {
-      const pick = pickCandidate(await load(bearer, subjectId, se, ep), wanted);
+      const pick = pickCandidate(await load(bearer, subjectId, se, ep, agent), wanted);
       if (pick) {
         if (pick.resolution !== wanted) {
           console.log(`[MovieBox] ${name} : pas de ${wanted}p pour ${subjectId} — repli sur ${pick.resolution}p`);
@@ -533,13 +551,31 @@ export async function resolveMovieboxUrl(
 
   // Dernier recours : le lien de `resource` — sauf s'il s'agit de la vidéo-notice
   // (mieux vaut un 502 qu'une pub de 30 s à la place du film).
-  if (!item) item = await findResourceItem(subjectId, se, ep, resourceId);
+  if (!item) item = await findResourceItem(subjectId, se, ep, resourceId, agent);
   const legacy = String(item?.resourceLink || item?.sourceUrl || '');
-  if (!legacy || isPoisonedUrl(legacy)) {
-    console.log(`[MovieBox] Aucune URL saine pour ${subjectId} se=${se} ep=${ep} (${wanted}p)`);
-    return null;
-  }
+  if (!legacy || isPoisonedUrl(legacy)) return null;
   return legacy;
+}
+
+export async function resolveMovieboxUrl(
+  subjectId: string, se: number, ep: number, resourceId: string, quality?: number
+): Promise<string | null> {
+  // SCALE : la lecture d'un subjectId CONNU n'est en général PAS catalogue-gatée (chez le
+  // pote, seule la RECHERCHE échouait). On résout donc en DIRECT d'abord -> aucune charge
+  // sur le pool SOCKS au clic « Lire », même à forte audience. Repli SOCKS seulement si le
+  // direct ne donne rien (au cas où la lecture serait gatée elle aussi) et si le pool/env
+  // est actif. Sur une instance résidentielle, le direct suffit et le repli ne se déclenche
+  // jamais.
+  const direct = await resolveOnce(subjectId, se, ep, resourceId, quality, null);
+  if (direct) return direct;
+
+  const viaProxy = movieboxAgent();
+  if (viaProxy) {
+    const r = await resolveOnce(subjectId, se, ep, resourceId, quality, viaProxy);
+    if (r) { console.log(`[MovieBox] résolution via SOCKS (direct vide) pour ${subjectId}`); return r; }
+  }
+  console.log(`[MovieBox] Aucune URL saine pour ${subjectId} se=${se} ep=${ep} (${Number(quality) || 0}p)`);
+  return null;
 }
 
 
