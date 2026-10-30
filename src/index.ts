@@ -3036,7 +3036,6 @@ const singleBaseSources: Array<{ path: string; file: string; reload: () => unkno
   { path: 'cinestream', file: 'cinestream-endpoints.json', reload: reloadCinestreamEndpoints },
   { path: 'dulourd', file: 'dulourd-endpoints.json', reload: reloadDulourdEndpoints },
   { path: 'zenix', file: 'zenix-endpoints.json', reload: reloadZenixEndpoints },
-  { path: 'tokyvideo', file: 'tokyvideo-endpoints.json', reload: reloadTokyvideoEndpoints },
   { path: 'yablom', file: 'yablom-endpoints.json', reload: reloadYablomEndpoints },
   { path: 'ianime', file: 'ianime-endpoints.json', reload: reloadIanimeEndpoints },
   { path: 'leizy', file: 'leizy-endpoints.json', reload: reloadLeizyEndpoints },
@@ -3055,6 +3054,17 @@ for (const src of singleBaseSources) {
     return res.json({ ok: true, ...(src.reload() as object) });
   });
 }
+
+// Tokyvideo : {base, index}. base = site ; index = URL de l'index public (dépôt qui
+// bouge : xdata-mix/nx-data -> rikital/onyxia-data…). index facultatif (garde le défaut).
+app.post('/api/tokyvideo/endpoints', requireAdminSession, jsonBody, (req, res) => {
+  const base = cleanBaseUrl(req.body?.base);
+  if (!base) return res.status(400).json({ ok: false, error: 'base URL invalide' });
+  const patch: Record<string, unknown> = { base };
+  if (typeof req.body?.index === 'string' && isValidUrl(req.body.index)) patch.index = req.body.index.trim();
+  writeConfigFile('tokyvideo-endpoints.json', patch);
+  return res.json({ ok: true, ...(reloadTokyvideoEndpoints() as object) });
+});
 
 // WorldiVX : {base, byse}. base = site ; byse = lecteur chiffré (domaine rotatif,
 // bysezoxexe.com -> mega-stream.cc…). byse facultatif (garde le défaut si omis/vide).

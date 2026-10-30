@@ -20,7 +20,8 @@ import { normalizeTokens, titlesMatch, expandTitles } from '../matching';
 
 const endpoints = makeEndpointConfig('tokyvideo-endpoints.json', 'TOKYVIDEO_ENDPOINTS_CONFIG', {
   base: 'https://www.tokyvideo.com',
-  index: 'https://raw.githubusercontent.com/xdata-mix/nx-data/main/data/tokyvideo/index.json',
+  // Index public (MAJ quotidienne). Le dépôt a bougé : xdata-mix/nx-data (mort) -> rikital/onyxia-data.
+  index: 'https://raw.githubusercontent.com/rikital/onyxia-data/main/data/tokyvideo/index.json',
 });
 
 export const getTokyvideoEndpoints = endpoints.get;
