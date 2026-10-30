@@ -50,10 +50,18 @@ const REQ_TIMEOUT_MS = 15000;
 // pour netfree (cf. socks-pool.ts), seul le petit appel signé a besoin d'une IP résidentielle ;
 // la vidéo part en 302 vers le CDN (ouvert), JAMAIS par le SOCKS. OFF par défaut (inutile sur
 // IP résidentielle). Repli env MOVIEBOX_SOCKS (un SOCKS fixe) quand le pool est OFF.
+// Gros set + round-robin : la recherche MovieBox de TOUS les users (cache-miss) est étalée sur
+// ~60 SOCKS -> chacun ne voit qu'une fraction du trafic et tient (un proxy gratuit crame si on
+// lui colle tout). target/maxLive/scanBatch/checkConc surdimensionnés vs les défauts (NetMirror,
+// bas volume, garde les petits défauts). Réglable sans redeploy via MOVIEBOX_SOCKS_TARGET.
 const movieboxPool = createSocksPool({
   name: 'MovieBoxPool',
   envVar: 'MOVIEBOX_SOCKS',
   verify: (agent) => probeSearchThrough(agent),
+  target: Number(process.env.MOVIEBOX_SOCKS_TARGET) || 60,
+  maxLive: Number(process.env.MOVIEBOX_SOCKS_MAX) || 100,
+  scanBatch: Number(process.env.MOVIEBOX_SOCKS_SCANBATCH) || 400,
+  checkConc: Number(process.env.MOVIEBOX_SOCKS_CONC) || 60,
 });
 export function setMovieboxPoolEnabled(on: boolean): void { movieboxPool.setEnabled(on); }
 export function movieboxPoolStatus(): { enabled: boolean; live: number; current: string | null; target: number; lastScan: number } {
@@ -128,10 +136,22 @@ async function signedRequest(
 ): Promise<{ data: any; headers: Record<string, string> } | null> {
   const q = method === 'GET' ? sortedQuery(params) : '';
   const bodyStr = opts.body ? JSON.stringify(opts.body) : '';
-  const agent = opts.agent !== undefined ? opts.agent : movieboxAgent();
+  // Route AUTO (opts.agent undefined) : on RÉSERVE un proxy du pool (round-robin) + son id, pour
+  // attribuer l'échec/succès au bon proxy sous concurrence. opts.agent explicite (sonde=obj,
+  // direct forcé=null) court-circuite le pool.
+  let leasedHp: string | null = null;
+  let agent: any;
+  if (opts.agent !== undefined) {
+    agent = opts.agent;
+  } else {
+    const leased = movieboxPool.lease();
+    agent = leased?.agent;
+    leasedHp = leased ? leased.hp : null;
+  }
   // Simulation datacenter : une requête qui partirait en DIRECT (aucun SOCKS) est réputée
   // bloquée. (`!agent` couvre null = direct forcé ET undefined = pas de pool/env.)
   if (FORCE_POOL && !agent) return null;
+  let hadTransportError = false;
   for (const host of (opts.hosts || HOSTS)) {
     try {
       const headers = signedHeaders(method, path, q, bodyStr);
@@ -143,19 +163,18 @@ async function signedRequest(
         validateStatus: () => true,
         ...(agent ? { httpsAgent: agent, httpAgent: agent } : {}),
       });
-      if (resp.status >= 500 || resp.status === 0) continue; // rotate host
+      if (resp.status >= 500 || resp.status === 0) continue; // rotate host (aoneroom 5xx, pas le proxy)
+      // Réponse HTTP obtenue via ce proxy du pool = il marche -> reset de ses strikes.
+      if (leasedHp) movieboxPool.reportSuccess(leasedHp);
       return { data: resp.data, headers: resp.headers as Record<string, string> };
     } catch {
-      // Erreur de TRANSPORT (validateStatus:()=>true n'attrape que ça) : si on passe par le
-      // proxy COURANT du pool (pas une sonde injectée ni le repli env), il est sans doute mort
-      // -> rotation immédiate. Idempotent côté pool.
-      if (opts.agent === undefined) {
-        const p = movieboxPool.currentProxy();
-        if (p) movieboxPool.reportFailure(p);
-      }
+      hadTransportError = true; // validateStatus:()=>true n'attrape QUE le transport
       continue; // network error → next host
     }
   }
+  // Échec total par erreur de TRANSPORT sur un proxy réservé du pool -> +1 strike (UN seul par
+  // appel, pas par host) ; éviction douce au-delà de STRIKE_LIMIT. Un 5xx seul ne pénalise pas.
+  if (leasedHp && hadTransportError) movieboxPool.reportFailure(leasedHp);
   return null;
 }
 
@@ -190,14 +209,17 @@ async function ensureBearer(force = false, agent?: any): Promise<string | null> 
 // PUIS une recherche signée NON VIDE. aoneroom accepte l'auth des IP datacenter mais vide
 // le catalogue -> seule une recherche réellement peuplée prouve que l'IP est débloquée.
 // Autonome (sans cache, timeout court) pour un scan rapide.
+// Timeout COURT (un SOCKS plus lent est inutile pour servir des users) -> warm-up rapide : la
+// plupart des candidats morts/datacenter échouent dès le tab-operating et ne font pas la 2e requête.
+const PROBE_TIMEOUT_MS = Number(process.env.MOVIEBOX_SOCKS_PROBE_TIMEOUT) || 4500;
 async function probeSearchThrough(agent: any): Promise<boolean> {
-  const br = await signedRequest('GET', '/wefeed-mobile-bff/tab-operating', { tab: 'home' }, { agent, timeoutMs: 7000 });
+  const br = await signedRequest('GET', '/wefeed-mobile-bff/tab-operating', { tab: 'home' }, { agent, timeoutMs: PROBE_TIMEOUT_MS });
   const xUser = br?.headers?.['x-user'] || br?.headers?.['X-User'];
   let bearer: string | null = null;
   try { bearer = xUser ? JSON.parse(xUser).token : null; } catch { bearer = null; }
   if (!bearer) return false;
   const r = await signedRequest('POST', '/wefeed-mobile-bff/subject-api/search/v2', {},
-    { bearer, agent, timeoutMs: 7000, body: { keyword: 'Avatar', page: 1, perPage: 5, subjectType: 0 } });
+    { bearer, agent, timeoutMs: PROBE_TIMEOUT_MS, body: { keyword: 'Avatar', page: 1, perPage: 5, subjectType: 0 } });
   if (!r || r.data?.code !== 0) return false;
   const groups = r.data.data?.results || [];
   return groups.some((g: any) => Array.isArray(g?.subjects) && g.subjects.length > 0);

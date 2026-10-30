@@ -25,12 +25,17 @@ const pool = createSocksPool({
   },
 });
 
-/** Agent SOCKS courant : pool activé -> proxy vivant ; sinon NETFREE_SOCKS env ; sinon rien. */
+/** Agent SOCKS (round-robin) : pool activé -> proxy vivant ; sinon NETFREE_SOCKS env ; sinon rien. */
 export function netfreeAgent(): any | undefined { return pool.agent(); }
-/** Proxy du POOL utilisé (null si pool inactif ou repli env). Sert au report d'échec. */
+/** Réserve atomiquement un proxy (round-robin) + son id, pour router UNE requête et attribuer
+ *  l'échec/succès au bon proxy (évite la course agent()/currentProxy() sous round-robin). */
+export function netfreeLease(): { agent: any; hp: string } | undefined { return pool.lease(); }
+/** Proxy représentatif (live[0]) — affichage admin. */
 export function currentPoolProxy(): string | null { return pool.currentProxy(); }
-/** Échec réseau via ce proxy -> rotation immédiate. Idempotent. */
+/** Échec réseau via ce proxy -> +strike (éviction douce). Idempotent. */
 export function reportFailure(hp: string): void { pool.reportFailure(hp); }
+/** Succès via ce proxy -> reset de ses strikes. */
+export function reportSuccess(hp: string): void { pool.reportSuccess(hp); }
 export function setPoolEnabled(on: boolean): void { pool.setEnabled(on); }
 export function poolStatus(): { enabled: boolean; live: number; current: string | null; target: number; lastScan: number } {
   return pool.status();

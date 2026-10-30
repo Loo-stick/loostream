@@ -1,7 +1,7 @@
 import axios from 'axios';
 import { cached, del } from '../cache';
 import { titlesMatch } from '../matching';
-import { netfreeAgent, currentPoolProxy, reportFailure } from '../netfree-pool';
+import { netfreeLease, reportFailure, reportSuccess } from '../netfree-pool';
 
 // Client du SCRAPER netfree : l'agent SOCKS est DYNAMIQUE, injecté par requête via un
 // intercepteur -> soit le pool auto-rotatif (src/netfree-pool.ts), soit NETFREE_SOCKS env
@@ -16,13 +16,19 @@ nf.interceptors.request.use(cfg => {
   // rapide. Sans ça, chaque titre traînait toutes ses sondes dans le SOCKS lent.
   const url = `${cfg.baseURL || ''}${cfg.url || ''}`;
   const isCdnProbe = /\/files\//.test(url);
-  const agent = isCdnProbe ? undefined : netfreeAgent();
-  if (agent) { cfg.httpsAgent = agent; cfg.httpAgent = agent; (cfg as any).__nfProxy = currentPoolProxy(); }
+  // lease() = round-robin + id du proxy réservé (atomique) -> on attribue l'échec/succès au
+  // BON proxy sous concurrence (plus de course agent()/currentProxy()).
+  const leased = isCdnProbe ? undefined : netfreeLease();
+  if (leased) { cfg.httpsAgent = leased.agent; cfg.httpAgent = leased.agent; (cfg as any).__nfProxy = leased.hp; }
   return cfg;
 });
-// Échec RÉSEAU (pas de réponse HTTP = proxy mort) via un proxy du pool -> bascule IMMÉDIATE.
-// Une réponse HTTP (même 403/404) = le proxy a atteint netfree -> on ne le vire pas.
-nf.interceptors.response.use(r => r, err => {
+// Échec RÉSEAU (pas de réponse HTTP = proxy mort) via un proxy du pool -> +strike (éviction
+// douce). Une réponse HTTP (même 403/404) = le proxy a atteint netfree -> succès (reset strikes).
+nf.interceptors.response.use(r => {
+  const p = (r?.config as any)?.__nfProxy;
+  if (p) reportSuccess(p);
+  return r;
+}, err => {
   const p = err?.config?.__nfProxy;
   if (p && !err?.response) reportFailure(p);
   return Promise.reject(err);
