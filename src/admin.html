@@ -881,6 +881,15 @@ async function loadPartage() {
         const poolLive = st.netfreeSocksPool
             ? `${np.live}/${np.target} SOCKS vivants · courant : ${np.current ? esc(np.current) : 'scan en cours…'}`
             : '';
+        const mbp = st.movieboxPool || { enabled: false, live: 0, current: null, target: 4 };
+        const mbBadge = st.movieboxSocksPool ? '<span class="badge on">activé</span>' : '<span class="badge off">désactivé</span>';
+        const mbSrc = `<span class="badge src">source : ${st.movieboxSocksPoolSource === 'file' ? 'admin' : '.env'}</span>`;
+        const mbToggle = st.movieboxSocksPool
+            ? `<button class="btn small" onclick="setMovieboxPool(false)">Désactiver</button>`
+            : `<button class="btn small" onclick="setMovieboxPool(true)">Activer</button>`;
+        const mbLive = st.movieboxSocksPool
+            ? `${mbp.live}/${mbp.target} SOCKS vivants · courant : ${mbp.current ? esc(mbp.current) : 'scan en cours…'}`
+            : '';
         const capBadge = st.captureAllLogs ? '<span class="badge on">activé</span>' : '<span class="badge off">désactivé (problèmes uniquement)</span>';
         const capSrc = `<span class="badge src">source : ${st.captureAllLogsSource === 'file' ? 'admin' : '.env'}</span>`;
         const capToggle = st.captureAllLogs
@@ -944,6 +953,15 @@ async function loadPartage() {
                     <span class="cfg-msg" id="msg-nfpool"></span></div>
             </div>
             <div style="border-top:1px solid rgba(255,255,255,0.08);padding-top:18px;margin-top:22px;">
+                <div style="font-weight:600;margin-bottom:6px;">Pool SOCKS MovieBox ${mbBadge}${mbSrc}</div>
+                <div style="font-size:0.8em;color:var(--dim);margin-bottom:10px;">Débloque MovieBox en hébergement <b>datacenter</b> : aoneroom accepte l'auth mais <b>vide le catalogue</b> pour les IP datacenter (recherche à 0 résultat → « Aucun subjectId » partout), alors que le CDN de lecture reste ouvert → seul le petit appel signé passe par un SOCKS résidentiel public, auto-scanné et roté. <b>Inutile sur un serveur résidentiel</b> (MovieBox marche en direct). La vidéo ne passe jamais par le SOCKS.</div>
+                <div class="cfg-row">
+                    ${mbToggle}
+                    <button class="btn secondary small" onclick="loadPartage()">↻ Rafraîchir l'état</button>
+                    <span style="color:var(--muted);font-size:0.85em;">${mbLive}</span>
+                    <span class="cfg-msg" id="msg-mbpool"></span></div>
+            </div>
+            <div style="border-top:1px solid rgba(255,255,255,0.08);padding-top:18px;margin-top:22px;">
                 <div style="font-weight:600;margin-bottom:6px;">Capture de tous les logs ${capBadge}${capSrc}</div>
                 <div style="font-size:0.8em;color:var(--dim);margin-bottom:10px;">Par défaut, la trace détaillée (vue <b>Utilisateurs</b>) n'est stockée que pour les requêtes à <b>problème</b> (0 flux / erreur). Active ceci pour capturer AUSSI les requêtes réussies — utile pour du débug ponctuel, mais ça grossit la base (rétention 30 j). À remettre sur off après.</div>
                 <div class="cfg-row">
@@ -969,6 +987,14 @@ async function setNetfreePool(on) {
     const msg = document.getElementById('msg-nfpool'); if (msg) { msg.textContent = '…'; msg.className = 'cfg-msg'; }
     try {
         const r = await api('/api/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ netfreeSocksPool: on }) });
+        const j = await r.json(); if (!r.ok || j.ok === false) throw new Error(j.error || 'HTTP ' + r.status);
+        loadPartage();
+    } catch (e) { if (e.message !== 'session' && msg) { msg.textContent = '✗ ' + e.message; msg.className = 'cfg-msg err'; } }
+}
+async function setMovieboxPool(on) {
+    const msg = document.getElementById('msg-mbpool'); if (msg) { msg.textContent = '…'; msg.className = 'cfg-msg'; }
+    try {
+        const r = await api('/api/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ movieboxSocksPool: on }) });
         const j = await r.json(); if (!r.ok || j.ok === false) throw new Error(j.error || 'HTTP ' + r.status);
         loadPartage();
     } catch (e) { if (e.message !== 'session' && msg) { msg.textContent = '✗ ' + e.message; msg.className = 'cfg-msg err'; } }

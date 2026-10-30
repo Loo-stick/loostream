@@ -11,6 +11,7 @@ interface RuntimeSettings {
   ownerKey?: string;
   autoWhitelist?: boolean;
   netfreeSocksPool?: boolean;
+  movieboxSocksPool?: boolean;
   disabledSources?: string[];
   captureAllLogs?: boolean;
   // Facteurs ×0.25→×8 sur les TTL du cache, par catégorie (défaut ×1 chacun) :
@@ -46,6 +47,7 @@ function load(): RuntimeSettings {
         ownerKey: typeof raw.ownerKey === 'string' && raw.ownerKey ? raw.ownerKey : undefined,
         autoWhitelist: typeof raw.autoWhitelist === 'boolean' ? raw.autoWhitelist : undefined,
         netfreeSocksPool: typeof raw.netfreeSocksPool === 'boolean' ? raw.netfreeSocksPool : undefined,
+        movieboxSocksPool: typeof raw.movieboxSocksPool === 'boolean' ? raw.movieboxSocksPool : undefined,
         disabledSources: Array.isArray(raw.disabledSources)
           ? raw.disabledSources.filter((x: unknown) => typeof x === 'string')
           : undefined,
@@ -95,6 +97,14 @@ export function netfreeSocksPoolEnabled(): boolean {
   return s.netfreeSocksPool !== undefined ? s.netfreeSocksPool : (process.env.NETFREE_SOCKS_POOL === 'true');
 }
 
+// Pool auto-rotatif de SOCKS publics pour la recherche MovieBox (hébergement datacenter :
+// aoneroom vide le catalogue aux IP datacenter). OFF par défaut (cas résidentiel : MovieBox
+// marche en direct). Seul l'appel signé passe par le SOCKS, jamais la vidéo.
+export function movieboxSocksPoolEnabled(): boolean {
+  const s = load();
+  return s.movieboxSocksPool !== undefined ? s.movieboxSocksPool : (process.env.MOVIEBOX_SOCKS_POOL === 'true');
+}
+
 // Capture systématique de la trace de logs pour TOUTES les requêtes (pas seulement les
 // problèmes). Débug ponctuel — off par défaut (les problèmes sont toujours capturés).
 export function captureAllLogsEnabled(): boolean {
@@ -129,7 +139,7 @@ export function isSourceEnabled(name: string): boolean {
 
 export function updateSettings(patch: {
   mode?: string | null; ownerKey?: string | null; autoWhitelist?: boolean | null;
-  netfreeSocksPool?: boolean | null; disabledSources?: string[] | null; captureAllLogs?: boolean | null;
+  netfreeSocksPool?: boolean | null; movieboxSocksPool?: boolean | null; disabledSources?: string[] | null; captureAllLogs?: boolean | null;
   cacheMultStreams?: number | null; cacheMultNetmirror?: number | null; cacheMultEmpty?: number | null;
   matrixAccessToken?: string | null;
 }): void {
@@ -144,6 +154,7 @@ export function updateSettings(patch: {
   apply('matrixAccessToken', patch.matrixAccessToken === null ? null : (patch.matrixAccessToken || undefined));
   apply('autoWhitelist', patch.autoWhitelist);
   apply('netfreeSocksPool', patch.netfreeSocksPool);
+  apply('movieboxSocksPool', patch.movieboxSocksPool);
   apply('captureAllLogs', patch.captureAllLogs);
   const applyMult = (k: 'cacheMultStreams' | 'cacheMultNetmirror' | 'cacheMultEmpty', v: number | null | undefined) =>
     apply(k, v === null ? null : (v !== undefined ? clampCacheMultiplier(v) : undefined));
@@ -161,6 +172,7 @@ export function settingsView(): {
   matrixAccessToken: { configured: boolean; source: 'file' | 'env' | 'none' };
   autoWhitelist: boolean; autoWhitelistSource: 'file' | 'env';
   netfreeSocksPool: boolean; netfreeSocksPoolSource: 'file' | 'env';
+  movieboxSocksPool: boolean; movieboxSocksPoolSource: 'file' | 'env';
   captureAllLogs: boolean; captureAllLogsSource: 'file' | 'env';
   cacheMult: CacheMultipliers;
   cacheMultSource: { streams: 'file' | 'env' | 'default'; netmirror: 'file' | 'env' | 'default'; empty: 'file' | 'env' | 'default' };
@@ -185,6 +197,8 @@ export function settingsView(): {
     autoWhitelistSource: s.autoWhitelist !== undefined ? 'file' : 'env',
     netfreeSocksPool: netfreeSocksPoolEnabled(),
     netfreeSocksPoolSource: s.netfreeSocksPool !== undefined ? 'file' : 'env',
+    movieboxSocksPool: movieboxSocksPoolEnabled(),
+    movieboxSocksPoolSource: s.movieboxSocksPool !== undefined ? 'file' : 'env',
     captureAllLogs: captureAllLogsEnabled(),
     captureAllLogsSource: s.captureAllLogs !== undefined ? 'file' : 'env',
     cacheMult: getCacheMultipliers(),

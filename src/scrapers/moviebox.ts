@@ -2,6 +2,7 @@ import axios from 'axios';
 import crypto from 'crypto';
 import { cached } from '../cache';
 import { accepts, titlesMatch } from '../matching';
+import { createSocksPool } from '../socks-pool';
 
 // MovieBox / aoneroom — the mobile "wefeed" API used by Onyx's CloudstreamProvider.
 // One of the largest international catalogues (Netflix originals, K-dramas…),
@@ -42,6 +43,23 @@ const STREAMS_TTL_MS = 15 * 60 * 1000;
 const EMPTY_TTL_MS = 5 * 60 * 1000;
 const SUBJECT_TTL_MS = 6 * 60 * 60 * 1000; // subjectId/variants d'une série : stables -> cache long
 const REQ_TIMEOUT_MS = 15000;
+
+// ── Pool SOCKS MovieBox (hébergement datacenter) ──────────────────────────────
+// aoneroom VIDE le catalogue pour les IP datacenter : l'auth (Bearer) passe, mais la
+// recherche renvoie 0 résultat sur TOUS les titres -> « Aucun subjectId » partout. Comme
+// pour netfree (cf. socks-pool.ts), seul le petit appel signé a besoin d'une IP résidentielle ;
+// la vidéo part en 302 vers le CDN (ouvert), JAMAIS par le SOCKS. OFF par défaut (inutile sur
+// IP résidentielle). Repli env MOVIEBOX_SOCKS (un SOCKS fixe) quand le pool est OFF.
+const movieboxPool = createSocksPool({
+  name: 'MovieBoxPool',
+  envVar: 'MOVIEBOX_SOCKS',
+  verify: (agent) => probeSearchThrough(agent),
+});
+export function setMovieboxPoolEnabled(on: boolean): void { movieboxPool.setEnabled(on); }
+export function movieboxPoolStatus(): { enabled: boolean; live: number; current: string | null; target: number; lastScan: number } {
+  return movieboxPool.status();
+}
+function movieboxAgent(): any | undefined { return movieboxPool.agent(); }
 
 // The stream list carries the STABLE resolve params, not the volatile CDN URL.
 // The signed MP4 URL (sign= / t=) is time-limited, so we resolve it fresh at
@@ -98,23 +116,34 @@ async function signedRequest(
   method: 'GET' | 'POST',
   path: string,
   params: Record<string, string | number>,
-  opts: { bearer?: string; body?: any; wantHeaders?: boolean; hosts?: string[] } = {}
+  // `agent` : SOCKS forcé (sonde du pool). Non passé -> agent par défaut (pool courant / env
+  // MOVIEBOX_SOCKS / aucun). `timeoutMs` : raccourcit le timeout pour les sondes du pool.
+  opts: { bearer?: string; body?: any; wantHeaders?: boolean; hosts?: string[]; agent?: any; timeoutMs?: number } = {}
 ): Promise<{ data: any; headers: Record<string, string> } | null> {
   const q = method === 'GET' ? sortedQuery(params) : '';
   const bodyStr = opts.body ? JSON.stringify(opts.body) : '';
+  const agent = opts.agent !== undefined ? opts.agent : movieboxAgent();
   for (const host of (opts.hosts || HOSTS)) {
     try {
       const headers = signedHeaders(method, path, q, bodyStr);
       if (opts.bearer) headers['Authorization'] = `Bearer ${opts.bearer}`;
       const url = `${host}${path}${q ? '?' + q : ''}`;
       const resp = await axios.request({
-        method, url, headers, timeout: REQ_TIMEOUT_MS,
+        method, url, headers, timeout: opts.timeoutMs ?? REQ_TIMEOUT_MS,
         data: method === 'POST' ? bodyStr : undefined,
         validateStatus: () => true,
+        ...(agent ? { httpsAgent: agent, httpAgent: agent } : {}),
       });
       if (resp.status >= 500 || resp.status === 0) continue; // rotate host
       return { data: resp.data, headers: resp.headers as Record<string, string> };
     } catch {
+      // Erreur de TRANSPORT (validateStatus:()=>true n'attrape que ça) : si on passe par le
+      // proxy COURANT du pool (pas une sonde injectée ni le repli env), il est sans doute mort
+      // -> rotation immédiate. Idempotent côté pool.
+      if (opts.agent === undefined) {
+        const p = movieboxPool.currentProxy();
+        if (p) movieboxPool.reportFailure(p);
+      }
       continue; // network error → next host
     }
   }
@@ -124,22 +153,37 @@ async function signedRequest(
 // --- Bearer (anonymous mobile session) ---
 let bearerCache: { token: string; at: number } | null = null;
 
-async function ensureBearer(force = false): Promise<string | null> {
-  if (!force && bearerCache && Date.now() - bearerCache.at < BEARER_TTL_MS) {
+async function ensureBearer(force = false, agent?: any): Promise<string | null> {
+  // Une sonde (agent forcé) ne doit NI lire NI écrire le cache partagé du runtime.
+  if (agent === undefined && !force && bearerCache && Date.now() - bearerCache.at < BEARER_TTL_MS) {
     return bearerCache.token;
   }
-  const r = await signedRequest('GET', '/wefeed-mobile-bff/tab-operating', { tab: 'home' });
+  const r = await signedRequest('GET', '/wefeed-mobile-bff/tab-operating', { tab: 'home' },
+    agent !== undefined ? { agent, timeoutMs: 7000 } : {});
   const xUser = r?.headers?.['x-user'] || r?.headers?.['X-User'];
   if (!xUser) {
-    console.log('[MovieBox] Pas de header x-user (Bearer introuvable)');
+    if (agent === undefined) console.log('[MovieBox] Pas de header x-user (Bearer introuvable)');
     return null;
   }
   try {
     const token = JSON.parse(xUser).token;
-    if (token) { bearerCache = { token, at: Date.now() }; return token; }
+    if (token) { if (agent === undefined) bearerCache = { token, at: Date.now() }; return token; }
   } catch { /* fallthrough */ }
-  console.log('[MovieBox] x-user illisible');
+  if (agent === undefined) console.log('[MovieBox] x-user illisible');
   return null;
+}
+
+// Health-check du pool SOCKS MovieBox : vrai si, À TRAVERS ce SOCKS, on obtient un Bearer
+// PUIS une recherche signée NON VIDE. aoneroom accepte l'auth des IP datacenter mais vide
+// le catalogue -> seule une recherche réellement peuplée prouve que l'IP est débloquée.
+async function probeSearchThrough(agent: any): Promise<boolean> {
+  const bearer = await ensureBearer(true, agent);
+  if (!bearer) return false;
+  const r = await signedRequest('POST', '/wefeed-mobile-bff/subject-api/search/v2', {},
+    { bearer, agent, timeoutMs: 7000, body: { keyword: 'Avatar', page: 1, perPage: 5, subjectType: 0 } });
+  if (!r || r.data?.code !== 0) return false;
+  const groups = r.data.data?.results || [];
+  return groups.some((g: any) => Array.isArray(g?.subjects) && g.subjects.length > 0);
 }
 
 // MovieBox indexe les SÉRIES « un résultat par saison » avec la saison DANS le titre :

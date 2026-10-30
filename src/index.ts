@@ -5,7 +5,7 @@ import { rateLimit } from 'express-rate-limit';
 import { getNetmirrorStreams } from './scrapers/netmirror';
 import { getWiflixStreams } from './scrapers/wiflix';
 import { getVoirDramaStreams, reloadVoirDramaEndpoints, getVoirDramaEndpoints } from './scrapers/voirdrama';
-import { getMovieboxStreams, movieboxProbe, resolveMovieboxUrl, resolveMovieboxSubtitle } from './scrapers/moviebox';
+import { getMovieboxStreams, movieboxProbe, resolveMovieboxUrl, resolveMovieboxSubtitle, setMovieboxPoolEnabled, movieboxPoolStatus } from './scrapers/moviebox';
 import { getVoirAnimeStreams, getVoirAnimeEndpoints, reloadVoirAnimeEndpoints } from './scrapers/voiranime';
 import { getAnimeSamaStreams, getAnimesamaEndpoints, reloadAnimesamaEndpoints } from './scrapers/animesama';
 import { getAnimeAltTitles } from './anime-titles';
@@ -43,7 +43,7 @@ import proxyRouter, { isAllowedUrl, addAllowedDomain, getAllowedDomains } from '
 import { accessEnabled, keyMatches, signUrl, requireQueryKey, ownerKeyMatches, ownerKeyEnabled } from './access';
 import { verifyFileAdmin, listAdmins, addAdmin, removeAdmin, setAdminPassword, isRootUser } from './admins';
 import { installLogCapture, getLogs } from './logbuffer';
-import { getModeRaw, autoWhitelistEnabled, updateSettings, settingsView, netfreeSocksPoolEnabled, isSourceEnabled, getDisabledSources, captureAllLogsEnabled } from './settings';
+import { getModeRaw, autoWhitelistEnabled, updateSettings, settingsView, netfreeSocksPoolEnabled, movieboxSocksPoolEnabled, isSourceEnabled, getDisabledSources, captureAllLogsEnabled } from './settings';
 import { sanitizePseudo, pseudoLabel } from './pseudo';
 import { tmdbReq, tmdbKeyType } from './tmdb-auth';
 import { runWithLogCapture, capturedLines } from './request-log';
@@ -3132,11 +3132,11 @@ app.post('/api/whitelist', requireAdminSession, jsonBody, (req, res) => {
 app.get('/api/settings', (_req, res) => {
   // accessKeyConfigured : ACCESS_KEY est gérée uniquement dans le .env (garde
   // l'accès) ; l'admin l'affiche en lecture seule, jamais sa valeur.
-  res.json({ ...settingsView(), accessKeyConfigured: accessEnabled(), netfreePool: poolStatus() });
+  res.json({ ...settingsView(), accessKeyConfigured: accessEnabled(), netfreePool: poolStatus(), movieboxPool: movieboxPoolStatus() });
 });
 app.post('/api/settings', requireAdminSession, jsonBody, async (req, res) => {
   const b = req.body || {};
-  const patch: { mode?: string | null; ownerKey?: string | null; autoWhitelist?: boolean | null; netfreeSocksPool?: boolean | null; captureAllLogs?: boolean | null; cacheMultStreams?: number | null; cacheMultNetmirror?: number | null; cacheMultEmpty?: number | null; matrixAccessToken?: string | null } = {};
+  const patch: { mode?: string | null; ownerKey?: string | null; autoWhitelist?: boolean | null; netfreeSocksPool?: boolean | null; movieboxSocksPool?: boolean | null; captureAllLogs?: boolean | null; cacheMultStreams?: number | null; cacheMultNetmirror?: number | null; cacheMultEmpty?: number | null; matrixAccessToken?: string | null } = {};
   let matrixUser: string | undefined;
 
   if ('mode' in b) {
@@ -3168,6 +3168,11 @@ app.post('/api/settings', requireAdminSession, jsonBody, async (req, res) => {
     if (b.netfreeSocksPool === null) patch.netfreeSocksPool = null;
     else if (typeof b.netfreeSocksPool === 'boolean') patch.netfreeSocksPool = b.netfreeSocksPool;
     else return res.status(400).json({ ok: false, error: 'netfreeSocksPool doit être un booléen' });
+  }
+  if ('movieboxSocksPool' in b) {
+    if (b.movieboxSocksPool === null) patch.movieboxSocksPool = null;
+    else if (typeof b.movieboxSocksPool === 'boolean') patch.movieboxSocksPool = b.movieboxSocksPool;
+    else return res.status(400).json({ ok: false, error: 'movieboxSocksPool doit être un booléen' });
   }
   if ('captureAllLogs' in b) {
     if (b.captureAllLogs === null) patch.captureAllLogs = null;
@@ -3205,7 +3210,8 @@ app.post('/api/settings', requireAdminSession, jsonBody, async (req, res) => {
   updateSettings(patch);
   // Applique le toggle du pool À CHAUD (démarre/arrête le scan en fond).
   if ('netfreeSocksPool' in b) setPoolEnabled(netfreeSocksPoolEnabled());
-  return res.json({ ok: true, ...settingsView(), netfreePool: poolStatus(), ...(matrixUser ? { matrixUser } : {}) });
+  if ('movieboxSocksPool' in b) setMovieboxPoolEnabled(movieboxSocksPoolEnabled());
+  return res.json({ ok: true, ...settingsView(), netfreePool: poolStatus(), movieboxPool: movieboxPoolStatus(), ...(matrixUser ? { matrixUser } : {}) });
 });
 
 // ── Cache : stats + purge manuelle ─────────────────────────────────────────────
@@ -4002,4 +4008,6 @@ app.listen(PORT, () => {
   console.log(`Proxy mode: ${DEFAULT_USE_LOCAL_PROXY ? 'LOCAL' : 'MEDIAFLOW (configurable)'}`);
   // Pool SOCKS netfree : démarre le scan en fond s'il est activé (persisté). OFF = résidentiel.
   if (netfreeSocksPoolEnabled()) { console.log('[NetfreePool] activé au démarrage'); setPoolEnabled(true); }
+  // Pool SOCKS MovieBox : idem pour la recherche aoneroom en datacenter. OFF = résidentiel.
+  if (movieboxSocksPoolEnabled()) { console.log('[MovieBoxPool] activé au démarrage'); setMovieboxPoolEnabled(true); }
 });
