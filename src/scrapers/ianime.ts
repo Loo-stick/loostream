@@ -55,19 +55,40 @@ interface Fiche { slug: string; title: string; language: string }
 // On interroge donc avec le PREMIER MOT SIGNIFICATIF (on saute les articles), puis le
 // rapprochement strict sur les titres RENVOYÉS assure la précision.
 const STOP = new Set(['the', 'le', 'la', 'les', 'un', 'une', 'des', 'no', 'to', 'of', 'a']);
-function normQuery(s: string): string {
-  const toks = (s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase()
+function tokens(s: string): string[] {
+  return (s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase()
     .replace(/[^a-z0-9]+/g, ' ').trim().split(/\s+/).filter(Boolean);
-  const first = toks.find(t => t.length >= 3 && !STOP.has(t)) || toks[0] || '';
-  return first;
+}
+// Requête COMPLÈTE (mots significatifs joints) : les titres propres (« one piece » ->
+// « ONE PIECE », « jujutsu kaisen ») ne ressortent QUE comme ça ; le 1er-mot-seul cherchait
+// « one » (générique) et ratait tout.
+function fullQuery(s: string): string {
+  return tokens(s).filter(t => !STOP.has(t)).join(' ');
+}
+// Repli 1er MOT SIGNIFICATIF : leur moteur CASSE quand un mot tombe sur une ponctuation du
+// titre stocké (« boruto naruto » -> 0 car stocké « BORUTO: NARUTO » ; « boruto » -> 8).
+function normQuery(s: string): string {
+  const toks = tokens(s);
+  return toks.find(t => t.length >= 3 && !STOP.has(t)) || toks[0] || '';
 }
 
 function langFromSlug(slug: string): string {
   return /-vf(\b|$|-)/i.test(slug) ? 'VF' : 'VOSTFR'; // défaut VOSTFR (sous-titré)
 }
 
+// Stratégie 2 essais : requête complète d'abord (titres propres), repli sur le 1er mot
+// significatif si vide (titres à ponctuation). Le rapprochement strict en aval tranche.
 async function search(query: string): Promise<Fiche[]> {
-  const q = normQuery(query);
+  const first = normQuery(query);
+  const full = fullQuery(query);
+  for (const q of (full && full !== first ? [full, first] : [first])) {
+    const r = await searchOnce(q);
+    if (r.length) return r;
+  }
+  return [];
+}
+
+async function searchOnce(q: string): Promise<Fiche[]> {
   if (!q) return [];
   return cached<Fiche[]>(
     `ianime:search:${q}`, STREAMS_TTL_MS,
