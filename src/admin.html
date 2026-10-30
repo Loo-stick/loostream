@@ -728,7 +728,7 @@ const SOURCES = [
     { path: 'yablom', label: 'Yablom', fields: ['base'], note: 'films FR (jaquettes TMDB) via le lecteur ShareCloudy. Recherche par titre français ; films uniquement (pas de séries)' },
     { path: 'ianime', label: 'IAnime', fields: ['base'], note: 'anime FR VF+VOSTFR (hôtes vidmoly/voe/streamtape/mail.ru). Gaté sur les titres japonais ; recherche par titre (romaji/original)' },
     { path: 'kisskh', label: 'KissKH', fields: ['base', 'miroirs'], list: ['miroirs'], status: true, note: 'dramas + films asiatiques, flux HLS direct + sous-titres multi-langues (FR compris). miroirs : un domaine par ligne, essayés dans l\'ordre, bascule automatique après 3 échecs d\'affilée. base : facultatif, force un domaine en tête (laisser vide sinon)' },
-    { path: 'nkstrm', label: 'Nkstrm', fields: ['base'], note: 'agrégateur keyé TMDB, opt-in par token de pairing. Domaine TOURNANT (nkstrm.tv -> .wiki -> .cc) : la nouvelle adresse est annoncée sur leur Telegram/Discord' },
+    { path: 'nkstrm', label: 'Nkstrm', fields: ['base'], note: 'agrégateur keyé TMDB, opt-in par token de pairing. Domaine TOURNANT (nkstrm.tv -> naka.cx…) : la nouvelle adresse est annoncée sur leur Telegram/Discord. L\'aide de pairing du /configure affiche ce domaine automatiquement' },
 ];
 // `list: true` = tous les champs de la source en liste ; `list: ['x']` = seulement ceux-là.
 function isListField(s, f) { return s.list === true || (Array.isArray(s.list) && s.list.includes(f)); }

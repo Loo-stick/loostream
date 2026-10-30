@@ -1964,8 +1964,10 @@ async function handleStream(req: express.Request, res: express.Response, type: s
     }
 
     // nkstrm : master HLS direct tokené (FR audio DEFAULT, token ~6h), Referer requis.
+    // Referer = le domaine nkstrm COURANT (config admin, domaine rotatif) -> ne périme plus.
+    const nkRef = getNkstrmEndpoints().base.replace(/\/+$/, '') + '/';
     for (const nk of nkstrmResults) {
-      const d = await deliver(nk.url, { 'User-Agent': BROWSER_UA, 'Referer': 'https://nkstrm.tv/' }, { forceHls: true }, req, config);
+      const d = await deliver(nk.url, { 'User-Agent': BROWSER_UA, 'Referer': nkRef }, { forceHls: true }, req, config);
       if (!d) continue;
       drafts.push({
         url: d.url,

@@ -199,7 +199,7 @@
               <label>nkstrm <span class="hint">— optionnel, source bonus (films + FR + anime, sous-titres)</span>
                 <button type="button" class="ihelp" onclick="document.getElementById('nk-help').classList.toggle('show')" title="Comment obtenir le code">i</button>
               </label>
-              <div id="nk-help" class="nk-help">Sur <b>nkstrm.tv</b> (connecté — un email fictif suffit), lance <b>« Connecter une TV / un appareil »</b>, copie le <b>code</b> affiché et colle-le ici. Ça active nkstrm juste pour toi.</div>
+              <div id="nk-help" class="nk-help">Sur <b id="nk-domain">naka.cx</b> (connecté — un email fictif suffit), lance <b>« Connecter une TV / un appareil »</b>, copie le <b>code</b> affiché et colle-le ici. Ça active nkstrm juste pour toi.</div>
               <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
                 <input type="text" id="nk-code" placeholder="ex. AFNEE" maxlength="12" autocomplete="off" style="text-transform:uppercase;flex:1;min-width:120px">
                 <button type="button" class="btn" onclick="connectNkstrm()">Connecter</button>
@@ -326,6 +326,17 @@
         let currentMode = 'mediaflow';
         let nkstrmToken = '';
         const baseUrl = window.location.origin;
+
+        // Affiche le domaine nkstrm COURANT (config admin, rotatif) dans l'aide de pairing,
+        // au lieu d'un domaine figé périmé. Repli silencieux sur la valeur par défaut.
+        (async () => {
+          try {
+            const r = await fetch('/api/nkstrm/endpoints');
+            const base = (await r.json())?.base;
+            const host = base ? new URL(base).hostname.replace(/^www\./, '') : '';
+            if (host) { const el = document.getElementById('nk-domain'); if (el) el.textContent = host; }
+          } catch { /* garde le défaut affiché */ }
+        })();
 
         // Pairing nkstrm : échange le code (côté serveur) contre un token de session.
         async function connectNkstrm() {
