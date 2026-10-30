@@ -3036,7 +3036,6 @@ const singleBaseSources: Array<{ path: string; file: string; reload: () => unkno
   { path: 'cinestream', file: 'cinestream-endpoints.json', reload: reloadCinestreamEndpoints },
   { path: 'dulourd', file: 'dulourd-endpoints.json', reload: reloadDulourdEndpoints },
   { path: 'zenix', file: 'zenix-endpoints.json', reload: reloadZenixEndpoints },
-  { path: 'worldivx', file: 'worldivx-endpoints.json', reload: reloadWorldivxEndpoints },
   { path: 'tokyvideo', file: 'tokyvideo-endpoints.json', reload: reloadTokyvideoEndpoints },
   { path: 'yablom', file: 'yablom-endpoints.json', reload: reloadYablomEndpoints },
   { path: 'ianime', file: 'ianime-endpoints.json', reload: reloadIanimeEndpoints },
@@ -3056,6 +3055,18 @@ for (const src of singleBaseSources) {
     return res.json({ ok: true, ...(src.reload() as object) });
   });
 }
+
+// WorldiVX : {base, byse}. base = site ; byse = lecteur chiffré (domaine rotatif,
+// bysezoxexe.com -> mega-stream.cc…). byse facultatif (garde le défaut si omis/vide).
+app.post('/api/worldivx/endpoints', requireAdminSession, jsonBody, (req, res) => {
+  const base = cleanBaseUrl(req.body?.base);
+  if (!base) return res.status(400).json({ ok: false, error: 'base URL invalide' });
+  const patch: Record<string, unknown> = { base };
+  const byse = cleanBaseUrl(req.body?.byse);
+  if (byse) patch.byse = byse;
+  writeConfigFile('worldivx-endpoints.json', patch);
+  return res.json({ ok: true, ...(reloadWorldivxEndpoints() as object) });
+});
 
 // Kordoz : liste de domaines miroirs (essayés dans l'ordre), pas une base unique.
 app.post('/api/kordoz/endpoints', requireAdminSession, jsonBody, (req, res) => {

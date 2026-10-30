@@ -31,7 +31,10 @@ import { normalizeTokens } from '../matching';
 
 const endpoints = makeEndpointConfig('worldivx-endpoints.json', 'WORLDIVX_ENDPOINTS_CONFIG', {
   base: 'https://www.worldivx.cc',
-  byse: 'https://bysezoxexe.com',
+  // Lecteur « Byse » : domaine rotatif. bysezoxexe.com (mort ~oct. 2026) -> mega-stream.cc,
+  // MÊME backend rebrandé (API /api/videos/<code>/ identique : playback AES-256-GCM + key_parts).
+  // Éditable à chaud dans l'admin (champ `byse`) quand il tourne.
+  byse: 'https://mega-stream.cc',
 });
 
 export const getWorldivxEndpoints = endpoints.get;
