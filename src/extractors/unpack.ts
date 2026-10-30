@@ -74,7 +74,10 @@ export function findStreamUrl(js: string): string | null {
   ];
   for (const re of patterns) {
     const m = js.match(re);
-    if (m && /^https?:\/\//i.test(m[1])) return m[1];
+    // Une piste de sous-titres (.vtt/.srt) n'est PAS un flux : un `src:`/`file:` qui
+    // pointe un sous-titre (vidzy) ne doit pas être renvoyé comme vidéo -> on passe au
+    // pattern suivant (qui trouvera le .m3u8).
+    if (m && /^https?:\/\//i.test(m[1]) && !/\.(vtt|srt|ass|ssa|ttml|dfxp)(\?|#|$)/i.test(m[1])) return m[1];
   }
   return null;
 }

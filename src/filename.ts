@@ -129,6 +129,7 @@ const PROVIDER_LABELS: Record<string, string> = {
   ianime: 'IAnime',
   leizy: 'Leizy',
   jour1film: '1Jour1Film',
+  wookafr: 'WookaFR',
   cinepulse: 'Cinepulse',
   mavanime: 'Mavanime',
   animesite: 'AnimeSite',

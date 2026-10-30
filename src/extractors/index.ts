@@ -644,7 +644,9 @@ export function evalObfuscatedUrl(js: string, embedUrl?: string): string | null 
   if (!iife) return null;
   try {
     const out = vm.runInNewContext(iife, browserEnv(embedUrl), { timeout: 1000 });
-    return typeof out === 'string' && /^https?:\/\//.test(out) ? out : null;
+    // Une IIFE peut aussi envelopper une URL de SOUS-TITRE (vidzy) -> on la rejette,
+    // sinon elle est servie comme flux. L'appelant retombe alors sur findStreamUrl (m3u8).
+    return typeof out === 'string' && /^https?:\/\//.test(out) && !isSubtitleUrl(out) ? out : null;
   } catch {
     return null;
   }
@@ -659,6 +661,16 @@ const DECOY_PATTERNS = [
 ];
 export function isDecoyUrl(url: string): boolean {
   return DECOY_PATTERNS.some(p => p.test(url));
+}
+
+// URL de PISTE DE SOUS-TITRES (.vtt/.srt…), jamais un flux vidéo. Certains embeds
+// (vidzy sur un titre sous-titré, ex. « Buddy ») enveloppent l'URL du sous-titre
+// dans une IIFE `file:(function(u){…return u;})('…_fre.vtt')`. extractIife matchait
+// cette IIFE AVANT le `src:"…m3u8"` en clair -> evalObfuscatedUrl renvoyait le .vtt,
+// que packedJsOnce servait COMME flux (cinepulse livrait un sous-titre « en direct »,
+// injouable). On rejette donc les sous-titres partout où on sélectionne un flux.
+export function isSubtitleUrl(url: string): boolean {
+  return /\.(vtt|srt|ass|ssa|ttml|dfxp)(\?|#|$)/i.test(url);
 }
 
 // Une passe d'extraction : récupère la page embed avec l'émulation iframe et
@@ -683,7 +695,7 @@ async function packedJsOnce(embedUrl: string, origin: string): Promise<string | 
   // leurre /troll/ en clair -> on préfère toute URL NON-leurre (obfusquée d'abord).
   const decoded = evalObfuscatedUrl(js, embedUrl);
   const plain = findStreamUrl(js);
-  const url = [decoded, plain].find(u => u && !isDecoyUrl(u)) || null;
+  const url = [decoded, plain].find(u => u && !isDecoyUrl(u) && !isSubtitleUrl(u)) || null;
   if (url) return url;
   // Une URL a été trouvée mais uniquement un leurre -> page LEURRE (comme Onyx).
   return (decoded || plain) ? 'decoy' : null;
@@ -723,7 +735,7 @@ async function tryDlEmbed(embedUrl: string): Promise<ExtractedStream | null> {
     const raw = String(data || '');
     if (!raw) return null;
     const js = unpackFromHtml(raw) || raw; // repli HTML brut si pas de packing (idem vidzy)
-    const url = [evalObfuscatedUrl(js), findStreamUrl(js)].find(u => u && !isDecoyUrl(u)) || null;
+    const url = [evalObfuscatedUrl(js), findStreamUrl(js)].find(u => u && !isDecoyUrl(u) && !isSubtitleUrl(u)) || null;
     if (!url) return null;
     console.log(`[Extractor] /dl OK: ${new URL(url).host} <- ${embedUrl}`);
     // UA MOBILE + headers CORS/XHR requis (sinon 403 sur tnmr.org).
@@ -790,7 +802,7 @@ export async function extractPackedJs(embedUrl: string): Promise<ExtractedStream
       let abs: string;
       try { abs = new URL(url, `${origin}/`).toString(); }
       catch { console.log(`[Extractor] URL relative non résolvable -> drop: ${embedUrl}`); return null; }
-      const alive = await isStreamLive(abs, { isHls: /\.m3u8/i.test(abs), headers: { Referer: `${origin}/`, Origin: origin } });
+      const alive = await isStreamLive(abs, { isHls: /\.m3u8/i.test(abs), headers: { 'User-Agent': IFRAME_HEADERS['User-Agent'], Referer: `${origin}/`, Origin: origin } });
       if (!alive) { console.log(`[Extractor] flux relatif mort -> drop: ${abs.slice(0, 70)}`); return null; }
       url = abs;
     }
@@ -798,7 +810,12 @@ export async function extractPackedJs(embedUrl: string): Promise<ExtractedStream
       url,
       quality: 'HD',
       format: url.includes('.m3u8') ? 'hls' : 'mp4',
-      headers: { Referer: `${origin}/`, Origin: origin },
+      // vidzy.cc (et fsvid) UA-GATENT désormais leur CDN : un vrai UA Chrome desktop -> 200,
+      // un UA court ("Mozilla/5.0") ou l'UA axios par défaut -> 403 nginx. Sans UA explicite
+      // ici, le proxy relaie le master/segments avec l'UA axios -> flux MORT servi à l'user
+      // (et applyMultiAudio le voyait BLOCKED mais le gardait via l'exception vidzy). On fige
+      // donc le vrai UA dans les headers du flux -> devient h_user-agent, transmis par le proxy.
+      headers: { 'User-Agent': IFRAME_HEADERS['User-Agent'], Referer: `${origin}/`, Origin: origin },
     };
   } catch (e: any) {
     console.log(`[Extractor] packedJs failed (${embedUrl}): ${e.message}`);

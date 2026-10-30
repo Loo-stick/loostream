@@ -16,8 +16,14 @@ services:
       - .env
     environment:
       - NODE_ENV=production
+      # Sidecar JA3 (curl_cffi) : le proxy délègue le fetch des URLs vidzy.cc ici
+      # pour défaire leur fingerprinting TLS. Réseau Docker interne.
+      - JA3_URL=http://loostream-ja3:8899
+      - JA3_TOKEN=${JA3_TOKEN}
     volumes:
       - ./config:/app/config
+    depends_on:
+      - ja3
     healthcheck:
       # /api/stats : léger, en mémoire, NON gaté par ACCESS_KEY (contrairement à
       # /manifest.json qui renvoie 401 quand une clé d'accès est active).
@@ -26,6 +32,29 @@ services:
       timeout: 10s
       retries: 3
       start_period: 40s
+
+  # Sidecar JA3 (curl_cffi / impersonate Chrome). vidzy.cc fingerprinte le TLS :
+  # tout client non-navigateur (axios, httpx, MediaFlow, okhttp de Nuvio) reçoit un
+  # LEURRE bouclé. Ce service relaie les fetch vidzy.cc avec l'empreinte Chrome et
+  # rien d'autre. Aucun port publié : joignable uniquement par loostream sur le
+  # réseau Docker interne. Voir ja3/server.py.
+  ja3:
+    build: ./ja3
+    image: ghcr.io/loo-stick/loostream-ja3:latest
+    container_name: loostream-ja3
+    restart: unless-stopped
+    # curl_cffi + un petit serveur stdlib : empreinte RAM basse. Plafond + aucun swap.
+    mem_limit: 256m
+    memswap_limit: 256m
+    environment:
+      - JA3_TOKEN=${JA3_TOKEN}
+      - JA3_PORT=8899
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8899/health',timeout=5).status==200 else 1)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
 
   # MediaFlow (proxy d'extraction/lecture) — optionnel mais RECOMMANDÉ.
   # Sans lui, seuls les extracteurs locaux marchent (couverture réduite).

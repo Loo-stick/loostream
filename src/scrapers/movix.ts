@@ -348,7 +348,10 @@ async function fetchFStream(
       ? (data?.episodes?.[String(episode || 1)]?.languages || {})
       : (data?.players || {});
 
-    const bucketToLang: Record<string, string> = { VFQ: 'VF', VFF: 'VF', VF: 'VF', VOSTFR: 'VOSTFR' };
+    // `Default` = bucket sans langue déclarée (french-stream sert le player par défaut là) :
+    // c'est VF dans l'écrasante majorité des films FR -> on le traite comme VF (sinon le
+    // seul embed de certains titres, ex. « Buddy », était ignoré et Movix sortait 0).
+    const bucketToLang: Record<string, string> = { VFQ: 'VF', VFF: 'VF', VF: 'VF', VOSTFR: 'VOSTFR', Default: 'VF' };
     const links: CpasmalLink[] = [];
 
     for (const [bucket, lang] of Object.entries(bucketToLang)) {
@@ -440,7 +443,8 @@ async function fetchSeekStreaming(
   tmdbId: string,
   mediaType: 'movie' | 'series',
   season?: number,
-  episode?: number
+  episode?: number,
+  extractorConfig?: ExtractorConfig,
 ): Promise<MovixStream[]> {
   const url = mediaType === 'series'
     ? `${endpoints.api}/api/links/tv/${tmdbId}`
@@ -448,17 +452,34 @@ async function fetchSeekStreaming(
   console.log(`[Movix] SeekStreaming: ${url}`);
   try {
     const { data } = await axios.get(url, { headers: buildHeaders(), timeout: 10000 });
-    if (!Array.isArray(data?.data)) return [];
-    const entries = mediaType === 'series'
-      ? data.data.filter((e: any) => Number(e.season_number) === (season || 1) && Number(e.episode_number) === (episode || 1))
-      : data.data;
-    const embeds: string[] = [...new Set(
+    const container = data?.data;
+    // Nouvelle API (films) : data.data = { id, links:[{url}] } (OBJET). Ancienne / séries :
+    // data.data = tableau d'entrées { season_number, episode_number, links }. On normalise.
+    let entries: any[] = [];
+    if (Array.isArray(container)) {
+      entries = mediaType === 'series'
+        ? container.filter((e: any) => Number(e.season_number) === (season || 1) && Number(e.episode_number) === (episode || 1))
+        : container;
+    } else if (container && typeof container === 'object') {
+      entries = [container];
+    }
+    const allUrls: string[] = [...new Set(
       entries.flatMap((e: any) => (Array.isArray(e.links) ? e.links : [])
-        .map((l: any) => (typeof l === 'string' ? l : l?.url))
-        .filter((u: any): u is string => typeof u === 'string' && isSeekEmbed(u))) as string[]
-    )].slice(0, 4); // cap : résolution AES = 1 requête/embed
-    const resolved = await Promise.all(embeds.map((e: string) => resolveSeekEmbed(e)));
-    return resolved.filter((s): s is MovixStream => s !== null);
+        .map((l: any) => (typeof l === 'string' ? l : l?.url)))
+        .filter((u: any): u is string => typeof u === 'string' && /^https?:\/\//i.test(u))
+    )];
+    // Deux familles d'embeds : les « seek » (origin/#id, résolus via l'API AES chiffrée)
+    // et les embeds STANDARD (vidara/uqload/playmate…) confiés au pipeline générique
+    // (detectExtractor). L'ancien code ne gardait QUE les seek et exigeait un tableau ->
+    // 0 flux sur la nouvelle API films (objet + embeds standards, cf. « Buddy »).
+    const seekEmbeds = allUrls.filter(isSeekEmbed).slice(0, 4); // AES = 1 requête/embed
+    const genericEmbeds = allUrls.filter(u => !isSeekEmbed(u));
+    const hostOf = (u: string): string => { try { return new URL(u).hostname.replace(/^www\./, '').split('.')[0]; } catch { return 'seek'; } };
+    const [seekResolved, genericResolved] = await Promise.all([
+      Promise.all(seekEmbeds.map((e: string) => resolveSeekEmbed(e))),
+      extractMovixEmbeds(genericEmbeds.map(u => ({ url: u, server: hostOf(u), language: 'MULTI' })), extractorConfig),
+    ]);
+    return [...seekResolved.filter((s): s is MovixStream => s !== null), ...genericResolved];
   } catch {
     return [];
   }
@@ -496,7 +517,7 @@ async function fetchMovixStreams(
     fetchPurstream(tmdbId, mediaType, season, episode),
     fetchCpasmal(tmdbId, mediaType, season, episode),
     fetchFStream(tmdbId, mediaType, season, episode),
-    fetchSeekStreaming(tmdbId, mediaType, season, episode),
+    fetchSeekStreaming(tmdbId, mediaType, season, episode, extractorConfig),
     fetchJ1f(tmdbId, mediaType, season, episode),
   ]);
 

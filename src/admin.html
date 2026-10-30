@@ -99,7 +99,7 @@
         /* Config rows */
         .cfg-row { display:flex; gap:8px; align-items:center; margin-bottom:10px; flex-wrap:wrap; }
         .cfg-row label { min-width:100px; color:var(--muted); font-size:0.9em; }
-        .cfg-row input[type=text], .cfg-row input:not([type]) {
+        .cfg-row input[type=text], .cfg-row input[type=password], .cfg-row input:not([type]) {
             flex:1; min-width:180px; padding:8px 10px; border:1px solid rgba(255,255,255,0.15);
             border-radius:8px; background:rgba(0,0,0,0.25); color:#fff; font-size:0.9em;
         }
@@ -190,6 +190,7 @@
             <a data-view="stats">📈 Stats</a>
             <a data-view="logs">📜 Logs</a>
             <a data-view="settings">🛠️ Paramétrage</a>
+            <a data-view="admins" id="nav-admins" style="display:none;">🔐 Admins</a>
         </nav>
         <div class="foot">
             <div class="meta" id="meta">Chargement…</div>
@@ -310,6 +311,38 @@
                 </div>
             </div>
         </section>
+
+        <section class="view" data-view="admins">
+            <div class="view-head"><h1>Comptes admin</h1></div>
+            <div class="card">
+                <h2>Administrateurs</h2>
+                <p style="color:var(--muted);font-size:0.85em;margin:-6px 0 16px;line-height:1.5;">
+                    Le compte <strong>racine</strong> (défini dans <code>.env</code>) n'apparaît pas ici et ne peut jamais être supprimé — ton accès reste garanti.
+                    Les mots de passe sont stockés <strong>hashés</strong> (scrypt + sel), jamais en clair.
+                </p>
+                <div id="admins-list"><div class="loader">Chargement…</div></div>
+            </div>
+            <div class="card">
+                <h2>Créer un compte</h2>
+                <form id="admin-create" autocomplete="off">
+                    <div class="cfg-row">
+                        <label for="adm-user">Identifiant</label>
+                        <input id="adm-user" name="user" type="text" autocomplete="off" required
+                               pattern="[A-Za-z0-9_.\-]{2,32}" title="2 à 32 caractères : lettres, chiffres, . _ -"
+                               placeholder="ex. pote_julien">
+                    </div>
+                    <div class="cfg-row">
+                        <label for="adm-pass">Mot de passe</label>
+                        <input id="adm-pass" name="pass" type="password" autocomplete="new-password" required
+                               minlength="8" placeholder="min. 8 caractères">
+                    </div>
+                    <div class="cfg-row" style="justify-content:flex-end;">
+                        <button class="btn" type="submit">Créer le compte</button>
+                    </div>
+                    <div id="admin-msg" class="cfg-msg"></div>
+                </form>
+            </div>
+        </section>
     </main>
 
 <script>
@@ -329,7 +362,9 @@ const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&':'&amp;','<':'&lt;','>'
 const EMOJI = { ok: '🟢', warning: '🟡', down: '🔴' };
 
 // --- Navigation entre vues ---
+let IS_ROOT = false; // rempli par /api/whoami ; la gestion des comptes est réservée au root
 function showView(name) {
+    if (name === 'admins' && !IS_ROOT) name = 'dashboard'; // garde-fou : onglet root-only
     document.querySelectorAll('.nav a').forEach(a => a.classList.toggle('active', a.dataset.view === name));
     document.querySelectorAll('.view').forEach(v => v.classList.toggle('active', v.dataset.view === name));
     if (location.hash !== '#' + name) history.replaceState(null, '', '#' + name);
@@ -337,6 +372,7 @@ function showView(name) {
     if (name === 'settings') loadSettingsTab();
     if (name === 'sources') loadSources();
     if (name === 'users') loadUsers();
+    if (name === 'admins') loadAdmins();
 }
 document.querySelectorAll('.nav a').forEach(a => a.addEventListener('click', () => showView(a.dataset.view)));
 
@@ -360,6 +396,81 @@ async function api(url, opts) {
     if (r.status === 401 || r.redirected && r.url.includes('/admin/login')) { location = '/admin/login'; throw new Error('session'); }
     return r;
 }
+
+// ============ Comptes admin ============
+function adminMsg(text, isErr) {
+    const m = document.getElementById('admin-msg');
+    if (!m) return;
+    m.textContent = text || '';
+    m.className = 'cfg-msg ' + (text ? (isErr ? 'err' : 'ok') : '');
+}
+async function loadAdmins() {
+    const box = document.getElementById('admins-list');
+    box.innerHTML = '<div class="loader">Chargement…</div>';
+    try {
+        const d = await (await api('/api/admins')).json();
+        const rows = (d.accounts || []).map(a => `
+            <tr>
+                <td>${esc(a.user)}${a.user === d.current ? ' <span style="color:var(--dim);font-size:.85em;">(vous)</span>' : ''}</td>
+                <td>${esc(a.createdBy || '?')}</td>
+                <td class="r">${fmtAge(a.createdAt)}</td>
+                <td class="r">
+                    <button class="btn secondary small" data-reset="${esc(a.user)}">Réinit. mdp</button>
+                    <button class="btn danger small" data-del="${esc(a.user)}">Supprimer</button>
+                </td>
+            </tr>`).join('');
+        box.innerHTML = `
+            <div style="color:var(--muted);font-size:0.82em;margin-bottom:12px;">
+                Racine : <code>${esc(d.root || '—')}</code> <span style="color:var(--dim);">(protégé)</span>
+                &nbsp;·&nbsp; connecté : <code>${esc(d.current || '?')}</code>
+            </div>
+            <table class="utable">
+                <thead><tr><th>Identifiant</th><th>Créé par</th><th class="r">Âge</th><th class="r">Actions</th></tr></thead>
+                <tbody>${rows || '<tr><td colspan="4" style="color:var(--muted);">Aucun compte supplémentaire.</td></tr>'}</tbody>
+            </table>`;
+        box.querySelectorAll('[data-del]').forEach(b => b.addEventListener('click', () => delAdmin(b.dataset.del)));
+        box.querySelectorAll('[data-reset]').forEach(b => b.addEventListener('click', () => resetAdmin(b.dataset.reset)));
+    } catch (e) {
+        if (e.message !== 'session') box.innerHTML = '<div class="error">Erreur de chargement.</div>';
+    }
+}
+async function delAdmin(user) {
+    if (!confirm('Supprimer définitivement le compte « ' + user + ' » ?')) return;
+    try {
+        const r = await api('/api/admins/' + encodeURIComponent(user), { method: 'DELETE' });
+        const j = await r.json().catch(() => ({}));
+        if (!r.ok) { adminMsg(j.error || 'Erreur', true); return; }
+        adminMsg('Compte « ' + user + ' » supprimé.', false);
+        loadAdmins();
+    } catch (e) { if (e.message !== 'session') adminMsg('Erreur réseau', true); }
+}
+async function resetAdmin(user) {
+    const pass = prompt('Nouveau mot de passe pour « ' + user + ' » (min. 8 caractères) :');
+    if (pass == null) return;
+    try {
+        const r = await api('/api/admins/' + encodeURIComponent(user) + '/password', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ pass })
+        });
+        const j = await r.json().catch(() => ({}));
+        adminMsg(r.ok ? 'Mot de passe de « ' + user + ' » mis à jour.' : (j.error || 'Erreur'), !r.ok);
+    } catch (e) { if (e.message !== 'session') adminMsg('Erreur réseau', true); }
+}
+document.getElementById('admin-create').addEventListener('submit', async e => {
+    e.preventDefault();
+    const f = e.target;
+    const user = f.user.value.trim();
+    const pass = f.pass.value;
+    try {
+        const r = await api('/api/admins', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ user, pass })
+        });
+        const j = await r.json().catch(() => ({}));
+        if (!r.ok) { adminMsg(j.error || 'Erreur', true); return; }
+        f.reset();
+        adminMsg('Compte « ' + user + ' » créé.', false);
+        loadAdmins();
+    } catch (e) { if (e.message !== 'session') adminMsg('Erreur réseau', true); }
+});
 
 // ============ Cartes scraper ============
 function buildScraperCard(name, m) {
@@ -1026,8 +1137,24 @@ async function toggleReqLog(el, id) {
 }
 
 setInterval(() => { if (document.querySelector('.view[data-view="dashboard"]').classList.contains('active') || document.querySelector('.view[data-view="stats"]').classList.contains('active')) loadStats(); }, 30000);
+// Identité : n'afficher l'onglet Admins qu'au compte principal (root).
+(async () => {
+    try {
+        const w = await (await api('/api/whoami')).json();
+        IS_ROOT = !!w.isRoot;
+        const onAdmins = (location.hash || '').slice(1) === 'admins';
+        if (IS_ROOT) {
+            document.getElementById('nav-admins').style.display = '';
+            if (onAdmins) showView('admins'); // deep-link root : IS_ROOT résolu après le showView initial
+        } else if (onAdmins) {
+            showView('dashboard');
+        }
+    } catch (e) { /* session expirée gérée par api() */ }
+})();
+
 const initial = (location.hash || '#dashboard').slice(1);
-showView(['dashboard','sources','users','stats','logs','settings'].includes(initial) ? initial : 'dashboard');
+const allowed = ['dashboard','sources','users','stats','logs','settings','admins'];
+showView(allowed.includes(initial) ? initial : 'dashboard');
 </script>
 </body>
 </html>

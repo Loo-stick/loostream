@@ -29,6 +29,8 @@ config/telegram.json
 # Réglages runtime édités depuis l'admin : peut contenir OWNER_KEY en clair (secret,
 # comme .env). Recréé au besoin par l'app (absence gérée : réglages = repli .env).
 config/runtime-settings.json
+# Comptes admin (hash scrypt + sel des mots de passe) : runtime, JAMAIS dans le repo.
+config/admins.json
 
 # SQLite cache (runtime, regenerates)
 config/cache.db

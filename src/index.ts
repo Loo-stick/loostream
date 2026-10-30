@@ -26,6 +26,7 @@ import { getYablomStreams, yablomProbe, getYablomEndpoints, reloadYablomEndpoint
 import { getIanimeStreams, ianimeProbe, getIanimeEndpoints, reloadIanimeEndpoints } from './scrapers/ianime';
 import { getLeizyStreams, leizyProbe, getLeizyEndpoints, reloadLeizyEndpoints } from './scrapers/leizy';
 import { getJour1filmStreams, jour1filmProbe, getJour1filmEndpoints, reloadJour1filmEndpoints } from './scrapers/jour1film';
+import { getWookafrStreams, wookafrProbe, getWookafrEndpoints, reloadWookafrEndpoints } from './scrapers/wookafr';
 import { getCinepulseStreams, cinepulseProbe, getCinepulseEndpoints, reloadCinepulseEndpoints } from './scrapers/cinepulse';
 import { getMavanimeStreams, mavanimeProbe, getMavanimeEndpoints, reloadMavanimeEndpoints } from './scrapers/mavanime';
 import { getAnimesiteStreams, animesiteProbe, getAnimesiteEndpoints, reloadAnimesiteEndpoints } from './scrapers/animesite';
@@ -40,6 +41,7 @@ import { curlJson, isCloudflareChallenge } from './curl-fetch';
 import crypto from 'crypto';
 import proxyRouter, { isAllowedUrl, addAllowedDomain, getAllowedDomains } from './proxy';
 import { accessEnabled, keyMatches, signUrl, requireQueryKey, ownerKeyMatches, ownerKeyEnabled } from './access';
+import { verifyFileAdmin, listAdmins, addAdmin, removeAdmin, setAdminPassword, isRootUser } from './admins';
 import { installLogCapture, getLogs } from './logbuffer';
 import { getModeRaw, autoWhitelistEnabled, updateSettings, settingsView, netfreeSocksPoolEnabled, isSourceEnabled, getDisabledSources, captureAllLogsEnabled } from './settings';
 import { sanitizePseudo, pseudoLabel } from './pseudo';
@@ -105,6 +107,7 @@ interface Stats {
     ianime: { requests: number; success: number; errors: number; lastSuccess: number | null };
     leizy: { requests: number; success: number; errors: number; lastSuccess: number | null };
     jour1film: { requests: number; success: number; errors: number; lastSuccess: number | null };
+    wookafr: { requests: number; success: number; errors: number; lastSuccess: number | null };
     cinepulse: { requests: number; success: number; errors: number; lastSuccess: number | null };
     mavanime: { requests: number; success: number; errors: number; lastSuccess: number | null };
     animesite: { requests: number; success: number; errors: number; lastSuccess: number | null };
@@ -138,6 +141,7 @@ interface Stats {
     ianime: number;
     leizy: number;
     jour1film: number;
+    wookafr: number;
     cinepulse: number;
     mavanime: number;
     animesite: number;
@@ -176,14 +180,15 @@ const stats: Stats = {
     ianime: { requests: 0, success: 0, errors: 0, lastSuccess: null },
     leizy: { requests: 0, success: 0, errors: 0, lastSuccess: null },
     jour1film: { requests: 0, success: 0, errors: 0, lastSuccess: null },
+    wookafr: { requests: 0, success: 0, errors: 0, lastSuccess: null },
     cinepulse: { requests: 0, success: 0, errors: 0, lastSuccess: null },
     mavanime: { requests: 0, success: 0, errors: 0, lastSuccess: null },
     animesite: { requests: 0, success: 0, errors: 0, lastSuccess: null },
   },
-  streamsServed: { movix: 0, netmirror: 0, streamflix: 0, frenchstream: 0, wiflix: 0, voirdrama: 0, moviebox: 0, voiranime: 0, nabistream: 0, coflix: 0, videasy: 0, animesama: 0, nkstrm: 0, vostfree: 0, wavewatch: 0, kordoz: 0, docstream: 0, ztstream: 0, cinestream: 0, dulourd: 0, zenix: 0, kisskh: 0, worldivx: 0, tokyvideo: 0, yablom: 0, ianime: 0, leizy: 0, jour1film: 0, cinepulse: 0, mavanime: 0, animesite: 0 },
+  streamsServed: { movix: 0, netmirror: 0, streamflix: 0, frenchstream: 0, wiflix: 0, voirdrama: 0, moviebox: 0, voiranime: 0, nabistream: 0, coflix: 0, videasy: 0, animesama: 0, nkstrm: 0, vostfree: 0, wavewatch: 0, kordoz: 0, docstream: 0, ztstream: 0, cinestream: 0, dulourd: 0, zenix: 0, kisskh: 0, worldivx: 0, tokyvideo: 0, yablom: 0, ianime: 0, leizy: 0, jour1film: 0, wookafr: 0, cinepulse: 0, mavanime: 0, animesite: 0 },
 };
 
-function trackSourceResult(source: 'movix' | 'netmirror' | 'streamflix' | 'frenchstream' | 'wiflix' | 'voirdrama' | 'moviebox' | 'voiranime' | 'nabistream' | 'coflix' | 'videasy' | 'animesama' | 'nkstrm' | 'vostfree' | 'wavewatch' | 'kordoz' | 'docstream' | 'ztstream' | 'cinestream' | 'dulourd' | 'zenix' | 'kisskh' | 'worldivx' | 'tokyvideo' | 'yablom' | 'ianime' | 'leizy' | 'jour1film' | 'cinepulse' | 'mavanime' | 'animesite', success: boolean, streamCount: number = 0) {
+function trackSourceResult(source: 'movix' | 'netmirror' | 'streamflix' | 'frenchstream' | 'wiflix' | 'voirdrama' | 'moviebox' | 'voiranime' | 'nabistream' | 'coflix' | 'videasy' | 'animesama' | 'nkstrm' | 'vostfree' | 'wavewatch' | 'kordoz' | 'docstream' | 'ztstream' | 'cinestream' | 'dulourd' | 'zenix' | 'kisskh' | 'worldivx' | 'tokyvideo' | 'yablom' | 'ianime' | 'leizy' | 'jour1film' | 'wookafr' | 'cinepulse' | 'mavanime' | 'animesite', success: boolean, streamCount: number = 0) {
   stats.sources[source].requests++;
   if (success) {
     stats.sources[source].success++;
@@ -207,6 +212,18 @@ const apiLimiter = rateLimit({
     // Skip rate limiting for proxy segment requests (high volume during streaming)
     return req.path.includes('/proxy/segment');
   },
+});
+// Rate-limit STRICT dédié à la connexion admin (anti-brute-force sur les mots de
+// passe + anti-DoS CPU du scrypt). En plus du limiteur global. Keyé par IP (trust
+// proxy=1 -> vraie IP cliente). On ne compte QUE les tentatives échouées
+// (skipSuccessful) pour ne pas gêner un admin légitime.
+const adminLoginLimiter = rateLimit({
+  windowMs: 10 * 60 * 1000, // 10 minutes
+  max: 10,                   // 10 tentatives échouées / 10 min / IP
+  message: 'Trop de tentatives de connexion. Réessayez dans quelques minutes.',
+  standardHeaders: true,
+  legacyHeaders: false,
+  skipSuccessfulRequests: true,
 });
 const PORT = process.env.PORT || 7002;
 
@@ -737,6 +754,18 @@ async function deliver(
   req: express.Request,
   config: UserConfig | null,
 ): Promise<{ url: string; proxyHeaders?: Record<string, string> } | null> {
+  // vidzy.cc : JA3-gaté (fingerprinting TLS, ~mi-oct. 2026). Jouable UNIQUEMENT via
+  // notre proxy LOCAL, qui délègue le fetch au sidecar curl_cffi (empreinte Chrome).
+  // NI le direct (Nuvio okhttp -> leurre bouclé) NI MediaFlow (httpx -> leurre) ne
+  // marchent -> on force le proxy local quel que soit le mode, gaté owner/local
+  // (sinon on écarte : mieux qu'un flux mort). Doit passer AVANT canDirect/forceProxy.
+  if (/vidzy\.cc/i.test(streamUrl)) {
+    const localAllowed = allowedModes().includes('local') || ownerKeyMatches(config?.ownerKey);
+    if (!localAllowed) return null;
+    const purl = buildProxyUrl(streamUrl, headers, false, req, config, true, opts.forceHls ?? false);
+    return purl ? { url: purl } : null;
+  }
+
   // Hôte russe + l'utilisateur a un proxy (local/mediaflow) : relayer plutôt que servir
   // en direct (qui rame côté client). En direct pur, on retombe sur le direct+Referer.
   const preferProxy = isPreferProxyHost(streamUrl) && !!config && config.proxy !== 'direct';
@@ -840,7 +869,7 @@ function getManifest(req: express.Request, config?: UserConfig | null) {
 
   return {
     id: 'community.loostream.stremio',
-    version: '1.26.0',
+    version: '1.27.0',
     name: 'LooStream',
     logo: `${baseUrl}/logo.png`,
     description: 'Netflix, Prime, Disney+ mirrors + StreamFlix + Movix VF/VOSTFR',
@@ -1380,9 +1409,15 @@ async function handleStream(req: express.Request, res: express.Response, type: s
         : Promise.resolve([]))
         .then(r => { if (isJaAnime) { trackSourceResult('animesite', true, r.length); recordOutcome('animesite', r.length > 0 ? 'success' : 'empty'); } return r; })
         .catch(e => { console.log('[AnimeSite] Error:', e?.message || e); trackSourceResult('animesite', false); recordOutcome('animesite', 'error', e?.message); return []; }),
+      // WookaFR (annuaire « wow-films », #1) : films + séries FR VF/VOSTFR, DooPlay
+      // somosmovies. Recherche DooPlay + embed lecteurvideo (hôtes base64). Keyé titre FR
+      // + poster TMDB.
+      (isSourceEnabled('wookafr') ? getWookafrStreams(type as 'movie' | 'series', extractorConfig, info.frenchTitle || info.title, info.title, parsed.season, parsed.episode, info.posters) : Promise.resolve([]))
+        .then(r => { trackSourceResult('wookafr', true, r.length); recordOutcome('wookafr', r.length > 0 ? 'success' : 'empty'); return r; })
+        .catch(e => { console.log('[WookaFR] Error:', e?.message || e); trackSourceResult('wookafr', false); recordOutcome('wookafr', 'error', e?.message); return []; }),
     ];
 
-    const SOURCE_NAMES = ['netmirror', 'streamflix', 'movix', 'frenchstream', 'wiflix', 'voirdrama', 'moviebox', 'voiranime', 'nabistream', 'coflix', 'videasy', 'animesama', 'nkstrm', 'vostfree', 'wavewatch', 'kordoz', 'docstream', 'ztstream', 'cinestream', 'dulourd', 'zenix', 'kisskh', 'worldivx', 'tokyvideo', 'yablom', 'ianime', 'leizy', 'jour1film', 'cinepulse', 'mavanime', 'animesite'];
+    const SOURCE_NAMES = ['netmirror', 'streamflix', 'movix', 'frenchstream', 'wiflix', 'voirdrama', 'moviebox', 'voiranime', 'nabistream', 'coflix', 'videasy', 'animesama', 'nkstrm', 'vostfree', 'wavewatch', 'kordoz', 'docstream', 'ztstream', 'cinestream', 'dulourd', 'zenix', 'kisskh', 'worldivx', 'tokyvideo', 'yablom', 'ianime', 'leizy', 'jour1film', 'cinepulse', 'mavanime', 'animesite', 'wookafr'];
     const collected = await collectSources(
       sourcePromises.map((promise, i) => ({
         name: SOURCE_NAMES[i],
@@ -1447,6 +1482,7 @@ async function handleStream(req: express.Request, res: express.Response, type: s
     const cinepulseResults = collected[28] as Awaited<ReturnType<typeof getCinepulseStreams>>;
     const mavanimeResults = collected[29] as Awaited<ReturnType<typeof getMavanimeStreams>>;
     const animesiteResults = collected[30] as Awaited<ReturnType<typeof getAnimesiteStreams>>;
+    const wookafrResults = collected[31] as Awaited<ReturnType<typeof getWookafrStreams>>;
 
     // On accumule des "drafts" (streams sans name/title). name/title sont posés
     // en UNE passe centralisée plus bas (src/display.ts), pour un rendu uniforme.
@@ -1774,6 +1810,39 @@ async function handleStream(req: express.Request, res: express.Response, type: s
           ...(d.proxyHeaders ? { proxyHeaders: { request: d.proxyHeaders } } : {}),
         },
         _meta: { quality: jf.quality, language: jf.language, source: 'jour1film', server: jf.server },
+      });
+    }
+
+    // WookaFR : films + séries FR VF/VOSTFR (DooPlay ; hôtes lulustream/voe/uqload/vidmoly).
+    // ⚠️ Deux pièges du token lulustream/tnmr : (1) LIÉ À L'UA de l'extracteur (UA Android)
+    // -> on NE l'écrase PAS (UA de repli AVANT le spread), sinon 403 ; (2) LIÉ À L'IP du
+    // serveur d'extraction -> MediaFlow (IP distante) renvoie « Stream unavailable ». Seul le
+    // proxy LOCAL (même serveur) a le bon IP. Donc : proxy local si permis (owner/local),
+    // sinon deliver() en secours (MediaFlow/direct, best-effort pour les hôtes non IP-liés).
+    for (const wk of wookafrResults) {
+      const headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        ...(wk.headers || {}),
+      };
+      let url: string;
+      let proxyHeaders: Record<string, string> | undefined;
+      if (localProxyAllowed) {
+        const purl = buildProxyUrl(wk.url, headers, false, req, config, true, /\.m3u8/i.test(wk.url));
+        if (!purl) continue;
+        url = purl;
+      } else {
+        const d = await deliver(wk.url, headers, { forceHls: /\.m3u8/i.test(wk.url) }, req, config);
+        if (!d) continue;
+        url = d.url; proxyHeaders = d.proxyHeaders;
+      }
+      drafts.push({
+        url,
+        behaviorHints: {
+          notWebReady: !!proxyHeaders,
+          bingeGroup: `wookafr-${wk.server}`,
+          ...(proxyHeaders ? { proxyHeaders: { request: proxyHeaders } } : {}),
+        },
+        _meta: { quality: wk.quality, language: wk.language, source: 'wookafr', server: wk.server },
       });
     }
 
@@ -2630,6 +2699,14 @@ const SESSION_SECRET = process.env.SESSION_SECRET || crypto.randomBytes(32).toSt
 const SESSION_MAX_AGE_MS = 2 * 60 * 60 * 1000;
 const ADMIN_COOKIE = 'loostream_admin';
 
+// Égalité de chaînes en TEMPS CONSTANT : on compare des SHA-256 (longueur fixe ->
+// timingSafeEqual ne jette pas et la longueur des secrets ne fuit pas).
+function safeStrEq(a: string, b: string): boolean {
+  const ha = crypto.createHash('sha256').update(a, 'utf8').digest();
+  const hb = crypto.createHash('sha256').update(b, 'utf8').digest();
+  return crypto.timingSafeEqual(ha, hb);
+}
+
 function signSession(payload: string): string {
   const sig = crypto.createHmac('sha256', SESSION_SECRET).update(payload).digest('hex');
   return `${payload}.${sig}`;
@@ -2681,6 +2758,19 @@ function requireAdminSession(req: express.Request, res: express.Response, next: 
   next();
 }
 
+// Réservé au compte RACINE (env ADMIN_USER). La gestion des comptes admin n'est
+// accessible qu'à lui : un admin secondaire ne peut ni voir ni gérer les autres.
+function requireRootAdmin(req: express.Request, res: express.Response, next: express.NextFunction): void {
+  if (!process.env.ADMIN_USER || !process.env.ADMIN_PASS) {
+    res.status(503).json({ error: 'Admin non configuré' });
+    return;
+  }
+  const session = verifySession(parseCookies(req.headers.cookie)[ADMIN_COOKIE]);
+  if (!session) { res.status(401).json({ error: 'Session requise' }); return; }
+  if (!isRootUser(session.user)) { res.status(403).json({ error: 'Réservé au compte principal' }); return; }
+  next();
+}
+
 app.get('/admin/login', (req, res) => {
   const cookies = parseCookies(req.headers.cookie);
   if (verifySession(cookies[ADMIN_COOKIE])) {
@@ -2690,13 +2780,20 @@ app.get('/admin/login', (req, res) => {
   res.sendFile('login.html', { root: path.join(__dirname) });
 });
 
-app.post('/admin/login', express.urlencoded({ extended: false }), (req, res) => {
+app.post('/admin/login', adminLoginLimiter as any, express.urlencoded({ extended: false, limit: '4kb' }), (req, res) => {
   if (!process.env.ADMIN_USER || !process.env.ADMIN_PASS) {
     res.redirect('/admin/login?error=notconfig');
     return;
   }
   const { user, pass } = req.body || {};
-  if (user === process.env.ADMIN_USER && pass === process.env.ADMIN_PASS) {
+  // Root env (ADMIN_USER/ADMIN_PASS) OU un compte supplémentaire de config/admins.json.
+  // Comparaison root en temps constant, SANS court-circuit (on calcule les deux
+  // égalités avant de combiner) -> pas de fuite de timing sur l'identifiant/mot de passe.
+  const uOk = safeStrEq(String(user || ''), process.env.ADMIN_USER || '');
+  const pOk = safeStrEq(String(pass || ''), process.env.ADMIN_PASS || '');
+  const rootOk = !!process.env.ADMIN_USER && !!process.env.ADMIN_PASS && uOk && pOk;
+  const fileOk = !rootOk && verifyFileAdmin(String(user || ''), String(pass || ''));
+  if (rootOk || fileOk) {
     const token = createSession(user);
     const secure = (req.headers['x-forwarded-proto'] || req.protocol) === 'https';
     res.cookie(ADMIN_COOKIE, token, {
@@ -2716,6 +2813,12 @@ app.post('/admin/logout', (_req, res) => {
   res.clearCookie(ADMIN_COOKIE, { path: '/' });
   res.redirect('/admin/login');
 });
+
+// User de la session admin courante (pour createdBy / anti-auto-suppression).
+function currentAdminUser(req: express.Request): string {
+  const cookies = parseCookies(req.headers.cookie);
+  return verifySession(cookies[ADMIN_COOKIE])?.user || '';
+}
 
 app.get('/admin', requireAdminSession, (_req, res) => {
   res.sendFile('admin.html', { root: path.join(__dirname) });
@@ -2825,6 +2928,10 @@ app.get('/api/jour1film/endpoints', (req, res) => {
   const reload = req.query.reload === 'true';
   res.json({ ...(reload ? reloadJour1filmEndpoints() : getJour1filmEndpoints()), reloaded: reload });
 });
+app.get('/api/wookafr/endpoints', (req, res) => {
+  const reload = req.query.reload === 'true';
+  res.json({ ...(reload ? reloadWookafrEndpoints() : getWookafrEndpoints()), reloaded: reload });
+});
 app.get('/api/cinepulse/endpoints', (req, res) => {
   const reload = req.query.reload === 'true';
   res.json({ ...(reload ? reloadCinepulseEndpoints() : getCinepulseEndpoints()), reloaded: reload });
@@ -2870,6 +2977,39 @@ function cleanBaseUrl(v: unknown): string | null {
 
 const jsonBody = express.json({ limit: '8kb' });
 
+// Identité de l'admin connecté (pour l'UI : afficher l'onglet Admins au root seul).
+app.get('/api/whoami', requireAdminSession, (req, res) => {
+  const user = currentAdminUser(req);
+  res.json({ user, isRoot: isRootUser(user) });
+});
+
+// ---- Gestion des comptes admin — RÉSERVÉE AU COMPTE PRINCIPAL (root) ----
+// requireRootAdmin : un admin secondaire ne peut ni lister ni créer/supprimer de comptes.
+// Le root (env) est protégé (isRootUser) et absent du fichier -> jamais de verrouillage.
+app.get('/api/admins', requireRootAdmin, (req, res) => {
+  res.json({ accounts: listAdmins(), root: process.env.ADMIN_USER || null, current: currentAdminUser(req) });
+});
+
+app.post('/api/admins', requireRootAdmin, jsonBody, (req, res) => {
+  const { user, pass } = req.body || {};
+  const r = addAdmin(String(user || ''), String(pass || ''), currentAdminUser(req));
+  if (!r.ok) return res.status(400).json({ error: r.error });
+  res.json({ ok: true });
+});
+
+app.post('/api/admins/:user/password', requireRootAdmin, jsonBody, (req, res) => {
+  const r = setAdminPassword(String(req.params.user || ''), String((req.body || {}).pass || ''));
+  if (!r.ok) return res.status(400).json({ error: r.error });
+  res.json({ ok: true });
+});
+
+app.delete('/api/admins/:user', requireRootAdmin, (req, res) => {
+  const target = String(req.params.user || '');
+  const r = removeAdmin(target);
+  if (!r.ok) return res.status(400).json({ error: r.error });
+  res.json({ ok: true });
+});
+
 // Movix : {api, referer, origin}
 app.post('/api/movix/endpoints', requireAdminSession, jsonBody, (req, res) => {
   const api = cleanBaseUrl(req.body?.api);
@@ -2902,6 +3042,7 @@ const singleBaseSources: Array<{ path: string; file: string; reload: () => unkno
   { path: 'ianime', file: 'ianime-endpoints.json', reload: reloadIanimeEndpoints },
   { path: 'leizy', file: 'leizy-endpoints.json', reload: reloadLeizyEndpoints },
   { path: 'jour1film', file: 'jour1film-endpoints.json', reload: reloadJour1filmEndpoints },
+  { path: 'wookafr', file: 'wookafr-endpoints.json', reload: reloadWookafrEndpoints },
   { path: 'cinepulse', file: 'cinepulse-endpoints.json', reload: reloadCinepulseEndpoints },
   { path: 'mavanime', file: 'mavanime-endpoints.json', reload: reloadMavanimeEndpoints },
   { path: 'animesite', file: 'animesite-endpoints.json', reload: reloadAnimesiteEndpoints },
@@ -3571,6 +3712,14 @@ app.get('/api/health', async (_req, res) => {
     results.jour1film = { status: ok ? 'up' : 'degraded', latency: Date.now() - jfStart };
   } catch (e: any) {
     results.jour1film = { status: 'down', error: e.message };
+  }
+
+  const wkStart = Date.now();
+  try {
+    const ok = await wookafrProbe();
+    results.wookafr = { status: ok ? 'up' : 'degraded', latency: Date.now() - wkStart };
+  } catch (e: any) {
+    results.wookafr = { status: 'down', error: e.message };
   }
 
   const cpStart = Date.now();

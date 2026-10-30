@@ -8,6 +8,42 @@ import { autoWhitelistEnabled } from './settings';
 const router = Router();
 
 // ============================================
+// Sidecar JA3 (curl_cffi / impersonate Chrome)
+// ============================================
+// vidzy.cc a déployé ~mi-oct. 2026 un fingerprinting TLS : tout client dont
+// l'empreinte TLS n'est pas celle d'un vrai navigateur (axios/Node, httpx,
+// MediaFlow, okhttp de Nuvio) reçoit un LEURRE — un master HLS de 177 o qui
+// boucle sur lui-même (variante `index.m3u8` auto-référente). Seul curl_cffi
+// (impersonate Chrome) obtient le vrai flux. On délègue donc le FETCH des URLs
+// vidzy.cc au sidecar `ja3` (ja3/server.py) ; tout le reste (réécriture du
+// manifeste, allowlist/SSRF, clé d'accès) reste ici. Si JA3_URL n'est pas
+// configuré, on retombe sur axios (et donc le leurre) -> comportement d'avant.
+const JA3_URL = process.env.JA3_URL || '';
+const JA3_TOKEN = process.env.JA3_TOKEN || '';
+
+/** Cette URL doit-elle être récupérée via le sidecar JA3 ? (hôtes vidzy.cc) */
+function needsJa3(url: string): boolean {
+  if (!JA3_URL) return false;
+  try {
+    const h = new URL(url).hostname.toLowerCase();
+    return h === 'vidzy.cc' || h.endsWith('.vidzy.cc');
+  } catch { return false; }
+}
+
+/** Construit l'URL du sidecar : il fetch `url` en empreinte Chrome et renvoie la
+ * réponse telle quelle. Les en-têtes d'origine passent en `h_*` (le sidecar ne
+ * transmet que referer/origin/user-agent/range/accept/accept-language). */
+function ja3Url(url: string, headers: Record<string, string>): string {
+  const u = new URL('/f', JA3_URL);
+  u.searchParams.set('url', url);
+  if (JA3_TOKEN) u.searchParams.set('k', JA3_TOKEN);
+  for (const [k, v] of Object.entries(headers || {})) {
+    if (v != null) u.searchParams.set(`h_${k.toLowerCase()}`, String(v));
+  }
+  return u.toString();
+}
+
+// ============================================
 // SECURITY: Domain whitelist to prevent SSRF
 // Loaded from config/allowed-domains.json
 // ============================================
@@ -342,11 +378,9 @@ router.get('/manifest', requireQueryKey, async (req: Request, res: Response) => 
   let host = '?'; try { host = new URL(url).hostname; } catch { /* ignore */ }
 
   try {
-    const response = await axios.get(url, {
-      headers: {
-        ...headers,
-        'Accept': '*/*',
-      },
+    const useJa3 = needsJa3(url);
+    const response = await axios.get(useJa3 ? ja3Url(url, { ...headers, Accept: '*/*' }) : url, {
+      headers: useJa3 ? {} : { ...headers, 'Accept': '*/*' },
       timeout: 10000,
       responseType: 'text',
     });
@@ -451,11 +485,9 @@ router.get('/segment', requireQueryKey, async (req: Request, res: Response) => {
   let host = '?'; try { host = new URL(url).hostname; } catch { /* ignore */ }
 
   try {
-    const response = await axios.get(url, {
-      headers: {
-        ...headers,
-        'Accept': '*/*',
-      },
+    const useJa3 = needsJa3(url);
+    const response = await axios.get(useJa3 ? ja3Url(url, { ...headers, Accept: '*/*' }) : url, {
+      headers: useJa3 ? {} : { ...headers, 'Accept': '*/*' },
       timeout: 30000,
       responseType: 'stream',
     });
