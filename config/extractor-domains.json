@@ -1,111 +1,124 @@
 {
-    "_comment": "Domaines reconnus par detectExtractor. Édité par le bot Telegram, hot-reloadé. Voir docs/superpowers/specs/2026-05-22-rotated-extractor-domains-design.md",
-    "voe": [
-        "voe",
-        "voe.sx",
-        "smoki.cc",
-        "kinoger.ru",
-        "ralphysuccessfull",
-        "audaciousdefaulthouse",
-        "launchreliantcleaverriver",
-        "reputationsheriffkennethsand",
-        "greaseball6eventual20",
-        "timberwoodanotia",
-        "yodelswartlike",
-        "figeterpiazine",
-        "chromotypic",
-        "wolfdyslectic",
-        "charlestoughrace",
-        "kathyinformationwhether.com",
-        "bryantenunder.com",
-        "sandratableother.com",
-        "ss6846545.com",
-        "matthewhotelscience.com"
-    ],
-    "uqload": [
-        "uqload"
-    ],
-    "doodstream": [
-        "dood",
-        "doodstream",
-        "dsvplay",
-        "d0o0d",
-        "dooood",
-        "d0000d",
-        "ds2play",
-        "dood.re",
-        "doply.net",
-        "kokoflix.lol",
-        "playmogo.com",
-        "kakaflix.lol",
-        "vidply.com"
-    ],
-    "filemoon": [
-        "filemoon",
-        "filmoon",
-        "moonlink",
-        "bysebuho",
-        "moonplayer",
-        "lukefirst.lol"
-    ],
-    "vidoza": [
-        "vidoza"
-    ],
-    "vidmoly": [
-        "vidmoly",
-        "molystream",
-        "vidhide"
-    ],
-    "streamtape": [
-        "streamtape",
-        "strcloud",
-        "shavetape",
-        "tapewithadblock"
-    ],
-    "mixdrop": [
-        "mixdrop",
-        "mdrop",
-        "mdy48tn97"
-    ],
-    "sharecloudy": [
-        "sharecloudy",
-        "moovbob",
-        "moovtop"
-    ],
-    "lulustream": [
-        "luluvdo",
-        "lulustream",
-        "lulu.st",
-        "luluvid.com"
-    ],
-    "filelions": [
-        "filelions",
-        "minochinos",
-        "javplaya",
-        "lionshare",
-        "smoothpre",
-        "hanerix"
-    ],
-    "streamwish": [
-        "streamwish",
-        "hgcloud",
-        "awish",
-        "embedwish",
-        "strwish",
-        "playerwish.com",
-        "secured",
-        "hdsplay"
-    ],
-    "lastUpdatedAt": "2026-07-29T10:50:17.649Z",
-    "vidara": [
-        "vidara.to",
-        "vidara.so",
-        "vidaraa.cc"
-    ],
-    "vidsonic": [
-        "vidsonic"
-    ],
-    "embedseek": [
-        "embedseek"
-    ]
+  "_comment": "Domaines reconnus par detectExtractor. Édité par le bot Telegram, hot-reloadé. Voir docs/superpowers/specs/2026-05-22-rotated-extractor-domains-design.md",
+  "voe": [
+    "voe",
+    "voe.sx",
+    "smoki.cc",
+    "kinoger.ru",
+    "ralphysuccessfull",
+    "audaciousdefaulthouse",
+    "launchreliantcleaverriver",
+    "reputationsheriffkennethsand",
+    "greaseball6eventual20",
+    "timberwoodanotia",
+    "yodelswartlike",
+    "figeterpiazine",
+    "chromotypic",
+    "wolfdyslectic",
+    "charlestoughrace",
+    "kathyinformationwhether.com",
+    "bryantenunder.com",
+    "sandratableother.com",
+    "ss6846545.com",
+    "matthewhotelscience.com",
+    "jeremyparticipantanything.com"
+  ],
+  "uqload": [
+    "uqload"
+  ],
+  "doodstream": [
+    "dood",
+    "doodstream",
+    "dsvplay",
+    "d0o0d",
+    "dooood",
+    "d0000d",
+    "ds2play",
+    "dood.re",
+    "doply.net",
+    "kokoflix.lol",
+    "playmogo.com",
+    "kakaflix.lol",
+    "vidply.com",
+    "trakx.lol"
+  ],
+  "filemoon": [
+    "filemoon",
+    "filmoon",
+    "moonlink",
+    "bysebuho",
+    "moonplayer",
+    "lukefirst.lol",
+    "bysewihe.com",
+    "sequoia.lol",
+    "kaydendown.lol"
+  ],
+  "vidoza": [
+    "vidoza"
+  ],
+  "vidmoly": [
+    "vidmoly",
+    "molystream",
+    "vidhide"
+  ],
+  "streamtape": [
+    "streamtape",
+    "strcloud",
+    "shavetape",
+    "tapewithadblock"
+  ],
+  "mixdrop": [
+    "mixdrop",
+    "mdrop",
+    "mdy48tn97"
+  ],
+  "sharecloudy": [
+    "sharecloudy",
+    "moovbob",
+    "moovtop"
+  ],
+  "lulustream": [
+    "luluvdo",
+    "lulustream",
+    "lulu.st",
+    "luluvid.com",
+    "luluvido.com"
+  ],
+  "filelions": [
+    "filelions",
+    "minochinos",
+    "javplaya",
+    "lionshare",
+    "smoothpre",
+    "hanerix",
+    "morencius.com"
+  ],
+  "streamwish": [
+    "streamwish",
+    "hgcloud",
+    "awish",
+    "embedwish",
+    "strwish",
+    "playerwish.com",
+    "secured",
+    "hdsplay"
+  ],
+  "lastUpdatedAt": "2026-10-31T23:33:16.717Z",
+  "vidara": [
+    "vidara.to",
+    "vidara.so",
+    "vidaraa.cc"
+  ],
+  "vidsonic": [
+    "vidsonic"
+  ],
+  "embedseek": [
+    "embedseek"
+  ],
+  "anonmp4": [
+    "anonmp4"
+  ],
+  "firestream": [
+    "firestream"
+  ]
 }

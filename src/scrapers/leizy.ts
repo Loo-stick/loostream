@@ -36,6 +36,9 @@ const EMPTY_TTL_MS = 5 * 60 * 1000;
 const REQ_TIMEOUT_MS = 15000;
 const VF_SLOTS = 3;
 const VOSTFR_SLOTS = 3;
+// Candidats RÉSOLUS par langue (source.php) : large, pour atteindre les hôtes vivants en fin de
+// liste quand les premiers sont morts. L'extraction aval ne garde que ce qui répond (cap aux slots).
+const RESOLVE_PER_LANG = 10;
 const GATE_STEPS_MAX = 4; // GET->POST->GET->POST->GET : au plus 4 tours de boucle
 
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
@@ -171,39 +174,128 @@ async function episodePlayerUrl(slug: string, season: number, episode: number): 
 
 interface RawSource { url: string; language: string; quality: string; }
 
-/** Sources JSON présentes dans le player déverrouillé. */
-function parseSources(html: string): RawSource[] {
-  const out: RawSource[] = [];
-  const seen = new Set<string>();
-  for (const m of html.matchAll(/\{[^{}]*"language"[^{}]*\}/g)) {
+interface ParsedSource { index: number; host: string; language: string; quality: string; }
+
+/** Config de résolution du player déverrouillé : endpoint + ticket de source. */
+function playerConfig(html: string): { endpoint: string; ticket: string } | null {
+  const endpoint = html.match(/"sourceEndpoint":"([^"]+)"/)?.[1];
+  const ticket = html.match(/"sourceTicket":"([^"]+)"/)?.[1];
+  if (!endpoint || !ticket) return null;
+  return { endpoint: endpoint.replace(/\\\//g, '/'), ticket };
+}
+
+/**
+ * Liste ORDONNÉE des sources du player déverrouillé — l'INDEX (position dans le tableau
+ * `"sources":[…]`) est la clé attendue par source.php. Nouveau format (~2026-10) :
+ *   {"id":N,"name":"vidmoly","mode":"iframe","language":"VF","languageGroup":"VF",
+ *    "quality":"Auto","host":"vidmoly.to"}  — l'URL embed n'est PLUS inline.
+ */
+function parseSourceList(html: string): ParsedSource[] {
+  const start = html.indexOf('"sources":[');
+  if (start < 0) return [];
+  let depth = 0, end = -1;
+  for (let i = html.indexOf('[', start); i < html.length; i++) {
+    if (html[i] === '[') depth++;
+    else if (html[i] === ']') { depth--; if (depth === 0) { end = i; break; } }
+  }
+  if (end < 0) return [];
+  const arr = html.slice(start, end);
+  const out: ParsedSource[] = [];
+  let index = 0;
+  for (const m of arr.matchAll(/\{"id":\d+[^{}]*\}/g)) {
     const o = m[0];
-    const url = o.match(/"(https?:\/\/[^"]+)"/)?.[1];
-    if (!url || seen.has(url)) continue;
-    seen.add(url);
-    const lg = /vostfr/i.test(o.match(/"languageGroup":"([^"]+)"/)?.[1] || '') ? 'VOSTFR' : 'VF';
-    const quality = o.match(/"quality":"([^"]+)"/)?.[1] || 'Auto';
-    out.push({ url, language: lg, quality });
+    const host = o.match(/"host":"([^"]*)"/)?.[1] || '';
+    const lg = /vostfr/i.test(o.match(/"languageGroup":"([^"]*)"/)?.[1] || '') ? 'VOSTFR' : 'VF';
+    const quality = o.match(/"quality":"([^"]*)"/)?.[1] || 'Auto';
+    out.push({ index: index++, host, language: lg, quality });
   }
   return out;
 }
 
-/** GET player -> (2×) clic sur l'ad-gate -> sources. Une seule session pour toute la fiche. */
+/** Résout UNE source par index -> URL embed de l'hôte via POST source.php {ticket, index}. */
+async function resolveSourceUrl(
+  sess: Session, endpoint: string, ticket: string, index: number, referer: string,
+): Promise<string | null> {
+  const url = `${BASE()}${endpoint.replace(/^https?:\/\/[^/]+/, '')}`;
+  const resp = await req(url, { sess, referer, body: new URLSearchParams({ ticket, index: String(index) }).toString() });
+  if (!resp) return null;
+  try { const u = String(JSON.parse(resp)?.url || ''); return /^https?:\/\//.test(u) ? u : null; } catch { return null; }
+}
+
+/** Page déverrouillée -> sources extractibles résolues (URL réelle via source.php). */
+async function resolveFromUnlocked(html: string, sess: Session, referer: string): Promise<RawSource[]> {
+  const cfg = playerConfig(html);
+  if (!cfg) return [];
+  // On ne résout QUE les hôtes qu'on sait extraire (détection par hostname) : évite des
+  // appels source.php inutiles (flixium/flemmix… non gérés). Tampon ×2 par langue pour
+  // absorber les échecs d'extraction en aval (selectSources tranche ensuite aux créneaux).
+  const list = parseSourceList(html).filter(s => s.host && detectExtractor(`https://${s.host}/`));
+  // On résout LARGE (cap par langue) : les hôtes vivants sont parfois en fin de liste quand les
+  // premiers sont morts (ex. un titre où seuls anonmp4/firestream marchent). L'extraction en aval
+  // ne garde que les flux qui RÉPONDENT, puis plafonne aux créneaux -> pas de perte sur titre dur.
+  const pick = [
+    ...list.filter(s => s.language === 'VF').slice(0, RESOLVE_PER_LANG),
+    ...list.filter(s => s.language === 'VOSTFR').slice(0, RESOLVE_PER_LANG),
+  ];
+  const out: RawSource[] = [];
+  for (const s of pick) {
+    const url = await resolveSourceUrl(sess, cfg.endpoint, cfg.ticket, s.index, referer);
+    if (url) out.push({ url, language: s.language, quality: s.quality });
+  }
+  return out;
+}
+
+/**
+ * GET player -> franchit l'ad-gate (2 étapes) -> sources résolues. Une session pour la fiche.
+ *
+ * Nouveau gate (cf. player/assets/js/ad-gate.js, ~2026-10). Chaque étape = DEUX appels :
+ *   1. `gate_click` (AJAX) : POST {action,csrf_token,gate_nonce,gate_ticket} -> JSON
+ *      {ok, nonce:<nouveau>, unlocked}. C'est lui qui fait avancer l'étape côté serveur.
+ *   2. navigation :
+ *      - external='1' : form POST {action: unlocked?gate_play:gate_present, gate_ticket,
+ *        gate_nonce:<nouveau>} -> la RÉPONSE est la page suivante (sources si unlocked).
+ *      - sinon : simple RELOAD (re-GET player) — la session a déjà avancé via gate_click.
+ * L'ancien code POSTait `gate_click` SANS gate_ticket et attendait une URL inline -> ok:false
+ * ET format de sources périmé. Désormais : ticket inclus + résolution via source.php.
+ */
 async function unlockSources(playerUrl: string, referer: string): Promise<RawSource[]> {
   const sess: Session = { cookie: '' };
+  const attr = (html: string, name: string): string | undefined =>
+    html.match(new RegExp(`data-${name}="([^"]*)"`))?.[1];
+  // Page déverrouillée = présence du ticket de source (sinon c'est encore le gate).
+  const tryResolve = (html: string): Promise<RawSource[]> =>
+    html.includes('"sourceTicket"') ? resolveFromUnlocked(html, sess, playerUrl) : Promise.resolve([]);
   for (let i = 0; i < GATE_STEPS_MAX; i++) {
     const html = await req(playerUrl, { sess, referer });
     if (!html) return [];
-    const sources = parseSources(html);
-    if (sources.length) return sources;                  // déverrouillé
-    if (!/class="ad-gate"|id="adGate"/.test(html)) return []; // ni gate ni sources
-    const csrf = html.match(/data-csrf="([^"]+)"/)?.[1];
-    const nonce = html.match(/data-nonce="([^"]+)"/)?.[1];
-    const action = html.match(/data-action-url="([^"]+)"/)?.[1];
+    const resolved = await tryResolve(html);
+    if (resolved.length) return resolved;                     // déverrouillé + résolu
+    if (!/class="ad-gate"|id="adGate"/.test(html)) return [];  // ni gate ni sources
+    const csrf = attr(html, 'csrf');
+    const nonce = attr(html, 'nonce');
+    const action = attr(html, 'action-url');
+    const ticket = attr(html, 'ticket') || '';
+    const external = attr(html, 'external') === '1';
     if (!csrf || !nonce || !action) return [];
-    await req(`${BASE()}${action.replace(/&amp;/g, '&').replace(/^https?:\/\/[^/]+/, '')}`, {
+    const actionUrl = `${BASE()}${action.replace(/&amp;/g, '&').replace(/^https?:\/\/[^/]+/, '')}`;
+    // Phase 1 — validation AJAX (fait avancer l'étape côté serveur).
+    const clickResp = await req(actionUrl, {
       sess, referer: playerUrl,
-      body: `action=gate_click&csrf_token=${encodeURIComponent(csrf)}&gate_nonce=${encodeURIComponent(nonce)}`,
+      body: new URLSearchParams({ action: 'gate_click', csrf_token: csrf, gate_nonce: nonce, gate_ticket: ticket }).toString(),
     });
+    let ok = false, nextNonce = '', unlocked = false;
+    try { const j = JSON.parse(clickResp || ''); ok = j?.ok === true; nextNonce = String(j?.nonce || ''); unlocked = j?.unlocked === true; } catch { /* non-JSON */ }
+    if (!ok) return [];
+    // Phase 2 — navigation external : la réponse porte la page suivante (sources si unlocked).
+    if (external && nextNonce) {
+      const nav = await req(actionUrl, {
+        sess, referer: playerUrl,
+        body: new URLSearchParams({ action: unlocked ? 'gate_play' : 'gate_present', gate_ticket: ticket, gate_nonce: nextNonce }).toString(),
+      });
+      const r = nav ? await tryResolve(nav) : [];
+      if (r.length) return r;
+    }
+    // non-external : on reboucle -> re-GET player (reload), la session a avancé.
   }
   return [];
 }
@@ -217,12 +309,17 @@ function serverName(url: string): string {
   return h.replace(/^www\./, '').split('.')[0] || 'leizy';
 }
 
-/** Créneaux séparés par langue : une fiche massivement VF ne doit pas noyer les VOSTFR. */
+/** Ne garde que les sources dont l'URL est extractible (double-contrôle ; l'hôte l'est déjà). */
 function selectSources(sources: RawSource[]): RawSource[] {
-  const usable = sources.filter(s => detectExtractor(s.url));
+  return sources.filter(s => detectExtractor(s.url));
+}
+
+/** Plafonne les flux OBTENUS par langue (une fiche massivement VF ne doit pas noyer les VOSTFR). */
+function capByLanguage(streams: LeizyStream[]): LeizyStream[] {
   return [
-    ...usable.filter(s => s.language === 'VF').slice(0, VF_SLOTS),
-    ...usable.filter(s => s.language === 'VOSTFR').slice(0, VOSTFR_SLOTS),
+    ...streams.filter(s => s.language === 'VF').slice(0, VF_SLOTS),
+    ...streams.filter(s => s.language === 'VOSTFR').slice(0, VOSTFR_SLOTS),
+    ...streams.filter(s => s.language !== 'VF' && s.language !== 'VOSTFR'),
   ];
 }
 
@@ -352,7 +449,7 @@ async function fetchLeizyStreams(
   }
 
   // 4. Un extracteur par source retenue, EN PARALLÈLE.
-  const streams = (await Promise.all(sources.map(async (s): Promise<LeizyStream[]> => {
+  const extracted = (await Promise.all(sources.map(async (s): Promise<LeizyStream[]> => {
     const id = detectExtractor(s.url) || undefined;
     const r = await extractStream(s.url, extractorConfig, id);
     if (!r?.url) return [];
@@ -364,6 +461,8 @@ async function fetchLeizyStreams(
     return [{ url: r.url, quality: r.quality || 'HD', language: s.language, server: serverName(s.url), headers: r.headers }];
   }))).flat();
 
+  // On a résolu/extrait LARGE pour survivre aux hôtes morts -> on plafonne les flux qui ONT marché.
+  const streams = capByLanguage(extracted);
   console.log(`[Leizy] ${streams.length} flux pour "${title}"${mediaType === 'series' ? ` S${season}E${episode}` : ''}`);
   return streams;
 }

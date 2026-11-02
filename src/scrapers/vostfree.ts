@@ -24,7 +24,7 @@ const endpoints = makeEndpointConfig('vostfree-endpoints.json', 'VOSTFREE_ENDPOI
 export const reloadVostfreeEndpoints = endpoints.reload;
 export const getVostfreeEndpoints = endpoints.get;
 const BASE = () => endpoints.get().base.replace(/\/+$/, '');
-const UQLOAD_TLD = 'uqload.cx';
+const UQLOAD_TLD = 'uqload.vc';
 
 const HEADERS = {
   'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',

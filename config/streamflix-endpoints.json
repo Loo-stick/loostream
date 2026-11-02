@@ -1,4 +1,4 @@
 {
-  "_comment": "Base de l'API StreamFlix V2. Éditez si le domaine change (streamflix.mom -> ...) ; hot-reloadé (aucun rebuild).",
-  "base": "https://streamflix.mom"
+  "_comment": "Base de l'API StreamFlix V2. Éditez si le domaine change (streamflix.mom -> stream-flix.lol -> ...) ; hot-reloadé (aucun rebuild).",
+  "base": "https://stream-flix.lol"
 }
