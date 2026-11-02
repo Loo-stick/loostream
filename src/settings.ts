@@ -13,6 +13,7 @@ interface RuntimeSettings {
   netfreeSocksPool?: boolean;
   movieboxSocksPool?: boolean;
   disabledSources?: string[];
+  disabledExtractors?: string[];
   captureAllLogs?: boolean;
   // Facteurs ×0.25→×8 sur les TTL du cache, par catégorie (défaut ×1 chacun) :
   cacheMultStreams?: number;   // sources normales (positif, sauf NetMirror)
@@ -50,6 +51,9 @@ function load(): RuntimeSettings {
         movieboxSocksPool: typeof raw.movieboxSocksPool === 'boolean' ? raw.movieboxSocksPool : undefined,
         disabledSources: Array.isArray(raw.disabledSources)
           ? raw.disabledSources.filter((x: unknown) => typeof x === 'string')
+          : undefined,
+        disabledExtractors: Array.isArray(raw.disabledExtractors)
+          ? raw.disabledExtractors.filter((x: unknown) => typeof x === 'string')
           : undefined,
         captureAllLogs: typeof raw.captureAllLogs === 'boolean' ? raw.captureAllLogs : undefined,
         cacheMultStreams: typeof raw.cacheMultStreams === 'number' && raw.cacheMultStreams > 0 ? raw.cacheMultStreams : undefined,
@@ -137,9 +141,24 @@ export function isSourceEnabled(name: string): boolean {
   return !getDisabledSources().includes(name);
 }
 
+// Extracteurs désactivés manuellement (admin) — extractStream renvoie null. Persistant, à chaud.
+// Défaut quand JAMAIS configuré (undefined) : fsvid OFF (premium injouable sur Nuvio, cf
+// mémoire mediaflow_light_master_loop). Dès qu'on écrit la liste (même []), elle fait foi —
+// [] = tout activé, y compris fsvid. On NE rabat donc PAS [] sur le défaut (contrairement aux
+// sources) : désactiver puis tout réactiver est un choix explicite à respecter.
+export const DEFAULT_DISABLED_EXTRACTORS = ['fsvid'];
+export function getDisabledExtractors(): string[] {
+  const v = load().disabledExtractors;
+  return v !== undefined ? v : DEFAULT_DISABLED_EXTRACTORS;
+}
+export function isExtractorEnabled(id: string): boolean {
+  return !getDisabledExtractors().includes(id);
+}
+
 export function updateSettings(patch: {
   mode?: string | null; ownerKey?: string | null; autoWhitelist?: boolean | null;
   netfreeSocksPool?: boolean | null; movieboxSocksPool?: boolean | null; disabledSources?: string[] | null; captureAllLogs?: boolean | null;
+  disabledExtractors?: string[] | null;
   cacheMultStreams?: number | null; cacheMultNetmirror?: number | null; cacheMultEmpty?: number | null;
   matrixAccessToken?: string | null;
 }): void {
@@ -162,6 +181,9 @@ export function updateSettings(patch: {
   applyMult('cacheMultNetmirror', patch.cacheMultNetmirror);
   applyMult('cacheMultEmpty', patch.cacheMultEmpty);
   apply('disabledSources', patch.disabledSources === null ? null : (patch.disabledSources && patch.disabledSources.length ? patch.disabledSources : null));
+  // Extracteurs : on persiste la liste TELLE QUELLE, [] compris (= tout activé, choix explicite).
+  // Seul `null` supprime la clé (retour au défaut DEFAULT_DISABLED_EXTRACTORS).
+  apply('disabledExtractors', patch.disabledExtractors === undefined ? undefined : patch.disabledExtractors);
   fs.writeFileSync(filePath, JSON.stringify(current, null, 2));
   cache = null; // invalide
 }

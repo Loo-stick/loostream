@@ -24,6 +24,17 @@
 //                        segments compris (sinon 302 -> endpoint mort). Le player ne
 //                        les applique pas de façon fiable en direct -> « charge, pas de
 //                        vidéo ». Doit passer par le proxy (qui pose les headers partout).
+//   - fsvid            : RETIRÉ de cette liste (2026-10-31). Longue chasse : on a d'abord
+//                        cru le token `?t=` IP-lié -> forcé le proxy. FAUX. Preuves serveur :
+//                        master + media playlist fsvid répondent 200 partout ; seuls les
+//                        SEGMENTS .ts sont gatés (exigent un Referer + un UA ≠ `okhttp`). Le
+//                        proxy (local ET public via Cloudflare) sort le VRAI TS de 1,27 Mo
+//                        même en UA okhttp — donc le proxy livre les bons octets. POURTANT
+//                        Nuvio « Playback failed » sur TOUT ce qui est proxifié, alors que
+//                        TOUT le direct joue nickel (constaté par Stick). L'échec est
+//                        CÔTÉ CLIENT (Nuvio gère mal nos manifestes proxifiés), pas nos octets.
+//                        -> fsvid repart en DIRECT (raw + proxyHeaders Referer/UA navigateur),
+//                        que Nuvio propage aux segments. Voir mémoire nuvio_proxy_playback_fail.
 export const PROXY_FORCED_HOSTS = ['uqload', 'voe.sx', 'vmnow', 'vmeas', 'vmpx.online', 'tnmr'];
 
 /** Un hôte est directable s'il n'est pas dans la liste non-directable ci-dessus ET si

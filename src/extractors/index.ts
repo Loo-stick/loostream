@@ -6,6 +6,8 @@ import * as crypto from 'crypto';
 import { unpackFromHtml, findStreamUrl } from './unpack';
 import { isStreamLive } from '../live-check';
 import { probeMaster, resLabel } from '../multiaudio';
+import { isExtractorEnabled } from '../settings';
+import { recordExtraction } from '../extractor-health';
 import * as fs from 'fs';
 import * as path from 'path';
 
@@ -50,12 +52,12 @@ export interface ExtractorConfig {
   mediaFlowPassword?: string;
 }
 
-export type ExtractorId ='voe' | 'uqload' | 'doodstream' | 'filemoon' | 'vidoza' | 'vidmoly' | 'streamtape' | 'mixdrop' | 'sharecloudy' | 'lulustream' | 'filelions' | 'streamwish' | 'fsvid' | 'vidzy' | 'mailru' | 'sibnet' | 'livavid' | 'ansembed' | 'vidara' | 'vidsonic' | 'embedseek';
+export type ExtractorId ='voe' | 'uqload' | 'doodstream' | 'filemoon' | 'vidoza' | 'vidmoly' | 'streamtape' | 'mixdrop' | 'sharecloudy' | 'lulustream' | 'filelions' | 'streamwish' | 'fsvid' | 'vidzy' | 'mailru' | 'sibnet' | 'livavid' | 'ansembed' | 'vidara' | 'vidsonic' | 'embedseek' | 'anonmp4' | 'firestream';
 
 export const EXTRACTOR_IDS: ExtractorId[] = [
   'voe', 'uqload', 'doodstream', 'filemoon', 'vidoza', 'vidmoly',
   'streamtape', 'mixdrop', 'sharecloudy', 'lulustream', 'filelions',
-  'streamwish', 'fsvid', 'vidzy', 'mailru', 'sibnet', 'livavid', 'ansembed', 'vidara', 'vidsonic', 'embedseek',
+  'streamwish', 'fsvid', 'vidzy', 'mailru', 'sibnet', 'livavid', 'ansembed', 'vidara', 'vidsonic', 'embedseek', 'anonmp4', 'firestream',
 ];
 
 export const DEFAULT_EXTRACTOR_DOMAINS: Record<ExtractorId, string[]> = {
@@ -97,6 +99,10 @@ export const DEFAULT_EXTRACTOR_DOMAINS: Record<ExtractorId, string[]> = {
   ansembed: ['ansembed'],
   // embedseek (Seekstreaming/ZT) : API chiffrée AES-128-CBC, clé/IV statiques.
   embedseek: ['embedseek'],
+  // anonmp4 : ticket PLAY_SEED/PLAY_SIG en page -> POST /video-api -> {hls}. Cf. extractAnonmp4.
+  anonmp4: ['anonmp4'],
+  // firestream : token-blob en page -> POST /api/videos/<slug>/resolve -> {signedVideoUrl}. .to/.site.
+  firestream: ['firestream'],
 };
 
 /**
@@ -389,6 +395,88 @@ export async function extractVidsonic(embedUrl: string): Promise<ExtractedStream
   }
 }
 
+/**
+ * AnonMP4 (anonmp4.art). La page porte deux constantes (PLAY_SEED, PLAY_SIG) = ticket de
+ * lecture éphémère ; on POST /video-api {ticket, sig} (même session/cookie) -> JSON
+ * {status:"ok", hls:"…m3u8", mp4?:…}. Le ticket périme vite -> GET + POST doivent s'enchaîner.
+ */
+export async function extractAnonmp4(embedUrl: string): Promise<ExtractedStream | null> {
+  try {
+    const origin = new URL(embedUrl).origin;
+    const page = await axios.get<string>(embedUrl, {
+      headers: { ...IFRAME_HEADERS, Referer: `${origin}/` },
+      timeout: 12000, httpsAgent: INSECURE_AGENT, responseType: 'text', transformResponse: r => r,
+      validateStatus: () => true,
+    });
+    const html = String(page.data || '');
+    const seed = html.match(/PLAY_SEED\s*=\s*'([^']+)'/)?.[1];
+    const sig = html.match(/PLAY_SIG\s*=\s*'([^']+)'/)?.[1];
+    if (!seed || !sig) { console.log('[Extractor] AnonMP4: ticket introuvable'); return null; }
+    const cookie = ([] as string[]).concat(page.headers['set-cookie'] || [])
+      .map(c => c.split(';')[0]).join('; ');
+    const api = await axios.post(`${origin}/video-api`, { ticket: seed, sig }, {
+      headers: {
+        ...IFRAME_HEADERS, 'Content-Type': 'application/json',
+        'X-Requested-With': 'XMLHttpRequest', Accept: 'application/json',
+        Referer: embedUrl, ...(cookie ? { Cookie: cookie } : {}),
+      },
+      timeout: 12000, httpsAgent: INSECURE_AGENT, validateStatus: () => true,
+    });
+    const d: any = api.data || {};
+    const url: string = d.hls || d.mp4 || d.url || d.file || '';
+    if (!/^https?:\/\//.test(url)) { console.log('[Extractor] AnonMP4: pas de flux dans video-api'); return null; }
+    return {
+      url, quality: 'HD',
+      format: (d.hls || url.includes('.m3u8')) ? 'hls' : 'mp4',
+      headers: { Referer: `${origin}/` },
+    };
+  } catch (e: any) {
+    console.log('[Extractor] AnonMP4 error:', e.message);
+    return null;
+  }
+}
+
+/**
+ * FireStream (firestream.to -> redirige vers firestream.site). Le gros JS obfusqué (_0x…) est
+ * un LEURRE : la résolution est en clair -> on lit le <script id="token-blob"> en page + le slug
+ * (dernier segment d'URL), puis POST /api/videos/<slug>/resolve {blob} -> {signedVideoUrl (HD),
+ * signedVideoSdUrl (SD)}. URL signée (md5+expires) -> résoudre frais à la lecture.
+ */
+export async function extractFirestream(embedUrl: string): Promise<ExtractedStream | null> {
+  try {
+    const page = await axios.get<string>(embedUrl, {
+      headers: { ...IFRAME_HEADERS, Referer: `${new URL(embedUrl).origin}/` },
+      timeout: 12000, httpsAgent: INSECURE_AGENT, responseType: 'text', transformResponse: r => r,
+      maxRedirects: 3, validateStatus: () => true,
+    });
+    const finalUrl = (page.request?.res?.responseUrl as string) || embedUrl;
+    const fo = new URL(finalUrl);
+    const slug = fo.pathname.split('/').filter(Boolean).pop();
+    const blob = String(page.data || '').match(/id="token-blob"[^>]*>([^<]+)</)?.[1]?.trim();
+    if (!slug || !blob) { console.log('[Extractor] FireStream: slug/token-blob introuvable'); return null; }
+    const cookie = ([] as string[]).concat(page.headers['set-cookie'] || [])
+      .map(c => c.split(';')[0]).join('; ');
+    const api = await axios.post(`${fo.origin}/api/videos/${encodeURIComponent(slug)}/resolve`, { blob }, {
+      headers: {
+        ...IFRAME_HEADERS, 'Content-Type': 'application/json', Accept: 'application/json',
+        Referer: finalUrl, Origin: fo.origin, ...(cookie ? { Cookie: cookie } : {}),
+      },
+      timeout: 12000, httpsAgent: INSECURE_AGENT, validateStatus: () => true,
+    });
+    const d: any = api.data || {};
+    const url: string = d.signedVideoUrl || d.signedVideoSdUrl || '';
+    if (!/^https?:\/\//.test(url)) { console.log('[Extractor] FireStream: pas d\'URL signée'); return null; }
+    return {
+      url, quality: d.signedVideoUrl ? 'HD' : 'SD',
+      format: url.includes('.m3u8') ? 'hls' : 'mp4',
+      headers: { Referer: `${fo.origin}/` },
+    };
+  } catch (e: any) {
+    console.log('[Extractor] FireStream error:', e.message);
+    return null;
+  }
+}
+
 export async function extractUqload(embedUrl: string): Promise<ExtractedStream | null> {
   try {
     // Normalize URL (remove embed- prefix if present)
@@ -421,6 +509,23 @@ export async function extractUqload(embedUrl: string): Promise<ExtractedStream |
         format: 'mp4',
         headers: { 'Referer': 'https://uqload.is/' }
       };
+    }
+
+    // Nouveau format uqload (~2026-10) : le flux n'est plus en clair, il est dans du JS
+    // PACKÉ (eval(function(p,a,c,k,e,d)…) + jwplayer). On dépacke puis on cherche
+    // sources:/src:/file: dans le JS décodé (comme vidzy/fsvid).
+    const unpacked = unpackFromHtml(html);
+    if (unpacked) {
+      const url = findStreamUrl(unpacked);
+      if (url) {
+        const ref = (() => { try { return new URL(embedUrl).origin + '/'; } catch { return 'https://uqload.vc/'; } })();
+        return {
+          url,
+          quality: 'HD',
+          format: url.includes('.m3u8') ? 'hls' : 'mp4',
+          headers: { 'Referer': ref },
+        };
+      }
     }
 
     console.log('[Extractor] Uqload: No video URL found');
@@ -934,6 +1039,10 @@ async function extractLocally(embedUrl: string, extractor: string): Promise<Extr
       return await extractStreamtape(embedUrl);
     case 'embedseek':
       return await extractEmbedseek(embedUrl);
+    case 'anonmp4':
+      return await extractAnonmp4(embedUrl);
+    case 'firestream':
+      return await extractFirestream(embedUrl);
     case 'lulustream':
     case 'streamwish':
     case 'filelions':
@@ -1104,6 +1213,13 @@ export async function extractStream(
     return null;
   }
 
+  // Extracteurs DÉSACTIVÉS depuis l'admin (toggle persistant, hot-reload). Défaut : fsvid OFF
+  // (premium injouable sur Nuvio, cf mémoire mediaflow_light_master_loop). Un extracteur coupé
+  // n'est pas tenté -> pas de flux injouable affiché. Réactivation d'un clic dans l'admin.
+  if (!isExtractorEnabled(extractor)) {
+    return null;
+  }
+
   // Hôtes où NOTRE extraction locale est plus fiable que MediaFlow -> on l'utilise
   // même en mode MFP (le flux résolu est ensuite livré/relayé normalement).
   //  - fsvid/vidzy/mailru/sibnet : MediaFlow renvoie 502/ne les connaît pas.
@@ -1117,6 +1233,7 @@ export async function extractStream(
   if (config?.useMediaFlow && config.mediaFlowUrl && !LOCAL_ONLY.includes(extractor)) {
     const result = await extractViaMediaFlow(embedUrl, extractor, config);
     if (result) {
+      recordExtraction(extractor, result.url, result.headers); // santé : id fiable + échantillon
       return result;
     }
     console.log(`[Extractor] MediaFlow failed for ${extractor}, falling back to local`);
@@ -1126,5 +1243,7 @@ export async function extractStream(
   // en aval par applyMultiAudio (src/multiaudio.ts), via la sonde du master —
   // robuste à tout CDN (tnmr, acek-cdn…) sans liste figée.
   console.log(`[Extractor] Using local extractor for ${extractor}: ${embedUrl}`);
-  return await extractLocally(embedUrl, extractor);
+  const result = await extractLocally(embedUrl, extractor);
+  if (result) recordExtraction(extractor, result.url, result.headers); // santé : id fiable + échantillon
+  return result;
 }

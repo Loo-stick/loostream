@@ -43,7 +43,7 @@ import proxyRouter, { isAllowedUrl, addAllowedDomain, getAllowedDomains } from '
 import { accessEnabled, keyMatches, signUrl, requireQueryKey, ownerKeyMatches, ownerKeyEnabled } from './access';
 import { verifyFileAdmin, listAdmins, addAdmin, removeAdmin, setAdminPassword, isRootUser } from './admins';
 import { installLogCapture, getLogs } from './logbuffer';
-import { getModeRaw, autoWhitelistEnabled, updateSettings, settingsView, netfreeSocksPoolEnabled, movieboxSocksPoolEnabled, isSourceEnabled, getDisabledSources, captureAllLogsEnabled } from './settings';
+import { getModeRaw, autoWhitelistEnabled, updateSettings, settingsView, netfreeSocksPoolEnabled, movieboxSocksPoolEnabled, isSourceEnabled, getDisabledSources, getDisabledExtractors, captureAllLogsEnabled } from './settings';
 import { sanitizePseudo, pseudoLabel } from './pseudo';
 import { tmdbReq, tmdbKeyType } from './tmdb-auth';
 import { runWithLogCapture, capturedLines } from './request-log';
@@ -53,7 +53,9 @@ import { canDirect } from './deliver';
 import * as fsSync from 'fs';
 import * as zlib from 'zlib';
 import { getFrenchSubtitles, subtitleToVtt } from './subtitles';
-import { ExtractorConfig, reloadExtractorDomains, getExtractorDomains, detectExtractor } from './extractors';
+import { ExtractorConfig, reloadExtractorDomains, getExtractorDomains, detectExtractor, EXTRACTOR_IDS } from './extractors';
+import { recordDelivery, getExtractorHealth, getSourceHealth, getExtractorSample, getSourceSample } from './extractor-health';
+import { probeStream } from './probe-stream';
 import { getSceneMeta, buildFilename, providerLabel } from './filename';
 import { buildStreamName, buildStreamTitle } from './display';
 import { QUALITY_SCORES, passesPreferences, compareStreams } from './prefs';
@@ -2454,6 +2456,8 @@ async function handleStream(req: express.Request, res: express.Response, type: s
         provider: providerLabel(d._meta.source),
       });
       const delivery = computeDelivery(d.url, !!d.behaviorHints?.proxyHeaders, config);
+      // Santé extracteurs + sources (trafic réel) : mode de livraison + échantillon re-sondable.
+      recordDelivery(d.url, delivery, d._meta?.source, d.behaviorHints?.proxyHeaders?.request);
       const meta = { ...d._meta, delivery, frSubCount };
       return {
         ...d,
@@ -3235,7 +3239,11 @@ app.post('/api/cache/clear', requireAdminSession, jsonBody, (req, res) => {
 app.get('/api/sources', (_req, res) => {
   const metrics = getAllMetrics();
   const disabled = getDisabledSources();
-  const sources = Object.entries(metrics).map(([name, m]) => ({ name, enabled: !disabled.includes(name), ...m }));
+  const health = getSourceHealth();
+  const sources = Object.entries(metrics).map(([name, m]) => {
+    const h = health[name];
+    return { name, enabled: !disabled.includes(name), ...m, modes: h?.modes || null, hasSample: !!h?.hasSample };
+  });
   const on = sources.filter(s => s.enabled);
   res.json({
     sources,
@@ -3257,6 +3265,46 @@ app.post('/api/sources/:name', requireAdminSession, jsonBody, (req, res) => {
   if (enabled) set.delete(name); else set.add(name);
   updateSettings({ disabledSources: [...set] });
   return res.json({ ok: true, name, enabled });
+});
+
+// ── Extracteurs : liste + toggle ON/OFF (calqué sur /api/sources) ──────────────
+// Le statut santé (par mode) vient de la capture du trafic réel : getExtractorHealth().
+app.get('/api/extractors', (_req, res) => {
+  const disabled = new Set(getDisabledExtractors());
+  const health = getExtractorHealth();
+  const extractors = EXTRACTOR_IDS.map(id => ({
+    id,
+    enabled: !disabled.has(id),
+    ...(health[id] || { seen: 0, lastSeen: null, modes: {} }),
+  }));
+  res.json({
+    extractors,
+    summary: { total: extractors.length, off: [...disabled].filter(d => EXTRACTOR_IDS.includes(d as any)).length },
+  });
+});
+app.post('/api/extractors/:id', requireAdminSession, jsonBody, (req, res) => {
+  const id = String(req.params.id || '');
+  if (!EXTRACTOR_IDS.includes(id as any)) return res.status(404).json({ ok: false, error: 'extracteur inconnu' });
+  const enabled = (req.body || {}).enabled;
+  if (typeof enabled !== 'boolean') return res.status(400).json({ ok: false, error: 'enabled doit être un booléen' });
+  const set = new Set(getDisabledExtractors());
+  if (enabled) set.delete(id); else set.add(id);
+  updateSettings({ disabledExtractors: [...set] });
+  return res.json({ ok: true, id, enabled });
+});
+
+// ── Sonde manuelle : rejoue le dernier flux capturé d'une source/extracteur côté serveur ──
+// (admin). Attrape CDN mort/403/502/décoy ; ne voit PAS les soucis spécifiques au client.
+async function handleProbe(sample: { url: string; headers: Record<string, string> } | undefined, res: express.Response) {
+  if (!sample) return res.status(404).json({ ok: false, error: 'aucun échantillon capturé — lance d\'abord un stream qui l\'utilise' });
+  const r = await probeStream(sample.url, sample.headers);
+  return res.json({ ok: true, ...r, host: (() => { try { return new URL(sample.url).hostname; } catch { return ''; } })() });
+}
+app.post('/api/probe/extractor/:id', requireAdminSession, (req, res) => {
+  handleProbe(getExtractorSample(String(req.params.id || '')), res).catch(() => res.status(500).json({ ok: false, error: 'sonde échouée' }));
+});
+app.post('/api/probe/source/:name', requireAdminSession, (req, res) => {
+  handleProbe(getSourceSample(String(req.params.name || '')), res).catch(() => res.status(500).json({ ok: false, error: 'sonde échouée' }));
 });
 
 // ── NetMirror : manifestes RECONSTRUITS (méthode Onyx) ─────────────────────────

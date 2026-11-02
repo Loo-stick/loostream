@@ -8,7 +8,8 @@
         * { box-sizing: border-box; margin: 0; padding: 0; }
         :root {
             --bg1: #12151d; --bg2: #0d0f16; --accent: #5b93f5; --accent-h: #3f6fd6;
-            --ok: #35c28a; --warn: #e6a93e; --down: #e5555b; --muted: #8b93a7; --dim: #5c6377;
+            /* Statuts daltonien-safe : OK = bleu, warning = jaune, erreur = rouge. */
+            --ok: #38bdf8; --warn: #e6c14e; --down: #e5555b; --muted: #8b93a7; --dim: #5c6377;
         }
         body {
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
@@ -36,6 +37,23 @@
         .nav a.active { background: rgba(91,147,245,0.16); color: #fff; font-weight: 600; border-color: rgba(91,147,245,0.30); }
         .sidebar .foot { margin-top: auto; }
         .sidebar .meta { color: var(--dim); font-size: 0.75em; margin-bottom: 12px; line-height: 1.5; }
+
+        /* Topbar mobile + hamburger (masqués sur desktop, activés dans la media query) */
+        .topbar { display: none; }
+        .burger {
+            display: grid; place-items: center; width: 42px; height: 42px; flex: none;
+            background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.12);
+            border-radius: 11px; cursor: pointer; color: #e8ebf2;
+        }
+        .burger:active { background: rgba(255,255,255,0.12); }
+        .burger span { position: relative; width: 18px; height: 2px; border-radius: 2px; background: currentColor; transition: transform .2s, opacity .2s; }
+        .burger span::before, .burger span::after { content: ''; position: absolute; left: 0; width: 18px; height: 2px; border-radius: 2px; background: currentColor; transition: transform .2s, opacity .2s; }
+        .burger span::before { top: -6px; }
+        .burger span::after { top: 6px; }
+        body.nav-open .burger span { background: transparent; }
+        body.nav-open .burger span::before { transform: translateY(6px) rotate(45deg); }
+        body.nav-open .burger span::after { transform: translateY(-6px) rotate(-45deg); }
+        .backdrop { display: none; }
 
         /* --- Main --- */
         main { flex: 1; padding: 28px 32px; max-width: 1300px; }
@@ -106,7 +124,7 @@
         .cfg-msg { font-size:0.82em; margin-left:6px; }
         .cfg-msg.ok { color:var(--ok); } .cfg-msg.err { color:#f2969b; }
         .badge { font-size:0.72em; padding:3px 9px; border-radius:20px; }
-        .badge.on { background:rgba(44,182,125,0.2); color:var(--ok); }
+        .badge.on { background:rgba(56,189,248,0.2); color:var(--ok); }
         .badge.off { background:rgba(160,160,176,0.2); color:var(--muted); }
         .badge.src { background:rgba(91,147,245,0.2); color:#9db8ff; margin-left:6px; }
 
@@ -141,9 +159,26 @@
 
         @media (max-width: 760px) {
             body { flex-direction: column; }
-            .sidebar { width: 100%; min-height: auto; position: static; flex-direction: row; align-items: center; flex-wrap: wrap; }
-            .nav { flex-direction: row; flex-wrap: wrap; margin-top: 0; }
-            .sidebar .foot, .sidebar .logo small { display: none; }
+            /* Topbar collante avec logo + hamburger */
+            .topbar {
+                display: flex; align-items: center; justify-content: space-between; gap: 12px;
+                padding: 11px 16px; position: sticky; top: 0; z-index: 40;
+                background: rgba(13,15,22,0.92); -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px);
+                border-bottom: 1px solid rgba(255,255,255,0.07);
+            }
+            .topbar .logo { font-size: 1.1em; font-weight: 700; }
+            /* Sidebar -> drawer off-canvas qui glisse depuis la gauche */
+            .sidebar {
+                position: fixed; top: 0; left: 0; bottom: 0; width: 268px; max-width: 82vw;
+                z-index: 60; transform: translateX(-100%); transition: transform .24s ease;
+                min-height: 100vh; background: #0d0f16; box-shadow: 0 0 44px rgba(0,0,0,0.55);
+                border-right: 1px solid rgba(255,255,255,0.09);
+            }
+            body.nav-open .sidebar { transform: translateX(0); }
+            /* Voile derrière le drawer */
+            .backdrop { display: block; position: fixed; inset: 0; z-index: 50; background: rgba(0,0,0,0.5);
+                opacity: 0; pointer-events: none; transition: opacity .24s ease; }
+            body.nav-open .backdrop { opacity: 1; pointer-events: auto; }
             main { padding: 20px 16px; }
         }
         /* --- Utilisateurs --- */
@@ -159,10 +194,22 @@
         tr.problem .uflag { background: var(--down); }
         .uava { width: 28px; height: 28px; border-radius: 7px; display: grid; place-items: center; font-weight: 700; font-size: 0.75em; color: #16213e; flex: none; }
         .chip { display: inline-flex; align-items: center; gap: 5px; font-size: 0.78em; font-weight: 600; padding: 2px 8px; border-radius: 999px; }
-        .chip.ok { background: rgba(44,182,125,0.16); color: #4fd6a0; }
-        .chip.warn { background: rgba(255,137,6,0.16); color: #ffab52; }
+        .chip.ok { background: rgba(56,189,248,0.16); color: #5fc8f0; }
+        .chip.warn { background: rgba(230,193,78,0.16); color: #e6c14e; }
         .chip.crit { background: rgba(229,85,91,0.18); color: #f2969b; }
         .chip.mute { background: rgba(255,255,255,0.08); color: var(--muted); }
+        /* Pastilles de mode de livraison — palette daltonien-safe (bleu / jaune / rouge),
+           le libellé texte sert de renfort. N'utilise PAS .chip.ok/.warn (vert/orange). */
+        .mchip { display: inline-flex; align-items: center; gap: 5px; font-size: 0.78em; font-weight: 600; padding: 2px 8px; border-radius: 999px; }
+        .mchip.m-direct { background: rgba(91,147,245,0.20); color: #8fb4ff; }
+        .mchip.m-local  { background: rgba(230,193,78,0.20); color: #efcf63; }
+        .mchip.m-mfp    { background: rgba(229,85,91,0.22); color: #f58a90; }
+        /* Verdict de sonde (bouton Tester) — bleu vivant / rouge mort / jaune incertain. */
+        .verdict { font-size: 0.76em; font-weight: 600; padding: 2px 8px; border-radius: 999px; white-space: nowrap; }
+        .verdict.v-alive { background: rgba(56,189,248,0.2); color: #5fc8f0; }
+        .verdict.v-dead  { background: rgba(229,85,91,0.22); color: #f58a90; }
+        .verdict.v-warn  { background: rgba(230,193,78,0.2); color: #e6c14e; }
+        .verdict.v-run   { background: rgba(255,255,255,0.08); color: var(--muted); }
         .ucols { display: grid; grid-template-columns: 1.5fr 1fr; gap: 18px; align-items: start; }
         @media (max-width: 900px) { .ucols { grid-template-columns: 1fr; } }
         .evrow { border-bottom: 1px solid rgba(255,255,255,0.05); }
@@ -181,11 +228,19 @@
     </style>
 </head>
 <body>
+    <!-- Topbar mobile (hamburger) -->
+    <header class="topbar">
+        <div class="logo">⚙️ LooStream</div>
+        <button class="burger" id="burger" aria-label="Menu" aria-expanded="false"><span></span></button>
+    </header>
+    <div class="backdrop" id="backdrop"></div>
+
     <aside class="sidebar">
         <div class="logo">⚙️ LooStream<small>Espace admin</small></div>
         <nav class="nav">
             <a data-view="dashboard" class="active">📊 Dashboard</a>
             <a data-view="sources">🎛️ Sources</a>
+            <a data-view="extractors">🧩 Extracteurs</a>
             <a data-view="users">👥 Utilisateurs</a>
             <a data-view="stats">📈 Stats</a>
             <a data-view="logs">📜 Logs</a>
@@ -226,6 +281,14 @@
             <div class="view-head"><h1>Sources</h1><button class="btn" onclick="loadSources()">Rafraîchir</button></div>
             <div id="sources-summary" style="margin-bottom:14px;display:flex;gap:8px;flex-wrap:wrap;"></div>
             <div id="sources-list"><div class="loader">Chargement…</div></div>
+        </section>
+
+        <!-- ============ EXTRACTEURS ============ -->
+        <section class="view" data-view="extractors">
+            <div class="view-head"><h1>Extracteurs</h1><button class="btn" onclick="loadExtractors()">Rafraîchir</button></div>
+            <p style="color:var(--muted);font-size:0.85em;margin:-10px 0 16px;">Activer/couper chaque extracteur (à chaud) et voir, d'après le <b>trafic réel</b>, dans quel mode on te livre ses flux. ⚠️ Un flux « livré » ne veut pas dire « joué sur ton lecteur » — le serveur ne sait pas ce que Nuvio en fait. Mais si un extracteur ne sort QUE du MFP et que le MFP boucle, tu tiens ton coupable.</p>
+            <div id="extractors-summary" style="margin-bottom:14px;display:flex;gap:8px;flex-wrap:wrap;"></div>
+            <div id="extractors-list"><div class="loader">Chargement…</div></div>
         </section>
 
         <!-- ============ UTILISATEURS ============ -->
@@ -359,7 +422,7 @@ const fmtBytes = b => {
     return (b / 1024 / 1024).toFixed(2) + ' MB';
 };
 const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;' }[c]));
-const EMOJI = { ok: '🟢', warning: '🟡', down: '🔴' };
+const EMOJI = { ok: '🔵', warning: '🟡', down: '🔴' };
 
 // --- Navigation entre vues ---
 let IS_ROOT = false; // rempli par /api/whoami ; la gestion des comptes est réservée au root
@@ -371,10 +434,21 @@ function showView(name) {
     if (name === 'logs') { resetLogs(); startLogPoll(); } else { stopLogPoll(); }
     if (name === 'settings') loadSettingsTab();
     if (name === 'sources') loadSources();
+    if (name === 'extractors') loadExtractors();
     if (name === 'users') loadUsers();
     if (name === 'admins') loadAdmins();
 }
-document.querySelectorAll('.nav a').forEach(a => a.addEventListener('click', () => showView(a.dataset.view)));
+// --- Menu mobile (drawer) ---
+const _burger = document.getElementById('burger');
+function setNav(open) {
+    document.body.classList.toggle('nav-open', open);
+    if (_burger) _burger.setAttribute('aria-expanded', open ? 'true' : 'false');
+}
+if (_burger) _burger.addEventListener('click', () => setNav(!document.body.classList.contains('nav-open')));
+document.getElementById('backdrop')?.addEventListener('click', () => setNav(false));
+document.addEventListener('keydown', e => { if (e.key === 'Escape') setNav(false); });
+
+document.querySelectorAll('.nav a').forEach(a => a.addEventListener('click', () => { showView(a.dataset.view); setNav(false); }));
 
 // --- Onglets Paramétrage ---
 let currentTab = 'sources';
@@ -616,7 +690,7 @@ async function checkHealth() {
 function refreshAll() { loadStats(); }
 
 // --- Vue Sources : santé (frise 20 dernières) + on/off ---
-const _dot = o => o === 'success' ? '<span style="color:#4ade80">●</span>'
+const _dot = o => o === 'success' ? '<span style="color:#5fc8f0">●</span>'
     : o === 'error' ? '<span style="color:#f87171">✕</span>'
     : '<span style="color:#64748b">○</span>';
 async function loadSources() {
@@ -630,14 +704,14 @@ async function loadSources() {
         const s = d.summary;
         sum.innerHTML =
             `<span class="badge on">${s.ok} OK</span>` +
-            (s.warning ? `<span class="badge" style="background:#f59e0b22;color:#f59e0b">${s.warning} warning</span>` : '') +
+            (s.warning ? `<span class="badge" style="background:#e6c14e22;color:#e6c14e">${s.warning} warning</span>` : '') +
             (s.down ? `<span class="badge off">${s.down} down</span>` : '') +
             (s.off ? `<span class="badge src">${s.off} coupée${s.off > 1 ? 's' : ''}</span>` : '');
         box.innerHTML = sorted.map(x => {
             const badge = !x.enabled ? '<span class="badge off">⚪ OFF</span>'
                 : x.status === 'down' ? '<span class="badge off">🔴 DOWN</span>'
-                : x.status === 'warning' ? '<span class="badge" style="background:#f59e0b22;color:#f59e0b">🟡 WARN</span>'
-                : '<span class="badge on">🟢 OK</span>';
+                : x.status === 'warning' ? '<span class="badge" style="background:#e6c14e22;color:#e6c14e">🟡 WARN</span>'
+                : '<span class="badge on">🔵 OK</span>';
             const frise = !x.enabled ? '<span style="color:var(--dim)">—</span>'
                 : (x.recent && x.recent.length ? `<span style="letter-spacing:2px">${x.recent.map(_dot).join('')}</span>` : '<span style="color:var(--dim)">aucune requête</span>');
             const bilan = !x.enabled ? '(désactivée)'
@@ -647,13 +721,14 @@ async function loadSources() {
                 : (x.lastSuccessAt ? `✓ il y a ${fmtAge(x.lastSuccessAt)}` : '');
             const cut = (x.enabled && x.status === 'down') ? `<button class="btn danger small" onclick="toggleSource('${x.name}',false)">⏻ Couper</button>` : '';
             const toggle = `<button class="btn small ${x.enabled ? '' : 'secondary'}" onclick="toggleSource('${x.name}',${!x.enabled})">${x.enabled ? '▮ ON' : 'OFF'}</button>`;
-            return `<div style="display:grid;grid-template-columns:120px 84px minmax(120px,1fr) 130px minmax(120px,1fr) auto;gap:10px;align-items:center;padding:9px 10px;border-bottom:1px solid rgba(255,255,255,0.06);">
+            const test = x.hasSample ? `<button class="btn small secondary" onclick="probeTarget('source','${x.name}',this)">Tester</button>` : '';
+            const modes = modesHtmlFor(x);
+            return `<div style="display:grid;grid-template-columns:120px 84px minmax(110px,1fr) minmax(120px,1fr) auto;gap:10px;align-items:center;padding:9px 10px;border-bottom:1px solid rgba(255,255,255,0.06);">
                 <b>${esc(x.name)}</b>${badge}<div style="overflow:hidden">${frise}</div>
-                <span style="font-size:0.85em;color:var(--muted)">${bilan}</span>
-                <span style="font-size:0.82em;color:var(--muted)">${last}</span>
-                <div style="display:flex;gap:6px;justify-content:flex-end">${cut}${toggle}</div></div>`;
+                <div style="display:flex;flex-direction:column;gap:3px;min-width:0"><span style="font-size:0.82em;color:var(--muted)">${last}</span><div style="display:flex;gap:4px;flex-wrap:wrap">${modes}</div></div>
+                <div style="display:flex;gap:6px;align-items:center;justify-content:flex-end;flex-wrap:wrap"><span class="verdict"></span>${test}${cut}${toggle}</div></div>`;
         }).join('') +
-        `<div style="font-size:0.78em;color:var(--dim);margin-top:12px;">Légende : <span style="color:#4ade80">●</span> succès · <span style="color:#64748b">○</span> vide (<b>normal</b> : le contenu n'est pas sur toutes les sources) · <span style="color:#f87171">✕</span> erreur. Couper une source = elle est skippée dans le fan-out, à chaud.</div>`;
+        `<div style="font-size:0.78em;color:var(--dim);margin-top:12px;">Légende : <span style="color:#5fc8f0">●</span> succès · <span style="color:#64748b">○</span> vide (<b>normal</b> : le contenu n'est pas sur toutes les sources) · <span style="color:#f87171">✕</span> erreur. Couper une source = elle est skippée dans le fan-out, à chaud.</div>`;
     } catch (e) { if (e.message !== 'session') box.innerHTML = `<div class="error">Erreur: ${esc(e.message)}</div>`; }
 }
 async function toggleSource(name, enabled) {
@@ -662,6 +737,72 @@ async function toggleSource(name, enabled) {
         const j = await r.json(); if (!r.ok || j.ok === false) throw new Error(j.error || 'HTTP ' + r.status);
         loadSources();
     } catch (e) { if (e.message !== 'session') alert('Erreur: ' + e.message); }
+}
+
+// ============ Extracteurs ============
+async function loadExtractors() {
+    const box = document.getElementById('extractors-list');
+    const sum = document.getElementById('extractors-summary');
+    try {
+        const r = await api('/api/extractors');
+        const d = await r.json();
+        const list = (d.extractors || []).slice().sort((a, b) => (b.seen || 0) - (a.seen || 0) || a.id.localeCompare(b.id));
+        const s = d.summary || {};
+        sum.innerHTML = `<span class="chip ok">${(s.total || 0) - (s.off || 0)} actifs</span>`
+            + `<span class="chip mute">${s.off || 0} coupés</span>`
+            + `<span class="chip mute">${s.total || 0} total</span>`;
+        const modeChip = (label, n, cls) => n ? `<span class="mchip ${cls}" title="${label}">${label} ${n}</span>` : '';
+        box.innerHTML = list.map(x => {
+            const seen = x.seen || 0;
+            const modes = x.modes || {};
+            const modesHtml = seen
+                ? (modeChip('direct', modes.direct, 'm-direct') + modeChip('local', modes.local, 'm-local') + modeChip('MFP', modes.mediaflow, 'm-mfp')) || '<span style="color:var(--dim)">—</span>'
+                : '<span style="color:var(--dim)">jamais sollicité</span>';
+            const last = x.lastSeen ? `✓ il y a ${fmtAge(x.lastSeen)}` : '';
+            const toggle = `<button class="btn small ${x.enabled ? '' : 'secondary'}" onclick="toggleExtractor('${esc(x.id)}',${!x.enabled})">${x.enabled ? '▮ ON' : 'OFF'}</button>`;
+            const test = x.hasSample ? `<button class="btn small secondary" onclick="probeTarget('extractor','${esc(x.id)}',this)">Tester</button>` : '';
+            return `<div style="display:grid;grid-template-columns:130px 66px minmax(150px,1fr) 100px auto;gap:10px;align-items:center;padding:9px 10px;border-bottom:1px solid rgba(255,255,255,0.06);${x.enabled ? '' : 'opacity:.55;'}">
+                <b>${esc(x.id)}</b>
+                <span style="font-size:0.82em;color:var(--muted)">${seen ? seen + ' livré' + (seen > 1 ? 's' : '') : ''}</span>
+                <div style="display:flex;gap:5px;flex-wrap:wrap">${modesHtml}</div>
+                <span style="font-size:0.82em;color:var(--muted)">${last}</span>
+                <div style="display:flex;gap:6px;align-items:center;justify-content:flex-end;flex-wrap:wrap"><span class="verdict"></span>${test}${toggle}</div></div>`;
+        }).join('')
+        + `<div style="font-size:0.78em;color:var(--dim);margin-top:12px;">Modes de livraison observés : <span style="color:#8fb4ff">● direct</span> · <span style="color:#efcf63">● local</span> · <span style="color:#f58a90">● MFP</span>. Compteurs depuis le dernier redémarrage. Couper un extracteur = ses hôtes ne sont plus résolus (à chaud).</div>`;
+    } catch (e) { if (e.message !== 'session') box.innerHTML = `<div class="error">Erreur: ${esc(e.message)}</div>`; }
+}
+async function toggleExtractor(id, enabled) {
+    try {
+        const r = await api('/api/extractors/' + encodeURIComponent(id), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ enabled }) });
+        const j = await r.json(); if (!r.ok || j.ok === false) throw new Error(j.error || 'HTTP ' + r.status);
+        loadExtractors();
+    } catch (e) { if (e.message !== 'session') alert('Erreur: ' + e.message); }
+}
+
+// Pastille de mode de livraison (bleu/jaune/rouge, daltonien-safe) — partagée sources + extracteurs.
+function mchip(label, n, cls) { return n ? `<span class="mchip ${cls}" title="${label}">${label} ${n}</span>` : ''; }
+function modesHtmlFor(x) {
+    const m = x.modes || {};
+    if (!x.enabled || !(m.direct || m.local || m.mediaflow)) return '';
+    return mchip('direct', m.direct, 'm-direct') + mchip('local', m.local, 'm-local') + mchip('MFP', m.mediaflow, 'm-mfp');
+}
+// Sonde serveur du dernier flux capturé (bouton « Tester », sources + extracteurs).
+const VERDICT = { alive: ['v-alive', '🔵 vivant'], dead: ['v-dead', '🔴 mort'], decoy: ['v-dead', '🔴 décoy'], not_stream: ['v-warn', '🟡 pas un flux'], error: ['v-warn', '🟡 erreur'] };
+async function probeTarget(kind, id, btn) {
+    const v = btn.parentElement.querySelector('.verdict');
+    if (v) { v.className = 'verdict v-run'; v.textContent = '… sonde'; }
+    btn.disabled = true;
+    try {
+        const r = await api('/api/probe/' + kind + '/' + encodeURIComponent(id), { method: 'POST' });
+        const j = await r.json();
+        if (!v) return;
+        if (!r.ok || j.ok === false) { v.className = 'verdict v-warn'; v.textContent = '⚠ ' + (j.error ? String(j.error).slice(0, 44) : 'HTTP ' + r.status); return; }
+        const [cls, lbl] = VERDICT[j.verdict] || ['v-warn', j.verdict];
+        v.className = 'verdict ' + cls;
+        v.textContent = lbl + (j.detail ? ' · ' + j.detail : '');
+        v.title = (j.host || '') + (j.detail ? ' — ' + j.detail : '');
+    } catch (e) { if (v && e.message !== 'session') { v.className = 'verdict v-warn'; v.textContent = '⚠ ' + (e.message || 'erreur réseau'); v.title = String(e.message || ''); } }
+    finally { btn.disabled = false; }
 }
 
 // ============ Logs ============
