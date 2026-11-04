@@ -31,6 +31,7 @@ import { getCinepulseStreams, cinepulseProbe, getCinepulseEndpoints, reloadCinep
 import { getMavanimeStreams, mavanimeProbe, getMavanimeEndpoints, reloadMavanimeEndpoints } from './scrapers/mavanime';
 import { getAnimesiteStreams, animesiteProbe, getAnimesiteEndpoints, reloadAnimesiteEndpoints } from './scrapers/animesite';
 import { getAnimeUltimeStreams, animeUltimeProbe, getAnimeUltimeEndpoints, reloadAnimeUltimeEndpoints } from './scrapers/anime-ultime';
+import { getAnimoflixStreams, animoflixProbe, getAnimoflixEndpoints, reloadAnimoflixEndpoints } from './scrapers/animoflix';
 import { getDocstreamStreams } from './scrapers/docstream';
 import { getZoneTelechargementStreams, getZoneTelechargementEndpoints, reloadZoneTelechargementEndpoints } from './scrapers/zonetelechargement';
 import { getNkstrmStreams, NkstrmAuthError, getNkstrmEndpoints, reloadNkstrmEndpoints } from './scrapers/nkstrm';
@@ -115,6 +116,7 @@ interface Stats {
     mavanime: { requests: number; success: number; errors: number; lastSuccess: number | null };
     animesite: { requests: number; success: number; errors: number; lastSuccess: number | null };
     animeultime: { requests: number; success: number; errors: number; lastSuccess: number | null };
+    animoflix: { requests: number; success: number; errors: number; lastSuccess: number | null };
   };
   streamsServed: {
     movix: number;
@@ -150,6 +152,7 @@ interface Stats {
     mavanime: number;
     animesite: number;
     animeultime: number;
+    animoflix: number;
   };
 }
 
@@ -190,11 +193,12 @@ const stats: Stats = {
     mavanime: { requests: 0, success: 0, errors: 0, lastSuccess: null },
     animesite: { requests: 0, success: 0, errors: 0, lastSuccess: null },
     animeultime: { requests: 0, success: 0, errors: 0, lastSuccess: null },
+    animoflix: { requests: 0, success: 0, errors: 0, lastSuccess: null },
   },
-  streamsServed: { movix: 0, netmirror: 0, streamflix: 0, frenchstream: 0, wiflix: 0, voirdrama: 0, moviebox: 0, voiranime: 0, nabistream: 0, coflix: 0, videasy: 0, animesama: 0, nkstrm: 0, vostfree: 0, wavewatch: 0, kordoz: 0, docstream: 0, ztstream: 0, cinestream: 0, dulourd: 0, zenix: 0, kisskh: 0, worldivx: 0, tokyvideo: 0, yablom: 0, ianime: 0, leizy: 0, jour1film: 0, wookafr: 0, cinepulse: 0, mavanime: 0, animesite: 0, animeultime: 0 },
+  streamsServed: { movix: 0, netmirror: 0, streamflix: 0, frenchstream: 0, wiflix: 0, voirdrama: 0, moviebox: 0, voiranime: 0, nabistream: 0, coflix: 0, videasy: 0, animesama: 0, nkstrm: 0, vostfree: 0, wavewatch: 0, kordoz: 0, docstream: 0, ztstream: 0, cinestream: 0, dulourd: 0, zenix: 0, kisskh: 0, worldivx: 0, tokyvideo: 0, yablom: 0, ianime: 0, leizy: 0, jour1film: 0, wookafr: 0, cinepulse: 0, mavanime: 0, animesite: 0, animeultime: 0, animoflix: 0 },
 };
 
-function trackSourceResult(source: 'movix' | 'netmirror' | 'streamflix' | 'frenchstream' | 'wiflix' | 'voirdrama' | 'moviebox' | 'voiranime' | 'nabistream' | 'coflix' | 'videasy' | 'animesama' | 'nkstrm' | 'vostfree' | 'wavewatch' | 'kordoz' | 'docstream' | 'ztstream' | 'cinestream' | 'dulourd' | 'zenix' | 'kisskh' | 'worldivx' | 'tokyvideo' | 'yablom' | 'ianime' | 'leizy' | 'jour1film' | 'wookafr' | 'cinepulse' | 'mavanime' | 'animesite' | 'animeultime', success: boolean, streamCount: number = 0) {
+function trackSourceResult(source: 'movix' | 'netmirror' | 'streamflix' | 'frenchstream' | 'wiflix' | 'voirdrama' | 'moviebox' | 'voiranime' | 'nabistream' | 'coflix' | 'videasy' | 'animesama' | 'nkstrm' | 'vostfree' | 'wavewatch' | 'kordoz' | 'docstream' | 'ztstream' | 'cinestream' | 'dulourd' | 'zenix' | 'kisskh' | 'worldivx' | 'tokyvideo' | 'yablom' | 'ianime' | 'leizy' | 'jour1film' | 'wookafr' | 'cinepulse' | 'mavanime' | 'animesite' | 'animeultime' | 'animoflix', success: boolean, streamCount: number = 0) {
   stats.sources[source].requests++;
   if (success) {
     stats.sources[source].success++;
@@ -1429,9 +1433,17 @@ async function handleStream(req: express.Request, res: express.Response, type: s
         : Promise.resolve([]))
         .then(r => { if (isJaAnime) { trackSourceResult('animeultime', true, r.length); recordOutcome('animeultime', r.length > 0 ? 'success' : 'empty'); } return r; })
         .catch(e => { console.log('[AnimeUltime] Error:', e?.message || e); trackSourceResult('animeultime', false); recordOutcome('animeultime', 'error', e?.message); return []; }),
+      // Animoflix : anime uniquement (originalLanguage japonais). FR VF ET VOSTFR, pages
+      // season-aware (langue dans l'URL), serveurs filemoon/ansembed/filelions… en clair
+      // -> extractStream. Alts romaji (AniList).
+      (isSourceEnabled('animoflix') && isJaAnime
+        ? animeAltsPromise.then(alts => getAnimoflixStreams(parsed.baseId, type as 'movie' | 'series', extractorConfig, parsed.season, parsed.episode, info.title, info.originalTitle, alts))
+        : Promise.resolve([]))
+        .then(r => { if (isJaAnime) { trackSourceResult('animoflix', true, r.length); recordOutcome('animoflix', r.length > 0 ? 'success' : 'empty'); } return r; })
+        .catch(e => { console.log('[Animoflix] Error:', e?.message || e); trackSourceResult('animoflix', false); recordOutcome('animoflix', 'error', e?.message); return []; }),
     ];
 
-    const SOURCE_NAMES = ['netmirror', 'streamflix', 'movix', 'frenchstream', 'wiflix', 'voirdrama', 'moviebox', 'voiranime', 'nabistream', 'coflix', 'videasy', 'animesama', 'nkstrm', 'vostfree', 'wavewatch', 'kordoz', 'docstream', 'ztstream', 'cinestream', 'dulourd', 'zenix', 'kisskh', 'worldivx', 'tokyvideo', 'yablom', 'ianime', 'leizy', 'jour1film', 'cinepulse', 'mavanime', 'animesite', 'wookafr', 'animeultime'];
+    const SOURCE_NAMES = ['netmirror', 'streamflix', 'movix', 'frenchstream', 'wiflix', 'voirdrama', 'moviebox', 'voiranime', 'nabistream', 'coflix', 'videasy', 'animesama', 'nkstrm', 'vostfree', 'wavewatch', 'kordoz', 'docstream', 'ztstream', 'cinestream', 'dulourd', 'zenix', 'kisskh', 'worldivx', 'tokyvideo', 'yablom', 'ianime', 'leizy', 'jour1film', 'cinepulse', 'mavanime', 'animesite', 'wookafr', 'animeultime', 'animoflix'];
     const collected = await collectSources(
       sourcePromises.map((promise, i) => ({
         name: SOURCE_NAMES[i],
@@ -1449,7 +1461,7 @@ async function handleStream(req: express.Request, res: express.Response, type: s
       // sources instantanées remplir le quota avant qu'elle réponde.
       [
         ...(isJaAnime
-          ? [SOURCE_NAMES.indexOf('voiranime'), SOURCE_NAMES.indexOf('animesama'), SOURCE_NAMES.indexOf('vostfree'), SOURCE_NAMES.indexOf('ianime'), SOURCE_NAMES.indexOf('mavanime'), SOURCE_NAMES.indexOf('animesite'), SOURCE_NAMES.indexOf('animeultime')]
+          ? [SOURCE_NAMES.indexOf('voiranime'), SOURCE_NAMES.indexOf('animesama'), SOURCE_NAMES.indexOf('vostfree'), SOURCE_NAMES.indexOf('ianime'), SOURCE_NAMES.indexOf('mavanime'), SOURCE_NAMES.indexOf('animesite'), SOURCE_NAMES.indexOf('animeultime'), SOURCE_NAMES.indexOf('animoflix')]
           : []),
         ...(isKisskhLanguage(info.originalLanguage) ? [SOURCE_NAMES.indexOf('kisskh')] : []),
       ]
@@ -1498,6 +1510,7 @@ async function handleStream(req: express.Request, res: express.Response, type: s
     const animesiteResults = collected[30] as Awaited<ReturnType<typeof getAnimesiteStreams>>;
     const wookafrResults = collected[31] as Awaited<ReturnType<typeof getWookafrStreams>>;
     const animeultimeResults = collected[32] as Awaited<ReturnType<typeof getAnimeUltimeStreams>>;
+    const animoflixResults = collected[33] as Awaited<ReturnType<typeof getAnimoflixStreams>>;
 
     // On accumule des "drafts" (streams sans name/title). name/title sont posés
     // en UNE passe centralisée plus bas (src/display.ts), pour un rendu uniforme.
@@ -1949,6 +1962,24 @@ async function handleStream(req: express.Request, res: express.Response, type: s
           ...(d.proxyHeaders ? { proxyHeaders: { request: d.proxyHeaders } } : {}),
         },
         _meta: { quality: au.quality, language: au.language, source: 'animeultime', server: au.server },
+      });
+    }
+
+    // Animoflix : anime VF/VOSTFR, embeds filemoon/ansembed/filelions… (HLS après extraction).
+    for (const af of animoflixResults) {
+      const d = await deliver(af.url, {
+        ...(af.headers || {}),
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+      }, { forceHls: /\.m3u8/i.test(af.url) }, req, config);
+      if (!d) continue;
+      drafts.push({
+        url: d.url,
+        behaviorHints: {
+          notWebReady: !!d.proxyHeaders,
+          bingeGroup: `animoflix-${af.server}`,
+          ...(d.proxyHeaders ? { proxyHeaders: { request: d.proxyHeaders } } : {}),
+        },
+        _meta: { quality: af.quality, language: af.language, source: 'animoflix', server: af.server },
       });
     }
 
@@ -2986,6 +3017,10 @@ app.get('/api/animeultime/endpoints', (req, res) => {
   const reload = req.query.reload === 'true';
   res.json({ ...(reload ? reloadAnimeUltimeEndpoints() : getAnimeUltimeEndpoints()), reloaded: reload });
 });
+app.get('/api/animoflix/endpoints', (req, res) => {
+  const reload = req.query.reload === 'true';
+  res.json({ ...(reload ? reloadAnimoflixEndpoints() : getAnimoflixEndpoints()), reloaded: reload });
+});
 app.get('/api/kisskh/endpoints', (req, res) => {
   const reload = req.query.reload === 'true';
   res.json({ ...(reload ? reloadKisskhEndpoints() : getKisskhEndpoints()), reloaded: reload });
@@ -3087,6 +3122,7 @@ const singleBaseSources: Array<{ path: string; file: string; reload: () => unkno
   { path: 'mavanime', file: 'mavanime-endpoints.json', reload: reloadMavanimeEndpoints },
   { path: 'animesite', file: 'animesite-endpoints.json', reload: reloadAnimesiteEndpoints },
   { path: 'animeultime', file: 'anime-ultime-endpoints.json', reload: reloadAnimeUltimeEndpoints },
+  { path: 'animoflix', file: 'animoflix-endpoints.json', reload: reloadAnimoflixEndpoints },
   { path: 'nkstrm', file: 'nkstrm-endpoints.json', reload: reloadNkstrmEndpoints },
 ];
 for (const src of singleBaseSources) {
@@ -3866,6 +3902,14 @@ app.get('/api/health', async (_req, res) => {
     results.animeultime = { status: ok ? 'up' : 'degraded', latency: Date.now() - auStart };
   } catch (e: any) {
     results.animeultime = { status: 'down', error: e.message };
+  }
+
+  const afStart = Date.now();
+  try {
+    const ok = await animoflixProbe();
+    results.animoflix = { status: ok ? 'up' : 'degraded', latency: Date.now() - afStart };
+  } catch (e: any) {
+    results.animoflix = { status: 'down', error: e.message };
   }
 
   // Une source coupée dans l'admin ne compte plus : ni dans l'état global, ni pour

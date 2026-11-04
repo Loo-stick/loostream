@@ -1,0 +1,4 @@
+{
+  "_comment": "Animoflix (animoflix.to) — anime FR VF+VOSTFR, pages season-aware (langue dans l'URL), embeds filemoon/ansembed/filelions. Un seul domaine connu. Éditable à chaud (bind-mount + fs.watch) ou via l'admin ; reload forcé : /api/animoflix/endpoints?reload=true.",
+  "base": "https://animoflix.to"
+}
