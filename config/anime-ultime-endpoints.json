@@ -1,0 +1,4 @@
+{
+  "_comment": "Anime-Ultime (anime-ultime.net) — anime FR VOSTFR self-hosté (MP4 direct). Un seul domaine connu. Éditable à chaud (bind-mount + fs.watch) ou via l'admin ; reload forcé : /api/animeultime/endpoints?reload=true.",
+  "base": "https://www.anime-ultime.net"
+}
