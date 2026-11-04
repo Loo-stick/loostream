@@ -5,6 +5,7 @@ import { applyMultiAudio } from '../multiaudio';
 import { Wanted, accepts, yearVerdict } from '../matching';
 import { probeHlsResolution } from '../hls-resolution';
 import { makeEndpointConfig } from '../endpoint-config';
+import { makeDnsSafeAgent } from '../dns-resolve';
 
 // Kordoz — catalogue FILMS FR (kordoz.com), VF ET VOSTFR (versions séparées).
 // FILMS UNIQUEMENT : les catégories du site sont toutes ciné (Action, Drame,
@@ -14,7 +15,7 @@ import { makeEndpointConfig } from '../endpoint-config';
 // Accès : Cloudflare + une gate applicative -> deux prérequis pour toute page utile :
 //   • Cookie `g=true` (statique — consentement/anti-bot ; sans lui : réponse vide).
 //   • Un TOKEN DE SESSION dans le chemin : la racine `/` expose `<a href="<token>">`
-//     (~11 alphanum), et toutes les routes sont préfixées `/<token>/…`.
+//     (7–11 alphanum selon le miroir), et toutes les routes sont préfixées `/<token>/…`.
 // Flux :
 //   Recherche : POST `/<token>/home/kordoz`  body `searchword=<titre>`
 //               -> <a class="film-card" href="/<token>/b/kordoz/<id>">…alt="<titre>"
@@ -32,7 +33,7 @@ import { makeEndpointConfig } from '../endpoint-config';
 // "kordoz"). La liste est éditable À CHAUD (config/kordoz-endpoints.json, bind-monté +
 // hot-reload) ou via l'admin — pas de rebuild quand un miroir tombe / un nouveau sort.
 const siteEndpoints = makeEndpointConfig('kordoz-endpoints.json', 'KORDOZ_ENDPOINTS_CONFIG', {
-  domains: ['https://www.kordoz.com', 'https://ilmiv.com', 'https://www.kidraz.com', 'https://vogfo.com'],
+  domains: ['https://kamalav.com', 'https://zadlov.com', 'https://www.kordoz.com', 'https://ilmiv.com', 'https://www.kidraz.com', 'https://vogfo.com'],
 });
 export const reloadKordozEndpoints = siteEndpoints.reload;
 export const getKordozEndpoints = siteEndpoints.get;
@@ -48,6 +49,13 @@ const HEADERS = {
   'Accept-Language': 'fr-FR,fr;q=0.9',
   'Cookie': 'g=true',
 };
+
+// Les domaines Kordoz historiques (kordoz.com/ilmiv/kidraz/vogfo) sont DNS-bloqués par
+// Orange (résolution -> `::1`/`127.`) alors qu'ils sont vivants derrière Cloudflare. L'agent
+// DNS-safe (dns-resolve.ts) bascule sur 1.1.1.1 uniquement quand le résolveur système renvoie
+// une boucle locale, ce qui remet ces miroirs en service sans toucher aux domaines sains
+// (kamalav/zadlov). Même mécanisme que celui déjà utilisé par animesite.
+const dnsAgent = makeDnsSafeAgent();
 
 export interface KordozStream {
   url: string;
@@ -75,6 +83,7 @@ async function fetchText(url: string, base: string, postBody?: string): Promise<
       headers, timeout: REQ_TIMEOUT_MS,
       responseType: 'text' as const, transformResponse: (v: any) => v,
       validateStatus: () => true, maxRedirects: 4,
+      httpsAgent: dnsAgent,
     };
     const { data, status } = postBody
       ? await axios.post<string>(url, postBody, cfg)
@@ -93,7 +102,11 @@ async function getSessionToken(base: string): Promise<string | null> {
     async () => {
       const html = await fetchText(`${base}/`, base);
       if (!html) return null;
-      return html.match(/href="([a-z0-9]{8,})"/i)?.[1] || null;
+      // Plancher à 7 car. : les miroirs historiques ont des tokens ~11, mais kamalav
+      // n'en expose que 7 (`3224b0a`). Le token reste le SEUL href purement alphanumérique
+      // (favicon.png & co ont un point -> pas de `"` juste après le run alnum), donc
+      // abaisser le plancher n'introduit pas de faux positif sur les autres miroirs.
+      return html.match(/href="([a-z0-9]{7,})"/i)?.[1] || null;
     },
     { scope: 'kordoz', shouldCache: r => !!r }
   );
