@@ -1,0 +1,4 @@
+{
+  "_comment": "Cinex (cinex.buzz) — agrégateur FR keyé TMDB, API /api/streaming/{movie,tv}/<tmdbId>. Source FR zen-blk/falzey (films) + finepulfe (séries), gatée Referer cinex.buzz. Éditable à chaud ou via l'admin ; reload : /api/cinex/endpoints?reload=true.",
+  "base": "https://cinex.buzz"
+}

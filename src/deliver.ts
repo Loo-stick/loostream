@@ -35,7 +35,16 @@
 //                        CÔTÉ CLIENT (Nuvio gère mal nos manifestes proxifiés), pas nos octets.
 //                        -> fsvid repart en DIRECT (raw + proxyHeaders Referer/UA navigateur),
 //                        que Nuvio propage aux segments. Voir mémoire nuvio_proxy_playback_fail.
-export const PROXY_FORCED_HOSTS = ['uqload', 'voe.sx', 'vmnow', 'vmeas', 'vmpx.online', 'tnmr'];
+//   - zen-blk / falzey : source VF de Cinex (zen-blk.store -> 302 -> falzey.lol video_proxy).
+//                        Gatée STRICTEMENT sur `Referer: https://cinex.buzz/` (sans lui, ou
+//                        autre referer -> page de blocage), sur le 302 ET chaque Range. Nuvio
+//                        ne propage PAS le referer en direct (testé KO) -> doit passer par le
+//                        proxy, qui pose le referer partout. Pas de token/IP-lock -> stable.
+//   - cinex.buzz       : chemin SÉRIES de Cinex (/api/m3u8-proxy). On le force aussi au proxy
+//                        pour que le CLIENT n'ait JAMAIS à contacter cinex.buzz (flaggé
+//                        « phishing » par certains AV/Bitdefender) : tout passe par MFP côté
+//                        serveur. Même raison de referer que zen-blk/falzey.
+export const PROXY_FORCED_HOSTS = ['uqload', 'voe.sx', 'vmnow', 'vmeas', 'vmpx.online', 'tnmr', 'zen-blk', 'falzey', 'cinex.buzz'];
 
 /** Un hôte est directable s'il n'est pas dans la liste non-directable ci-dessus ET si
  * son token n'est pas LIÉ À L'ASN de l'extracteur. Un CDN qui met `asn=<ASN serveur>`
