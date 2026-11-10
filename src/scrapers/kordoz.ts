@@ -33,7 +33,7 @@ import { makeDnsSafeAgent } from '../dns-resolve';
 // "kordoz"). La liste est éditable À CHAUD (config/kordoz-endpoints.json, bind-monté +
 // hot-reload) ou via l'admin — pas de rebuild quand un miroir tombe / un nouveau sort.
 const siteEndpoints = makeEndpointConfig('kordoz-endpoints.json', 'KORDOZ_ENDPOINTS_CONFIG', {
-  domains: ['https://kamalav.com', 'https://zadlov.com', 'https://www.kordoz.com', 'https://ilmiv.com', 'https://www.kidraz.com', 'https://vogfo.com'],
+  domains: ['https://farsov.com', 'https://www.kordoz.com', 'https://ilmiv.com', 'https://www.kidraz.com', 'https://vogfo.com'],
 });
 export const reloadKordozEndpoints = siteEndpoints.reload;
 export const getKordozEndpoints = siteEndpoints.get;
