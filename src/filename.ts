@@ -136,6 +136,7 @@ const PROVIDER_LABELS: Record<string, string> = {
   animeultime: 'Anime-Ultime',
   animoflix: 'Animoflix',
   cinex: 'Cinex',
+  miaw: 'MIAW',
 };
 
 export function providerLabel(source: string): string {

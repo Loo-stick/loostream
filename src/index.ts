@@ -33,6 +33,7 @@ import { getAnimesiteStreams, animesiteProbe, getAnimesiteEndpoints, reloadAnime
 import { getAnimeUltimeStreams, animeUltimeProbe, getAnimeUltimeEndpoints, reloadAnimeUltimeEndpoints } from './scrapers/anime-ultime';
 import { getAnimoflixStreams, animoflixProbe, getAnimoflixEndpoints, reloadAnimoflixEndpoints } from './scrapers/animoflix';
 import { getCinexStreams, cinexProbe, getCinexEndpoints, reloadCinexEndpoints } from './scrapers/cinex';
+import { getMiawStreams, miawProbe, getMiawEndpoints, reloadMiawEndpoints } from './scrapers/miaw';
 import { getDocstreamStreams } from './scrapers/docstream';
 import { getZoneTelechargementStreams, getZoneTelechargementEndpoints, reloadZoneTelechargementEndpoints } from './scrapers/zonetelechargement';
 import { getNkstrmStreams, NkstrmAuthError, getNkstrmEndpoints, reloadNkstrmEndpoints } from './scrapers/nkstrm';
@@ -119,6 +120,7 @@ interface Stats {
     animeultime: { requests: number; success: number; errors: number; lastSuccess: number | null };
     animoflix: { requests: number; success: number; errors: number; lastSuccess: number | null };
     cinex: { requests: number; success: number; errors: number; lastSuccess: number | null };
+    miaw: { requests: number; success: number; errors: number; lastSuccess: number | null };
   };
   streamsServed: {
     movix: number;
@@ -156,6 +158,7 @@ interface Stats {
     animeultime: number;
     animoflix: number;
     cinex: number;
+    miaw: number;
   };
 }
 
@@ -198,11 +201,12 @@ const stats: Stats = {
     animeultime: { requests: 0, success: 0, errors: 0, lastSuccess: null },
     animoflix: { requests: 0, success: 0, errors: 0, lastSuccess: null },
     cinex: { requests: 0, success: 0, errors: 0, lastSuccess: null },
+    miaw: { requests: 0, success: 0, errors: 0, lastSuccess: null },
   },
-  streamsServed: { movix: 0, netmirror: 0, streamflix: 0, frenchstream: 0, wiflix: 0, voirdrama: 0, moviebox: 0, voiranime: 0, nabistream: 0, coflix: 0, videasy: 0, animesama: 0, nkstrm: 0, vostfree: 0, wavewatch: 0, kordoz: 0, docstream: 0, ztstream: 0, cinestream: 0, dulourd: 0, zenix: 0, kisskh: 0, worldivx: 0, tokyvideo: 0, yablom: 0, ianime: 0, leizy: 0, jour1film: 0, wookafr: 0, cinepulse: 0, mavanime: 0, animesite: 0, animeultime: 0, animoflix: 0, cinex: 0 },
+  streamsServed: { movix: 0, netmirror: 0, streamflix: 0, frenchstream: 0, wiflix: 0, voirdrama: 0, moviebox: 0, voiranime: 0, nabistream: 0, coflix: 0, videasy: 0, animesama: 0, nkstrm: 0, vostfree: 0, wavewatch: 0, kordoz: 0, docstream: 0, ztstream: 0, cinestream: 0, dulourd: 0, zenix: 0, kisskh: 0, worldivx: 0, tokyvideo: 0, yablom: 0, ianime: 0, leizy: 0, jour1film: 0, wookafr: 0, cinepulse: 0, mavanime: 0, animesite: 0, animeultime: 0, animoflix: 0, cinex: 0, miaw: 0 },
 };
 
-function trackSourceResult(source: 'movix' | 'netmirror' | 'streamflix' | 'frenchstream' | 'wiflix' | 'voirdrama' | 'moviebox' | 'voiranime' | 'nabistream' | 'coflix' | 'videasy' | 'animesama' | 'nkstrm' | 'vostfree' | 'wavewatch' | 'kordoz' | 'docstream' | 'ztstream' | 'cinestream' | 'dulourd' | 'zenix' | 'kisskh' | 'worldivx' | 'tokyvideo' | 'yablom' | 'ianime' | 'leizy' | 'jour1film' | 'wookafr' | 'cinepulse' | 'mavanime' | 'animesite' | 'animeultime' | 'animoflix' | 'cinex', success: boolean, streamCount: number = 0) {
+function trackSourceResult(source: 'movix' | 'netmirror' | 'streamflix' | 'frenchstream' | 'wiflix' | 'voirdrama' | 'moviebox' | 'voiranime' | 'nabistream' | 'coflix' | 'videasy' | 'animesama' | 'nkstrm' | 'vostfree' | 'wavewatch' | 'kordoz' | 'docstream' | 'ztstream' | 'cinestream' | 'dulourd' | 'zenix' | 'kisskh' | 'worldivx' | 'tokyvideo' | 'yablom' | 'ianime' | 'leizy' | 'jour1film' | 'wookafr' | 'cinepulse' | 'mavanime' | 'animesite' | 'animeultime' | 'animoflix' | 'cinex' | 'miaw', success: boolean, streamCount: number = 0) {
   stats.sources[source].requests++;
   if (success) {
     stats.sources[source].success++;
@@ -1451,9 +1455,14 @@ async function handleStream(req: express.Request, res: express.Response, type: s
       (isSourceEnabled('cinex') ? getCinexStreams(info.tmdbId, type as 'movie' | 'series', parsed.season, parsed.episode) : Promise.resolve([]))
         .then(r => { trackSourceResult('cinex', true, r.length); recordOutcome('cinex', r.length > 0 ? 'success' : 'empty'); return r; })
         .catch(e => { console.log('[Cinex] Error:', e?.message || e); trackSourceResult('cinex', false); recordOutcome('cinex', 'error', e?.message); return []; }),
+      // Miaw : agrégateur FR keyé TMDB, API JSON ouverte. Lecteurs blink (natif miaw ->
+      // zen-blk, directable) + vidzy/sharecloudy (extraits). Films + séries, VF + VOSTFR.
+      (isSourceEnabled('miaw') ? getMiawStreams(info.tmdbId, type as 'movie' | 'series', extractorConfig, parsed.season, parsed.episode) : Promise.resolve([]))
+        .then(r => { trackSourceResult('miaw', true, r.length); recordOutcome('miaw', r.length > 0 ? 'success' : 'empty'); return r; })
+        .catch(e => { console.log('[Miaw] Error:', e?.message || e); trackSourceResult('miaw', false); recordOutcome('miaw', 'error', e?.message); return []; }),
     ];
 
-    const SOURCE_NAMES = ['netmirror', 'streamflix', 'movix', 'frenchstream', 'wiflix', 'voirdrama', 'moviebox', 'voiranime', 'nabistream', 'coflix', 'videasy', 'animesama', 'nkstrm', 'vostfree', 'wavewatch', 'kordoz', 'docstream', 'ztstream', 'cinestream', 'dulourd', 'zenix', 'kisskh', 'worldivx', 'tokyvideo', 'yablom', 'ianime', 'leizy', 'jour1film', 'cinepulse', 'mavanime', 'animesite', 'wookafr', 'animeultime', 'animoflix', 'cinex'];
+    const SOURCE_NAMES = ['netmirror', 'streamflix', 'movix', 'frenchstream', 'wiflix', 'voirdrama', 'moviebox', 'voiranime', 'nabistream', 'coflix', 'videasy', 'animesama', 'nkstrm', 'vostfree', 'wavewatch', 'kordoz', 'docstream', 'ztstream', 'cinestream', 'dulourd', 'zenix', 'kisskh', 'worldivx', 'tokyvideo', 'yablom', 'ianime', 'leizy', 'jour1film', 'cinepulse', 'mavanime', 'animesite', 'wookafr', 'animeultime', 'animoflix', 'cinex', 'miaw'];
     const collected = await collectSources(
       sourcePromises.map((promise, i) => ({
         name: SOURCE_NAMES[i],
@@ -1522,6 +1531,7 @@ async function handleStream(req: express.Request, res: express.Response, type: s
     const animeultimeResults = collected[32] as Awaited<ReturnType<typeof getAnimeUltimeStreams>>;
     const animoflixResults = collected[33] as Awaited<ReturnType<typeof getAnimoflixStreams>>;
     const cinexResults = collected[34] as Awaited<ReturnType<typeof getCinexStreams>>;
+    const miawResults = collected[35] as Awaited<ReturnType<typeof getMiawStreams>>;
 
     // On accumule des "drafts" (streams sans name/title). name/title sont posés
     // en UNE passe centralisée plus bas (src/display.ts), pour un rendu uniforme.
@@ -2012,6 +2022,27 @@ async function handleStream(req: express.Request, res: express.Response, type: s
           ...(d.proxyHeaders ? { proxyHeaders: { request: d.proxyHeaders } } : {}),
         },
         _meta: { quality: cx.quality, language: cx.language, source: 'cinex', server: cx.server },
+      });
+    }
+
+    // Miaw : source FR keyée TMDB. blink = URL /api/blink/v (miaw.tv, directable, joue sans
+    // referer) ; vidzy/sharecloudy = déjà extraits. DIRECT-FIRST : on NE pose PAS de referer
+    // (un referer étranger casse le ?ff zen-blk). Si Nuvio ne suit pas le 302 ou ?ff IP-lié
+    // -> basculer miaw.tv en PROXY_FORCED_HOSTS.
+    for (const mw of miawResults) {
+      const d = await deliver(mw.url, {
+        ...(mw.headers || {}),
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+      }, { forceHls: /\.m3u8|m3u8-proxy/i.test(mw.url) }, req, config);
+      if (!d) continue;
+      drafts.push({
+        url: d.url,
+        behaviorHints: {
+          notWebReady: !!d.proxyHeaders,
+          bingeGroup: `miaw-${mw.server}`,
+          ...(d.proxyHeaders ? { proxyHeaders: { request: d.proxyHeaders } } : {}),
+        },
+        _meta: { quality: mw.quality, language: mw.language, source: 'miaw', server: mw.server },
       });
     }
 
@@ -3057,6 +3088,10 @@ app.get('/api/cinex/endpoints', (req, res) => {
   const reload = req.query.reload === 'true';
   res.json({ ...(reload ? reloadCinexEndpoints() : getCinexEndpoints()), reloaded: reload });
 });
+app.get('/api/miaw/endpoints', (req, res) => {
+  const reload = req.query.reload === 'true';
+  res.json({ ...(reload ? reloadMiawEndpoints() : getMiawEndpoints()), reloaded: reload });
+});
 app.get('/api/kisskh/endpoints', (req, res) => {
   const reload = req.query.reload === 'true';
   res.json({ ...(reload ? reloadKisskhEndpoints() : getKisskhEndpoints()), reloaded: reload });
@@ -3160,6 +3195,7 @@ const singleBaseSources: Array<{ path: string; file: string; reload: () => unkno
   { path: 'animeultime', file: 'anime-ultime-endpoints.json', reload: reloadAnimeUltimeEndpoints },
   { path: 'animoflix', file: 'animoflix-endpoints.json', reload: reloadAnimoflixEndpoints },
   { path: 'cinex', file: 'cinex-endpoints.json', reload: reloadCinexEndpoints },
+  { path: 'miaw', file: 'miaw-endpoints.json', reload: reloadMiawEndpoints },
   { path: 'nkstrm', file: 'nkstrm-endpoints.json', reload: reloadNkstrmEndpoints },
 ];
 for (const src of singleBaseSources) {
@@ -3955,6 +3991,14 @@ app.get('/api/health', async (_req, res) => {
     results.cinex = { status: ok ? 'up' : 'degraded', latency: Date.now() - cxStart };
   } catch (e: any) {
     results.cinex = { status: 'down', error: e.message };
+  }
+
+  const mwStart = Date.now();
+  try {
+    const ok = await miawProbe();
+    results.miaw = { status: ok ? 'up' : 'degraded', latency: Date.now() - mwStart };
+  } catch (e: any) {
+    results.miaw = { status: 'down', error: e.message };
   }
 
   // Une source coupée dans l'admin ne compte plus : ni dans l'état global, ni pour

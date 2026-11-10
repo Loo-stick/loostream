@@ -3,7 +3,7 @@ const CONSECUTIVE_ERRORS_DOWN = 5;
 const WARN_MIN_ERRORS = 3;      // il faut au moins ce nb d'erreurs pour un WARNING
 const WARN_ERROR_RATE = 0.25;   // ET ce taux d'erreurs sur la fenêtre
 
-export type Scraper = 'netmirror' | 'streamflix' | 'movix' | 'frenchstream' | 'wiflix' | 'voirdrama' | 'moviebox' | 'voiranime' | 'nabistream' | 'coflix' | 'videasy' | 'animesama' | 'nkstrm' | 'vostfree' | 'wavewatch' | 'kordoz' | 'docstream' | 'ztstream' | 'cinestream' | 'dulourd' | 'zenix' | 'kisskh' | 'worldivx' | 'tokyvideo' | 'yablom' | 'ianime' | 'leizy' | 'jour1film' | 'wookafr' | 'cinepulse' | 'mavanime' | 'animesite' | 'animeultime' | 'animoflix' | 'cinex';
+export type Scraper = 'netmirror' | 'streamflix' | 'movix' | 'frenchstream' | 'wiflix' | 'voirdrama' | 'moviebox' | 'voiranime' | 'nabistream' | 'coflix' | 'videasy' | 'animesama' | 'nkstrm' | 'vostfree' | 'wavewatch' | 'kordoz' | 'docstream' | 'ztstream' | 'cinestream' | 'dulourd' | 'zenix' | 'kisskh' | 'worldivx' | 'tokyvideo' | 'yablom' | 'ianime' | 'leizy' | 'jour1film' | 'wookafr' | 'cinepulse' | 'mavanime' | 'animesite' | 'animeultime' | 'animoflix' | 'cinex' | 'miaw';
 export type Outcome = 'success' | 'empty' | 'error';
 
 interface Entry {
@@ -48,6 +48,7 @@ const buffers: Record<Scraper, Entry[]> = {
   animeultime: [],
   animoflix: [],
   cinex: [],
+  miaw: [],
 };
 
 export function recordOutcome(scraper: Scraper, outcome: Outcome, error?: string): void {
@@ -175,5 +176,6 @@ export function getAllMetrics(): Record<Scraper, ScraperMetrics> {
     animeultime: getMetrics('animeultime'),
     animoflix: getMetrics('animoflix'),
     cinex: getMetrics('cinex'),
+    miaw: getMetrics('miaw'),
   };
 }

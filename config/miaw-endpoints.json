@@ -1,0 +1,4 @@
+{
+  "_comment": "Miaw (miaw.tv) — agrégateur FR keyé TMDB, API /api/watch/{movie,series}/<tmdbId>. Lecteurs blink (natif, zen-blk) + vidzy + sharecloudy, VF+VOSTFR. Éditable à chaud ou via l'admin ; reload : /api/miaw/endpoints?reload=true.",
+  "base": "https://miaw.tv"
+}
